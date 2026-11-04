@@ -9,3 +9,9 @@ docs/performance/utf16/*.txt -whitespace
 docs/performance/offline-imports/*.txt -whitespace
 docs/performance/outline/*.txt -whitespace
 docs/validation/dependencies/*.txt -whitespace
+
+# Fixtures and captured validation data must retain their original bytes on
+# every platform; tests construct CRLF and mixed endings explicitly.
+tests/fixtures/** -text
+tests/fixtures/*.tsv -whitespace
+docs/validation/** -text -whitespace

@@ -67,6 +67,11 @@ See [architecture](docs/architecture.md) for the module map and current boundari
 
 Keep implementation modules private or crate-visible. The public library entry point is currently `run()`. Add public APIs for real consumers; test private behavior with unit tests beside its implementation. Use `tests/` for integration tests only when they exercise an intentional public API.
 
+Shared regression inputs in `tests/fixtures/` and captures in `docs/validation/`
+are byte-exact. `.gitattributes` disables checkout newline conversion for these
+paths; tests construct CRLF and mixed endings explicitly rather than depending
+on the host's Git settings.
+
 ## Rust conventions
 
 Follow the applicable [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html), with the project exceptions below. Stable Rust, rustfmt, and the lints in `Cargo.toml` define the automated baseline; unsafe code is forbidden.
