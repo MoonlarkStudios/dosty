@@ -12,6 +12,8 @@ Dosty is one Cargo package, named `dosty`, with a thin `main.rs` calling `dosty:
 | `app/brand.rs` | Native paths from the generated Dosty identity |
 | `app/writing.rs` | Link/image/quotation details and deferred clipboard/import commands |
 | `app/footnotes.rs` | Checked footnote details, bounded previews and stable return navigation |
+| `app/table.rs` | Anchored context menus, Source table dialog, stable checked targets and human transactions |
+| `app/table_grid.rs` | Stable rectangular selections, spreadsheet navigation, clipboard intents and pending cell drafts |
 | `app/recovery.rs` | Idle recovery checkpoints, copy selection and write retirement |
 | `app/outline.rs` | Session-local outline disclosure, heading search, and section commands |
 | `app/performance.rs` | Private ignored large-document event/layout/software-render profiles |
@@ -28,7 +30,11 @@ Dosty is one Cargo package, named `dosty`, with a thin `main.rs` calling `dosty:
 | `document/projection_batch.rs` | Atomic multi-window projection preflight and one successor mapping |
 | `document/projection_disclosure.rs` | Line-scoped disclosure highlighting with shared unchanged styles |
 | `document/rich_document.rs` | Heading, table, and image metadata collected during projection parsing |
-| `document/table_edit.rs` | Cell-aware source edits and rectangular TSV paste |
+| `document/table_edit.rs` | Cell-aware source edits and table operation exports |
+| `document/table_controls.rs` | Source-preserving row/column and alignment command plans |
+| `document/table_clipboard.rs` | Bounded TSV profiles and escaped typed-value HTML export |
+| `document/table_clipboard_html.rs` | Bounded inert Sheets/Excel Web HTML cell reading, typed strings and displayed values |
+| `document/table_paste.rs` | Atomic rectangular paste, literal values and local table growth |
 | `document/code_edit.rs` | Source-coordinate code indentation, newline handling, and fence-safe entry |
 | `document/writing.rs` | Portable Markdown links, figures and quotation edits |
 | `editor/rich_layout.rs` | Cached shaped paragraphs and shared geometry for drawing, caret, hit testing, navigation |
@@ -47,6 +53,7 @@ Dosty is one Cargo package, named `dosty`, with a thin `main.rs` calling `dosty:
 | `io/assets.rs` | Immutable image import and bounded Save As asset copying |
 | `io/export.rs` | Standalone HTML with embedded local images |
 | `io/recovery.rs` | Atomic recovery checkpoints and saved-file baselines |
+| `io/table_clipboard.rs` | Retained native clipboard ownership, producer metadata and guarded rich writes |
 | `io/writing_sample.rs` | Independent editable copies of the bundled sample |
 | `io/collaboration_store.rs` | Checkpoints, recovery journal, file locks and offline interchange |
 
@@ -60,7 +67,13 @@ The optional Read representation is initialized lazily per parsed block. Unchang
 
 The live editor is one Iced `text_editor::Content` covering the whole document. `RichEditor` is a custom Iced widget over that buffer, rather than a collection of per-block editors. Native actions handle text mutations and logical motions. Geometry-dependent movement, selection drawing, pointer hit testing, scrolling, and input-method positioning share `RichLayout`'s measured paragraphs. There is one focus and selection across the page.
 
-The authoritative Markdown remains in `Document`. A `Projection` contains the visible text, compact source/display pieces, paired delimiter ranges, immutable highlight runs, a retained source String, and a separate source revision identity. While focused, the heading containing the selection head reveals its prefix (and optional closing hashes or Setext underline). Only the innermost inline span containing that head reveals its own delimiters, including a link's destination. Other spans on the same line stay concealed. A span's closing endpoint belongs to the surrounding prose, so finishing a span conceals it immediately. Revealed syntax is muted, smaller monospace text; content keeps its semantic styles and heading size. Losing focus conceals syntax without changing source selection or history.
+While a table cell draft is open, the transient native child editor takes focus
+and the document source selection remains parked at the active cell. Committing
+returns focus to the document widget and applies one source transaction.
+
+The authoritative Markdown remains in `Document`. Validated multi-edit transactions use one advancing UTF-16 Yrs delta cursor, preserving granular source operations and unchanged identities; single edits keep direct positional mutation. Both staged admission and the active CRDT use the same helper. See [batch transaction performance](table-column-performance.md).
+
+A `Projection` contains the visible text, compact source/display pieces, paired delimiter ranges, immutable highlight runs, a retained source String, and a separate source revision identity. While focused, the heading containing the selection head reveals its prefix (and optional closing hashes or Setext underline). Only the innermost inline span containing that head reveals its own delimiters, including a link's destination. Other spans on the same line stay concealed. A span's closing endpoint belongs to the surrounding prose, so finishing a span conceals it immediately. Revealed syntax is muted, smaller monospace text; content keeps its semantic styles and heading size. Losing focus conceals syntax without changing source selection or history.
 
 Mappings work in UTF-8 byte offsets, as does Iced/cosmic-text. Both native editing and rich shaping use the same visible projection. Concealed syntax takes no space, including long link destinations. Lists/tasks/quotes contribute their display glyphs directly to flow; table separators and image objects retain their structural replacements. Structural source revisions are parsed once; safe word edits rebase the existing parse. Source updates splice retained text and parsed metadata in place. A disclosure change retains the parse, source buffer and revision identity while rebuilding projected text and mapped metadata. Context is represented by exact marker ranges, so disclosing a heading does not expose unrelated inline spans or nested markers.
 
@@ -122,7 +135,114 @@ Context-sensitive fallback parsing, contiguous source/projection/native snapshot
 
 Task marker decorations retain parser-certified source ranges. Live checkbox hits use the same measured selection rectangles as text, and release accepts only an unmoved single click against the original source revision and layout. Live, Source keyboard commands and Read controls share a same-length source transaction that preserves selection direction and history. See [task lists](task-lists.md).
 
-Table cells retain both source and display ranges. Source-only pipes, padding, and alignment rows project to tabs and row breaks. Cells wrap independently, with shared row heights and column alignment. Vertical movement skips unavailable lines in an adjacent taller cell; horizontal movement and selections remain document-wide. Cell-aware input preserves separators, escapes pipes, supports rectangular TSV paste, and adds rows. Inline formatting works independently per selected cell.
+Table cells retain source and display ranges. Source-only pipes, padding, and
+alignment rows project to tabs and row breaks. Cells wrap independently with
+shared row heights and alignment. Bare inline `<br>` and character references
+have explicit display mappings. Shaped glyph offsets are rebased from each
+physical line into the cell's paragraph, including blank lines and Unicode.
+Measured cell rectangles resolve empty-cell pointer targets independently of
+neighboring text fragments. Live cells use the full content width with a small
+top spacing and row-level header/rule decorations. The selected table adds grid
+lines and coordinate handles over its existing edges and outside page margin;
+activating it does not change text or cell geometry. Inactive tables have no
+coordinate hit targets. Hovering a selected table's row/column label reveals a
+menu arrow inside the existing handle space, leaving label and cell geometry
+unchanged. Its pointer hit uses the same measured rectangle as drawing; label
+clicks retain row/column selection and modified clicks retain range extension.
+Short-row cells materialize only on committed entry;
+document-wide text selections remain continuous.
+
+`document/table_input.rs` plans document-style text entry, line breaks, and
+cross-cell or cross-block replacements as sorted source splices. Selected values
+are cleared or replaced without deleting their grid. Boundary cells repair inline
+formatting locally. Required edge delimiters are added only to affected rows.
+`document/table_clipboard.rs` decodes and encodes bounded quoted TSV, retaining
+embedded delimiters and empty cells. A separate native Sheets profile preserves
+quote-only values and terminal blank records. Copy also serializes escaped HTML
+with literal string metadata and Office `mso-spacerun` spans for ASCII space/tab
+runs. The original values remain unchanged; destination number-format coercion
+is not compensated with apostrophe prefixes.
+`document/table_clipboard_html.rs` reads recognized Sheets and Excel Web HTML as
+explicit cells, avoiding ambiguous plain-text quotes and preserving final empty
+rows. Within a verified Sheets snapshot, typed string metadata supplies literal
+strings; other cells retain displayed text. Excel recognition requires actual
+ProgId and Generator metadata. Its reader uses displayed cell text, suppresses
+one formatting line ending after `<br>`, and maps nonbreaking spaces to ordinary
+spaces only inside `mso-spacerun` spans. Neither profile imports formulas or
+underlying number serials. The bounded inert reader rejects merged, nested,
+hidden, or unsupported table content; it does not render HTML or import markup
+into the document.
+`document/table_paste.rs` plans a values
+rectangle with sparse splices and coalesced growth insertions, preserving untouched
+cell bytes and physical row endings. One batched projection oracle checks literal
+values and structure before a single human transaction. The grid coordinator
+fills or tiles compatible selected ranges, or grows from one selected cell;
+incompatible and oversized requests leave source unchanged. Copy and paste
+intents resolve their current target in App after preceding selection messages.
+Ordered runtime clipboard writes and reads preserve Copy → Move → Paste within
+one Iced event batch and verify the plain-text alternative. Native rich work
+then runs off the UI path; `io/table_clipboard.rs` retains its owner, matches text
+before and after metadata reads and cell decoding, and checks text immediately
+before enrichment and after writing.
+Cut waits for verified writes and revalidates its source revision and selection;
+asynchronous paste also validates its captured target. Model/widget tests use
+their in-memory clipboard, with explicit completion messages for native paths.
+When the runtime supplies no text, a worker may recover a recognized entirely
+empty native spreadsheet table only after matching HTML reads around decoding
+and confirming empty/absent text. Missing ordinary clipboard contents remain a
+no-op; the delayed empty result retains the same source/selection guards.
+Paste and clear/cut transactions attach directed grid coordinates and a stable
+table source position to the existing history item, alongside source selections.
+Undo/redo resolves that table after source restoration and restores the original
+or expanded rectangle. Plain text transactions retain their existing history path.
+`app/table.rs` coordinates revision-checked pointer targets, stable menu/dialog
+targets, source selections, and deliberate human undo grouping. Live context
+menus use row/column/cell scopes over a transparent dismiss layer. The toolbar
+and keyboard locate the active cell through a widget operation over measured
+geometry; popup positioning stays within the window. A second measured operation
+minimally scrolls keyboard-selected menu actions into view, and changing groups
+resets the menu scroll position. Window unfocus dismisses only the context menu.
+Menu previews retain the
+source selection, and every action validates the captured table before applying.
+Source keeps the keyboard-operated dialog. The footer stays document focused.
+`app/table_grid.rs` keeps cell anchor/head and active-cell positions distinct from
+the continuous source selection. A quiet state retains the last source cell target
+for keyboard/IME re-entry while hiding the active grid.
+Pointer and keyboard ranges use cell rectangles, not the intervening linear
+Markdown span. Cell selection and movement within existing content never mutate
+source. At a document edge, a plain outward arrow can create the missing paragraph
+in one human transaction. One transient native text editor is a child of `RichEditor`, positioned
+over the active cell; its plain-text draft and bounded local history stay outside
+the authoritative document. Commit checks a stable expected cell target, applies
+source-preserving splices once, and returns to cell selection. Escape discards
+the draft, collapses a range, then quiets a single selected cell without changing
+its source selection. Clicking prose commits and clears the table presentation.
+The pending editor can grow over neighboring rows until commit,
+when normal row reflow and viewport anchoring apply. Source keeps literal editing.
+
+Plain Up/Down at a logical table edge use the active cell's measured horizontal
+position to find an existing outside source row. The source row is shaped before
+resolving the target, including across virtualized table boundaries. Adjacent
+tables adopt a cell in their boundary row. A source-distinct blank paragraph is
+usable; a terminal caret shared with the last cell is not a safe outside target.
+When no outside destination exists, the widget requests a revision-checked
+boundary exit from `app/table_grid.rs`. The App validates the logical row and
+document edge, then inserts only the missing separator at BOF/EOF, reusing plain
+whitespace and preserving the table's physical line-ending style. The paragraph
+sits outside any table container. Creation is one undo group, separate from
+subsequent prose typing; the normal document transaction limits still apply.
+This path is confined to physical unmodified arrow keys, preserving range
+extension and native draft arrows as well as Enter/Tab commit traversal.
+
+Structural mapping pieces record the relative pipe/newline boundary. Concealed
+padding before it maps to the preceding cell and padding after it to the next;
+source hints round-trip only on their own side. The active cell tracks stable
+value bounds through local/remote changes and reflow. Original padding stays
+concealed. Typed edge spaces use numeric character references to survive Markdown
+trimming after focus moves; repeated trailing spaces normalize to ordinary source
+spaces when they become interior text. Inline formatting markers stay concealed
+inside cells. See [table editing](table-editing.md) for the current interaction
+contract and reproducible validation.
 
 Images project to an atomic object replacement character. Their complete Markdown remains behind that object. Selection, deletion, clipboard transfer, source switching, and undo map through the same source pieces as text. Images occupy block flow, including images written inline and images inside table cells. Local/file/HTTP/HTTPS loading and decoding run outside the UI thread, with four concurrent loads, a 20-second HTTP timeout, redirect limits, a 16 MiB encoded cap, decoder allocation/dimension limits, and a 128 MiB document image cache. Renderer handles contain decoded RGBA pixels. Failed images retain their object and show a message. GIFs show the first frame; SVG is unsupported.
 

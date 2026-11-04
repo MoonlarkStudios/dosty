@@ -1,0 +1,22 @@
+    Finished `release` profile [optimized] target(s) in 0.37s
+     Running unittests src/lib.rs (target/release/deps/dosty-1ffcfc106c452b2a)
+
+running 1 test
+test app::application::table::tests::performance_table_controls ... table rows=1000 command=RowAfter samples=30 ms p50=1.537 p95=1.719 max=1.790 crdt_p50=0.007 source_p50=0.528
+table rows=1000 command=ColumnAfter samples=30 ms p50=5.501 p95=5.799 max=6.666 crdt_p50=3.019 source_p50=0.953
+table rows=1000 command=DeleteColumn samples=30 ms p50=5.101 p95=5.347 max=5.529 crdt_p50=3.278 source_p50=0.673
+table rows=1000 command=Align(Right) samples=30 ms p50=1.574 p95=1.622 max=1.647 crdt_p50=0.009 source_p50=0.539
+table rows=5000 command=RowAfter samples=30 ms p50=7.965 p95=8.385 max=8.435 crdt_p50=0.019 source_p50=2.853
+table rows=5000 command=ColumnAfter samples=30 ms p50=71.177 p95=77.820 max=80.477 crdt_p50=54.109 source_p50=8.362
+table rows=5000 command=DeleteColumn samples=30 ms p50=123.425 p95=125.684 max=130.040 crdt_p50=110.152 source_p50=6.017
+table rows=5000 command=Align(Right) samples=30 ms p50=7.850 p95=8.138 max=8.246 crdt_p50=0.021 source_p50=2.782
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 283 filtered out; finished in 10.73s
+
+     Running unittests src/main.rs (target/release/deps/dosty-4d5da996bcc98527)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

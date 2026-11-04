@@ -1,0 +1,25 @@
+   Compiling dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `release` profile [optimized] target(s) in 1m 02s
+     Running unittests src/lib.rs (target/release/deps/dosty-1ffcfc106c452b2a)
+
+running 1 test
+test app::application::performance::performance_document_table_typing ... document-table rows=1000 Space n=30 input=0.001/0.004/0.022ms update=0.001/0.004/0.008ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.001/0.004/0.008ms layout=0.014/0.021/0.022ms draw=0.003/0.004/0.005ms raster=3.029/3.154/3.154ms total=3.054/3.172/3.173ms (p50/p95/max)
+document-table rows=1000 text n=30 input=0.001/0.003/0.003ms update=0.001/0.002/0.002ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.001/0.002/0.002ms layout=0.013/0.020/0.022ms draw=0.003/0.004/0.004ms raster=3.022/3.143/3.169ms total=3.038/3.161/3.182ms (p50/p95/max)
+document-table rows=1000 Tab n=30 input=0.001/0.003/0.003ms update=1.791/1.875/2.030ms crdt=0.006/0.018/0.053ms source=0.580/0.637/0.642ms adapters=1.203/1.294/1.374ms layout=0.001/0.001/0.001ms draw=0.003/0.004/0.012ms raster=3.006/3.166/3.194ms total=4.788/4.948/5.168ms (p50/p95/max)
+table-grid rows=1000 Arrow n=30 input=0.001/0.002/0.002ms update=0.004/0.005/0.005ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.004/0.005/0.005ms layout=0.001/0.001/0.001ms draw=0.003/0.004/0.007ms raster=3.236/3.368/3.382ms total=3.244/3.377/3.390ms (p50/p95/max)
+table-grid rows=1000 range-31x3 n=30 input=0.000/0.000/0.000ms update=0.030/0.033/0.034ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.030/0.033/0.034ms layout=0.001/0.001/0.001ms draw=0.005/0.005/0.008ms raster=4.035/4.110/4.366ms total=4.070/4.148/4.408ms (p50/p95/max)
+document-table rows=5000 Space n=30 input=0.001/0.005/0.008ms update=0.001/0.002/0.002ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.001/0.002/0.002ms layout=0.013/0.021/0.022ms draw=0.003/0.003/0.007ms raster=3.027/3.116/3.154ms total=3.042/3.146/3.169ms (p50/p95/max)
+document-table rows=5000 text n=30 input=0.001/0.002/0.002ms update=0.001/0.001/0.002ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.001/0.001/0.002ms layout=0.013/0.022/0.028ms draw=0.003/0.004/0.004ms raster=3.053/3.115/3.119ms total=3.073/3.130/3.130ms (p50/p95/max)
+document-table rows=5000 Tab n=30 input=0.001/0.002/0.002ms update=8.252/8.528/8.646ms crdt=0.007/0.012/0.018ms source=2.751/2.874/2.916ms adapters=5.496/5.715/5.787ms layout=0.001/0.001/0.001ms draw=0.003/0.003/0.003ms raster=2.950/3.090/3.096ms total=11.216/11.480/11.741ms (p50/p95/max)
+table-grid rows=5000 Arrow n=30 input=0.001/0.001/0.002ms update=0.015/0.016/0.023ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.015/0.016/0.023ms layout=0.001/0.001/0.001ms draw=0.003/0.003/0.003ms raster=3.234/3.349/3.361ms total=3.253/3.368/3.380ms (p50/p95/max)
+table-grid rows=5000 range-31x3 n=30 input=0.000/0.000/0.000ms update=0.041/0.044/0.045ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.041/0.044/0.045ms layout=0.001/0.001/0.001ms draw=0.005/0.005/0.009ms raster=3.999/4.123/4.345ms total=4.047/4.169/4.399ms (p50/p95/max)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 297 filtered out; finished in 2.12s
+
+     Running unittests src/main.rs (target/release/deps/dosty-4d5da996bcc98527)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

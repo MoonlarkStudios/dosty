@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-30",
+  "base_commit": "4769d8c2d8acfa818834235aa4bae343c3922c9b",
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.1\nBuildVersion:\t\t25G241",
+  "rust": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "hardware_limit": "CPU model and memory were unavailable through sandboxed sysctl; other desktop activity was not controlled. No cross-machine or before/after comparison is claimed.",
+  "commands": [
+    "mise run check (localhost permitted)",
+    "mise run check-repo",
+    "mise run release",
+    "mise exec -- cargo test --locked --release performance_table_controls -- --ignored --nocapture --test-threads=1",
+    "DOSTY_PROFILE_BLOCKS=10000 DOSTY_PROFILE_SAMPLES=30 mise run profile",
+    "DOSTY_PROFILE_BLOCKS=50000 DOSTY_PROFILE_SAMPLES=30 mise run profile",
+    "DOSTY_CONFIG_DIR=/tmp/dosty-table-preview-final mise exec -- cargo test --locked table_controls_previews -- --ignored --nocapture --test-threads=1"
+  ],
+  "source_sha256": {
+    "src/app/application.rs": "2b81a686bd02b17d2e20fcda5cd45c1331aa9c5480422663c17875fe7c14e69c",
+    "src/app/table.rs": "9945bafe695d18282c71f57c31ba8ec657f0db0142cf7cc8e227a7ebc9b26514",
+    "src/app/table_tests.rs": "6205fbd0db76a5716c686d8025409e818bbbad482d973778a9bdd56853e05622",
+    "src/app/theme_tests.rs": "d3c8c360eabdd2519d85f92f49f7471ef36432a6df81e1bd71ec86244a2e4d60",
+    "src/document/table_edit.rs": "67f80fd19294d38de16e9bfacae343a2c4b1fbfaa9657a79d7bdbdb85987b159",
+    "src/document/table_controls.rs": "638b05397e76d3fb04fe43b2f6d6b121d5a6328fbcc49bba8ddcc8c903ce2f91",
+    "tests/fixtures/table-controls.md": "3dc20583d683271938ac8476dc5009a574f7ade4fe6a739f65fc17e2712e9915",
+    "Cargo.lock": "2b73381eb38e9a63395b5d894b13eb4981827d7c18415514dcd03e2ce884a009",
+    "mise.toml": "b218767f2af031221fc17a6a54bcf854a5f4c59ab05b6f54e8c85e4a817bf00b"
+  }
+}

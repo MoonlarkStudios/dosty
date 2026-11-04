@@ -12,26 +12,41 @@ type Runs = Arc<[(Range<usize>, Style)]>;
 impl Projection {
     pub(super) fn set_disclosure_lines(&mut self, disclosure: &Disclosure) -> bool {
         let mut lines = Vec::new();
-        for range in self.disclosure.0.iter().chain(&disclosure.0) {
+        for range in self
+            .disclosure
+            .0
+            .iter()
+            .chain(&disclosure.0)
+            .chain(self.disclosure.1.iter())
+            .chain(disclosure.1.iter())
+        {
             // Setext underlines and multiline link syntax change the line count.
-            if self.source[range.clone()].contains('\n') {
+            if self.source[range.clone()].contains(['\r', '\n']) {
                 return false;
             }
-            let start = self.source[..range.start].rfind('\n').map_or(0, |n| n + 1);
+            let start = self.source[..range.start]
+                .rfind(['\r', '\n'])
+                .map_or(0, |n| n + 1);
             let end = self.source[range.end..]
-                .find('\n')
+                .find(['\r', '\n'])
                 .map_or(self.source.len(), |n| range.end + n);
             lines.push(start..end);
         }
         lines.sort_by_key(|r| r.start);
         lines.dedup();
-        let visible = project(&self.source, &self.parsed, false, |decoration| {
-            decoration.kind == Concealment::Structural
-                || !disclosure
-                    .0
-                    .iter()
-                    .any(|r| decoration.range.start < r.end && r.start < decoration.range.end)
-        });
+        let visible = project(
+            &self.source,
+            &self.parsed,
+            false,
+            disclosure.1.as_ref(),
+            |decoration| {
+                decoration.kind == Concealment::Structural
+                    || !disclosure
+                        .0
+                        .iter()
+                        .any(|r| decoration.range.start < r.end && r.start < decoration.range.end)
+            },
+        );
         let starts: Arc<[usize]> = std::iter::once(0)
             .chain(visible.text.match_indices('\n').map(|(n, _)| n + 1))
             .collect();

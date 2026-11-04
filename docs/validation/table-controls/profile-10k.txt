@@ -1,0 +1,34 @@
+[profile] $ cargo test --locked --release large_document_interactions -- --ignored --nocapture --test-threads=1
+    Finished `release` profile [optimized] target(s) in 0.53s
+     Running unittests src/lib.rs (target/release/deps/dosty-1ffcfc106c452b2a)
+
+running 1 test
+test app::application::performance::large_document_interactions ... 
+blocks=10000 bytes=910450 load=42.082709ms layout_counts=(52, 58)
+cold n=1 input=0.000/0.000/0.000ms update=0.000/0.000/0.000ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.000/0.000/0.000ms layout=31.534/31.534/31.534ms draw=0.029/0.029/0.029ms raster=4.857/4.857/4.857ms total=36.420/36.420/36.420ms (p50/p95/max)
+jump/distant n=10 input=0.000/0.000/0.000ms update=2.215/2.514/2.514ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=2.215/2.514/2.514ms layout=1.063/1.243/1.243ms draw=0.003/0.004/0.004ms raster=1.172/1.345/1.345ms total=4.328/4.931/4.931ms (p50/p95/max)
+typing/start n=30 input=0.002/0.005/0.008ms update=0.868/2.317/2.334ms crdt=0.011/0.021/0.162ms source=0.040/0.285/0.423ms adapters=0.818/1.964/2.031ms layout=0.184/0.267/0.293ms draw=0.002/0.004/0.004ms raster=1.189/1.337/1.467ms total=2.257/3.617/3.780ms (p50/p95/max)
+typing/middle n=30 input=0.002/0.007/0.015ms update=1.048/1.645/1.905ms crdt=0.010/0.022/0.584ms source=0.023/0.241/0.281ms adapters=0.893/1.540/1.648ms layout=0.175/0.252/0.255ms draw=0.002/0.006/0.007ms raster=1.221/1.382/1.412ms total=2.533/3.065/3.251ms (p50/p95/max)
+typing/end n=30 input=0.001/0.005/0.169ms update=0.846/1.228/19.172ms crdt=0.011/0.025/0.034ms source=0.003/0.011/5.026ms adapters=0.831/1.183/14.132ms layout=0.221/0.340/3.561ms draw=0.002/0.005/0.007ms raster=0.931/1.040/1.116ms total=2.014/2.474/24.023ms (p50/p95/max)
+disclosure n=30 input=0.000/0.000/0.000ms update=2.029/2.347/2.353ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=2.029/2.347/2.353ms layout=0.196/0.282/0.287ms draw=0.002/0.004/0.004ms raster=1.264/1.440/1.494ms total=3.521/3.864/3.967ms (p50/p95/max)
+selection/local n=30 input=0.000/0.000/0.000ms update=0.273/0.316/0.331ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.273/0.316/0.331ms layout=0.001/0.004/0.004ms draw=0.002/0.007/0.011ms raster=1.188/1.407/1.427ms total=1.468/1.680/1.744ms (p50/p95/max)
+selection/half-document n=30 input=0.000/0.000/0.000ms update=0.274/0.382/0.426ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.274/0.382/0.426ms layout=0.001/0.004/0.004ms draw=0.003/0.008/0.011ms raster=1.418/1.541/1.541ms total=1.735/1.826/1.934ms (p50/p95/max)
+scroll n=30 input=0.057/0.222/0.227ms update=0.000/0.000/0.000ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.000/0.000/0.000ms layout=0.001/0.001/0.001ms draw=0.003/0.007/0.008ms raster=1.403/1.857/1.973ms total=1.503/1.922/2.007ms (p50/p95/max)
+selection/keyboard n=30 input=0.002/0.006/0.006ms update=0.277/1.934/2.268ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.277/1.934/2.268ms layout=0.002/3.177/3.272ms draw=0.003/0.004/0.006ms raster=1.214/1.441/1.573ms total=1.542/6.245/6.430ms (p50/p95/max)
+selection/drag n=30 input=0.003/0.007/0.011ms update=0.277/2.010/2.203ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.277/2.010/2.203ms layout=0.002/0.501/5.437ms draw=0.002/0.006/0.007ms raster=1.048/1.300/1.771ms total=1.339/3.773/9.104ms (p50/p95/max)
+typing/syntax-fallback n=30 input=0.000/0.000/0.000ms update=0.777/1.488/1.987ms crdt=0.011/0.023/0.580ms source=0.024/0.059/0.065ms adapters=0.743/1.342/1.417ms layout=0.177/0.266/0.267ms draw=0.002/0.007/0.007ms raster=1.219/1.315/1.344ms total=2.205/2.891/3.380ms (p50/p95/max)
+ime/preedit n=1 input=0.013/0.013/0.013ms update=0.000/0.000/0.000ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.000/0.000/0.000ms layout=0.001/0.001/0.001ms draw=0.003/0.003/0.003ms raster=1.157/1.157/1.157ms total=1.174/1.174/1.174ms (p50/p95/max)
+ime/commit n=1 input=0.002/0.002/0.002ms update=1.165/1.165/1.165ms crdt=0.014/0.014/0.014ms source=0.037/0.037/0.037ms adapters=1.114/1.114/1.114ms layout=3.580/3.580/3.580ms draw=0.002/0.002/0.002ms raster=3.470/3.470/3.470ms total=8.219/8.219/8.219ms (p50/p95/max)
+undo/ime n=1 input=0.000/0.000/0.000ms update=1.351/1.351/1.351ms crdt=0.019/0.019/0.019ms source=0.097/0.097/0.097ms adapters=1.235/1.235/1.235ms layout=0.240/0.240/0.240ms draw=0.003/0.003/0.003ms raster=1.217/1.217/1.217ms total=2.811/2.811/2.811ms (p50/p95/max)
+redo/ime n=1 input=0.000/0.000/0.000ms update=0.743/0.743/0.743ms crdt=0.015/0.015/0.015ms source=0.028/0.028/0.028ms adapters=0.699/0.699/0.699ms layout=0.237/0.237/0.237ms draw=0.002/0.002/0.002ms raster=1.222/1.222/1.222ms total=2.203/2.203/2.203ms (p50/p95/max)
+final_layout_counts=(76, 87)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 256 filtered out; finished in 0.92s
+
+     Running unittests src/main.rs (target/release/deps/dosty-4d5da996bcc98527)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

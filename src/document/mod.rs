@@ -10,6 +10,8 @@ pub(crate) mod projection;
 pub(crate) mod rich_document;
 pub(crate) mod selection;
 mod source;
+pub(crate) mod table_clipboard;
+pub(crate) mod table_clipboard_html;
 pub(crate) mod table_edit;
 pub(crate) mod writing;
 

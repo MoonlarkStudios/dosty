@@ -43,6 +43,10 @@ fn switching_appearance_preserves_the_document_and_reverse_selection() {
 }
 
 fn render(app: &App, size: Size, name: &str) {
+    render_with_cursor(app, size, name, mouse::Cursor::Unavailable);
+}
+
+fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) {
     let mut renderer =
         Renderer::Secondary(iced_tiny_skia::Renderer::new(Font::DEFAULT, 18.0.into()));
     let mut root = app.view();
@@ -52,6 +56,12 @@ fn render(app: &App, size: Size, name: &str) {
         root.as_widget_mut()
             .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
     let clip = Rectangle::with_size(size);
+    if app.grid.draft.is_some() {
+        let mut focus =
+            widget::operation::focusable::focus::<()>(widget::Id::from(table_grid::CELL_EDITOR));
+        root.as_widget_mut()
+            .operate(&mut tree, Layout::new(&node), &renderer, &mut focus);
+    }
     let mut messages = Vec::new();
     root.as_widget_mut().update(
         &mut tree,
@@ -59,7 +69,7 @@ fn render(app: &App, size: Size, name: &str) {
             iced::time::Instant::now(),
         )),
         Layout::new(&node),
-        mouse::Cursor::Unavailable,
+        cursor,
         &renderer,
         &mut iced::advanced::clipboard::Null,
         &mut iced::advanced::Shell::new(&mut messages),
@@ -74,7 +84,7 @@ fn render(app: &App, size: Size, name: &str) {
             text_color: app.resolved_theme.tokens.text,
         },
         Layout::new(&node),
-        mouse::Cursor::Unavailable,
+        cursor,
         &clip,
     );
     let size = Size::new(size.width as u32, size.height as u32);
@@ -102,6 +112,200 @@ fn render(app: &App, size: Size, name: &str) {
         image::ColorType::Rgba8,
     )
     .unwrap();
+}
+
+#[test]
+#[ignore = "render a pasted spreadsheet range and its quiet reading presentation"]
+fn table_clipboard_previews() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in [
+        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
+    ] {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+    std::fs::create_dir_all("target/theme-validation").unwrap();
+    for preset in Preset::ALL {
+        let (mut app, task) = App::new();
+        drop(task);
+        app.set_document(
+            include_str!("../../tests/fixtures/table-grid.md").into(),
+            None,
+            "Launch plan.md".into(),
+        );
+        app.resolved_theme = preset.resolve();
+        app.preferences.recent.clear();
+        app.sidebar = false;
+        app.notification = None;
+        app.editor_focused = true;
+        drop(app.update_grid(table_grid::Message::Select {
+            revision: Arc::clone(&app.projection.source_id),
+            table: 0,
+            row: 0,
+            column: 0,
+            extend: false,
+            extent: table_grid::Extent::Cell,
+        }));
+        drop(app.update_grid(table_grid::Message::Paste(
+            "Milestone\tOwner\tStatus\tNotes\r\nDraft proposal\tMaya\tIn progress\t\"First draft\nReview Friday\"\r\nReview together\tNoah\tReady\tBring the team\r\nPublish the plan\tAri\tPlanned\t\"Say \"\"hello\"\"\"\r\nShare the results\tLéa\tPlanned\t".into(),
+        )));
+        assert_eq!(app.grid_view().unwrap().head, (4, 3));
+        assert!(app.notification.is_none());
+        for (size, suffix) in [
+            (Size::new(1180.0, 820.0), ""),
+            (Size::new(760.0, 520.0), "-narrow"),
+        ] {
+            render(
+                &app,
+                size,
+                &format!("{}-clipboard-range{suffix}", preset.name()),
+            );
+        }
+        drop(app.update_grid(table_grid::Message::Cancel));
+        drop(app.update_grid(table_grid::Message::Cancel));
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("{}-clipboard-quiet", preset.name()),
+        );
+    }
+}
+
+#[test]
+#[ignore = "render document table editing and its contextual footer in every theme"]
+fn document_table_previews() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in [
+        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
+    ] {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+    std::fs::create_dir_all("target/theme-validation").unwrap();
+    let (mut app, _) = App::new();
+    let source = include_str!("../../tests/fixtures/document-tables.md");
+    app.set_document(source.into(), None, "Document tables.md".into());
+    app.sidebar = false;
+    app.notification = None;
+    app.mode = EditorMode::Live;
+    app.editor_focused = true;
+    app.selection = Selection::caret(source.find("Second").unwrap() + 3);
+    app.sync_editor();
+    for preset in Preset::ALL {
+        app.resolved_theme = preset.resolve();
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("{}-document-table", preset.name()),
+        );
+        render(
+            &app,
+            Size::new(760.0, 520.0),
+            &format!("{}-document-table-narrow", preset.name()),
+        );
+        app.mode = EditorMode::Read;
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("{}-document-table-read", preset.name()),
+        );
+        app.mode = EditorMode::Live;
+    }
+}
+
+#[test]
+#[ignore = "render spreadsheet cell/range selection and native draft editing in all themes"]
+fn table_grid_previews() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in [
+        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
+    ] {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+    std::fs::create_dir_all("target/theme-validation").unwrap();
+    let (mut app, task) = App::new();
+    drop(task);
+    app.set_document(
+        include_str!("../../tests/fixtures/table-grid.md").into(),
+        None,
+        "Launch plan.md".into(),
+    );
+    app.sidebar = false;
+    app.notification = None;
+    app.mode = EditorMode::Live;
+    app.editor_focused = true;
+    for preset in Preset::ALL {
+        app.resolved_theme = preset.resolve();
+        app.clear_grid();
+        app.selection = Selection::caret(app.document.source().find("Keep the team").unwrap());
+        app.sync_editor();
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("{}-table-quiet", preset.name()),
+        );
+        render(
+            &app,
+            Size::new(760.0, 520.0),
+            &format!("{}-table-quiet-narrow", preset.name()),
+        );
+        for (row, column, extend) in [(1, 1, false), (3, 2, true)] {
+            drop(app.update_grid(table_grid::Message::Select {
+                revision: Arc::clone(&app.projection.source_id),
+                table: 0,
+                row,
+                column,
+                extend,
+                extent: table_grid::Extent::Cell,
+            }));
+        }
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("{}-table-range", preset.name()),
+        );
+        render(
+            &app,
+            Size::new(760.0, 520.0),
+            &format!("{}-table-range-narrow", preset.name()),
+        );
+        drop(app.update_grid(table_grid::Message::Select {
+            revision: Arc::clone(&app.projection.source_id),
+            table: 0,
+            row: 1,
+            column: 1,
+            extend: false,
+            extent: table_grid::Extent::Cell,
+        }));
+        drop(app.update_grid(table_grid::Message::Begin(Some("Maya\nDesign lead".into()))));
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("{}-table-draft", preset.name()),
+        );
+        render(
+            &app,
+            Size::new(760.0, 520.0),
+            &format!("{}-table-draft-narrow", preset.name()),
+        );
+        drop(app.update_grid(table_grid::Message::Cancel));
+    }
 }
 
 #[test]
@@ -179,5 +383,179 @@ fn theme_ui_previews() {
             Size::new(1180.0, 820.0),
             &format!("{}-code", preset.name()),
         );
+    }
+}
+
+#[test]
+#[ignore = "render table controls in every preset and narrow windows without opening native documents"]
+fn table_controls_previews() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in [
+        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
+    ] {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+    std::fs::create_dir_all("target/theme-validation").unwrap();
+    let source = include_str!("../../tests/fixtures/table-controls.md");
+    let (mut app, task) = App::new();
+    drop(task);
+    app.set_document(source.into(), None, "Tables.md".into());
+    app.selection = Selection::caret(source.find("Name").unwrap());
+    app.editor_focused = true;
+    app.sync_editor();
+    drop(app.update(Message::Table(table::Message::Open)));
+    for preset in Preset::ALL {
+        app.resolved_theme = preset.resolve();
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("{}-table-controls", preset.name()),
+        );
+        render(
+            &app,
+            Size::new(760.0, 520.0),
+            &format!("{}-table-controls-narrow", preset.name()),
+        );
+    }
+}
+
+#[test]
+#[ignore = "render contextual table menus in all themes and at viewport edges"]
+fn table_context_previews() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in [
+        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
+    ] {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+    std::fs::create_dir_all("target/theme-validation").unwrap();
+    let source = include_str!("../../tests/fixtures/table-grid.md");
+    for preset in Preset::ALL {
+        for (size, suffix) in [
+            (Size::new(1180.0, 820.0), ""),
+            (Size::new(760.0, 520.0), "-narrow"),
+        ] {
+            for (extent, label, row, column) in [
+                (table_grid::Extent::Cell, "cell", 1, 1),
+                (table_grid::Extent::Row, "row", 1, 0),
+                (table_grid::Extent::Column, "column", 0, 1),
+            ] {
+                let (mut app, task) = App::new();
+                drop(task);
+                app.set_document(source.into(), None, "Launch plan.md".into());
+                app.resolved_theme = preset.resolve();
+                app.preferences.recent.clear();
+                app.sidebar = false;
+                app.editor_focused = true;
+                app.selection = Selection::caret(source.find("Keep the team").unwrap());
+                app.sync_editor();
+                drop(
+                    app.update_message(Message::Table(table::Message::OpenContext {
+                        revision: std::sync::Arc::clone(&app.projection.source_id),
+                        table: 0,
+                        row,
+                        column,
+                        extent,
+                        position: if suffix.is_empty() {
+                            iced::Point::new(
+                                if extent == table_grid::Extent::Row {
+                                    216.0
+                                } else {
+                                    476.0
+                                },
+                                if extent == table_grid::Extent::Column {
+                                    276.0
+                                } else {
+                                    354.0
+                                },
+                            )
+                        } else {
+                            iced::Point::new(700.0, 480.0)
+                        },
+                    })),
+                );
+                render(
+                    &app,
+                    size,
+                    &format!("{}-table-menu-{label}{suffix}", preset.name()),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "render hover-only table controls without opening native windows"]
+fn table_hover_previews() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in [
+        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
+    ] {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+    std::fs::create_dir_all("target/theme-validation").unwrap();
+    let source = include_str!("../../tests/fixtures/table-grid.md");
+    for preset in Preset::ALL {
+        for (size, suffix) in [
+            (Size::new(1180.0, 820.0), ""),
+            (Size::new(760.0, 520.0), "-narrow"),
+        ] {
+            let (mut app, task) = App::new();
+            drop(task);
+            app.set_document(source.into(), None, "Launch plan.md".into());
+            app.resolved_theme = preset.resolve();
+            app.preferences.recent.clear();
+            app.sidebar = false;
+            app.editor_focused = true;
+            drop(app.update_grid(table_grid::Message::Select {
+                revision: std::sync::Arc::clone(&app.projection.source_id),
+                table: 0,
+                row: 1,
+                column: 1,
+                extend: false,
+                extent: table_grid::Extent::Cell,
+            }));
+            for (label, point) in [
+                (
+                    "row",
+                    iced::Point::new(
+                        if suffix.is_empty() { 216.0 } else { 18.0 },
+                        if suffix.is_empty() { 372.0 } else { 305.0 },
+                    ),
+                ),
+                (
+                    "column",
+                    iced::Point::new(
+                        if suffix.is_empty() { 692.0 } else { 478.0 },
+                        if suffix.is_empty() { 275.0 } else { 207.0 },
+                    ),
+                ),
+            ] {
+                render_with_cursor(
+                    &app,
+                    size,
+                    &format!("{}-table-hover-{label}{suffix}", preset.name()),
+                    mouse::Cursor::Available(point),
+                );
+            }
+        }
     }
 }

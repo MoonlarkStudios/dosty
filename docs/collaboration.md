@@ -14,7 +14,7 @@ Using byte-indexed editing alone is insufficient for Yrs 0.28 permanent position
 
 ## Transactions and ownership
 
-`Document::transact` takes sorted, disjoint source edits. **All offsets refer to the transaction's original source.** Operations execute right to left inside one Yrs transaction. Adjacent nonempty ranges are allowed; insertions touching another edit's boundary and duplicate insertion points are rejected as ambiguous. Validate the whole batch and resulting size before mutation.
+`Document::transact` takes sorted, disjoint source edits. **All offsets refer to the transaction's original source.** Multiple edits become UTF-16 retain/delete/insert deltas applied with one advancing Yrs cursor inside one transaction. This avoids repeated positional searches while retaining unchanged text identities. Single edits keep their direct positional path. Admission staging and the active document use the same mutation helper. Adjacent nonempty ranges are allowed; insertions touching another edit's boundary and duplicate insertion points are rejected as ambiguous. Validate the whole batch and resulting size before mutation. See [large-table batch measurements](table-column-performance.md).
 
 Typing, paste, deletion, formatting, Markdown repair, tables, image removal, find/replace, and programmatic edits use this path. Replace-all submits individual matches rather than replacing the whole source. Rich repair is already included in the originating source edit. Receivers apply committed operations directly and never run the local rich-edit repair path.
 

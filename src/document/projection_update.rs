@@ -102,6 +102,9 @@ impl Projection {
 
     /// Returns false without changing the projection when the edit is unsafe.
     pub fn update_words(&mut self, source: &str, caret: Option<usize>) -> bool {
+        if self.disclosure.1.is_some() {
+            return false;
+        }
         let Some((diff, display)) = self.word_change(source, caret) else {
             return false;
         };

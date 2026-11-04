@@ -1,0 +1,34 @@
+[check-deps] $ cargo shear --locked --deny-warnings
+[check-audit-policy] $ python3 -m unittest discover -s scripts -p 'test_*.py'
+[check-release] $ python3 scripts/release.py metadata
+mise WARN  failed to write cache file: /Users/johnslaughter/Library/Caches/mise/lychee/0.24.2/bin_paths-e5390.msgpack.z Operation not permitted (os error 1)
+mise WARN  failed to write cache file: /Users/johnslaughter/Library/Caches/mise/actionlint/1.7.12/bin_paths-e5390.msgpack.z Operation not permitted (os error 1)
+[check-workflows] $ actionlint -shellcheck=
+[check-links] $ lychee --offline --include-fragments --no-progress '*.md' 'docs/**/*.md' 'branding/**/*.md' 'assets/fonts/*.md' 'vendor/README.md'
+[check-workflows] Finished in 38.0ms
+[check-release] {
+[check-release]   "version": "0.1.0-alpha.1",
+[check-release]   "tag": "v0.1.0-alpha.1",
+[check-release]   "base_version": "0.1.0",
+[check-release]   "build_number": "1",
+[check-release]   "windows_version": "0.1.0.1",
+[check-release]   "linux_version": "0.1.0~alpha.1",
+[check-release]   "prerelease": "true",
+[check-release]   "commit": "4769d8c2d8acfa818834235aa4bae343c3922c9b"
+[check-release] }
+[check-links] 🔍 523 Total (in 18ms) 🔗 404 Unique ✅ 482 OK 🚫 0 Errors 👻 41 Excluded
+[check-links] 
+[check-release] Finished in 81.0ms
+[check-links] Finished in 70.3ms
+[check-audit-policy] ......................
+[check-audit-policy] ----------------------------------------------------------------------
+[check-audit-policy] Ran 22 tests in 0.234s
+[check-audit-policy] 
+[check-audit-policy] OK
+[check-audit-policy] Verified 7 uploaded assets; v0.1.0-alpha.1 remains an unpublished draft.
+[check-audit-policy] Finished in 336.8ms
+[check-deps] shear/summary
+[check-deps] 
+[check-deps]   ✓ no issues found
+[check-deps] Finished in 631.6ms
+Finished in 654.4ms

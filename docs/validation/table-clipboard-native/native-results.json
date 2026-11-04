@@ -1,0 +1,156 @@
+{
+  "date": "2026-11-03",
+  "scope": "Native macOS Google Sheets clipboard behavior validation",
+  "method": "Keyboard copy/cut/paste through native Dosty and Chrome UI using synthetic scratch data. Source assertions inspect saved Markdown artifacts.",
+  "cases": [
+    {
+      "case": "Dosty to default-formatted Google Sheets to Dosty",
+      "status": "passed",
+      "rows": 5,
+      "columns": 4,
+      "values": [
+        [
+          "plain",
+          "say \"hello\"",
+          "\"literal\"",
+          "end"
+        ],
+        [
+          "a\tb",
+          "line1\nline2",
+          "top\n\nbottom",
+          ""
+        ],
+        [
+          "日本語 café",
+          "é 🧑‍💻",
+          "**literal** | &amp; \\",
+          "  spaced  "
+        ],
+        [
+          "00123",
+          "12345678901234567890",
+          "=1+1",
+          "2026-11-03"
+        ],
+        [
+          "",
+          "",
+          "",
+          ""
+        ]
+      ],
+      "artifact": "html-roundtrip.md",
+      "assertion": "All 20 visible values match the golden input, including final blank row."
+    },
+    {
+      "case": "Adjacent quote fragments from native Sheets cells",
+      "status": "passed",
+      "values": [
+        "\"open",
+        "close\""
+      ],
+      "artifact": "ambiguous-fixed.md",
+      "assertion": "Two cells remain distinct despite ambiguous plain-text representation."
+    },
+    {
+      "case": "Displayed currency and percent values",
+      "status": "passed",
+      "values": [
+        "$1,234.50",
+        "12.50%"
+      ],
+      "artifact": "formatted.md"
+    },
+    {
+      "case": "Marker-like cell content",
+      "status": "passed",
+      "artifact": "marker-text.md",
+      "assertion": "Literal data-dosty text does not change producer detection or quoted neighboring values."
+    },
+    {
+      "case": "Blank cell and two-blank-cell ranges",
+      "status": "passed",
+      "assertion": "Native checks confirmed correct destination clearing and one-/two-cell footprints."
+    },
+    {
+      "case": "One-column value followed by blank",
+      "status": "passed",
+      "artifact": "html-trailing-empty.md",
+      "assertion": "Two-row footprint preserved."
+    },
+    {
+      "case": "Fast Copy, Right, Paste with different old clipboard contents",
+      "status": "passed",
+      "artifact": "fast-copy-paste.md",
+      "assertion": "Adjacent cell receives newly copied plain value; one Undo restores golden source."
+    },
+    {
+      "case": "Fast Select All, Copy/Cut",
+      "status": "passed",
+      "artifact": "html-cut.md",
+      "assertion": "All 20 cells copied; Cut clears values while preserving structure and surrounding source."
+    },
+    {
+      "case": "Native Cut Undo",
+      "status": "passed",
+      "assertion": "One Undo restores HtmlRoundtrip.md byte-for-byte to html-roundtrip.md, including unterminated EOF."
+    },
+    {
+      "case": "Paste expansion and Undo/Redo",
+      "status": "passed",
+      "assertion": "Both axes grow from 2x2; pasted range selected; native Undo/Redo restores source and grid selection."
+    },
+    {
+      "case": "Paste into pending cell draft then Escape",
+      "status": "passed",
+      "assertion": "Clipboard text stays in the local draft; cancellation leaves source unchanged."
+    },
+    {
+      "case": "Desktop Excel",
+      "status": "not validated",
+      "reason": "Application unavailable."
+    },
+    {
+      "case": "Excel for the web",
+      "status": "deferred",
+      "reason": "Microsoft sign-in required; user requested finishing Google Sheets first."
+    }
+  ],
+  "automated": {
+    "ordinary_tests_passed": 342,
+    "ordinary_tests_ignored": 29,
+    "focused_filter_passed": 41,
+    "focused_filter_ignored": 2,
+    "format": "passed",
+    "strict_clippy": "passed",
+    "release_build": "passed"
+  },
+  "artifact_sha256": {
+    "ambiguous-before.md": "8c447557ee400c19efb76748a6d53c8a8e2b27b2ed297e298f597258a360ed81",
+    "ambiguous-fixed.md": "251f24d5fdfb3b50afdf598195d4e729e8656283dc2ab10d3b829aa2047081f1",
+    "before-fix.md": "d0a0af9186c720e8a4f765d8364b7250fb2d8119fd61cd105f7194f2f3eed5ed",
+    "captured-sheets.tsv": "fb2bd6f20f456c39c2dded3e9a8994fbc5fa7583f67d8c94f4ffa87ffc8f2982",
+    "cut.md": "4db83c4492a09d8df5609a2817e9a8fd0b073c5db9e819dbc9d8a892fbbf2f0d",
+    "fast-copy-paste.md": "5ca5ce52eb005ac2fecfae7d201773d2883c31875e5575481e23508a6fcf99e0",
+    "final-roundtrip.md": "fef364243e878a14b80e5829865320f77c9d09a82640f3a0ebca4e6256f62350",
+    "formatted-values.tsv": "a94dce92f838dc297cf8e12c1c53329be4bea6cf1193e42096f4692346ecc247",
+    "formatted.md": "8a9add3b14a83cb231d1ba1c75fdb0179d861499fceccff505f3bf459dd1be76",
+    "html-cut.md": "9aaa80147d4ff8a05b9813c7d72adc2bfabe6aaf42a790287d9c30de96270a23",
+    "html-roundtrip.md": "50f7ecedfb3620a1f654ce287a0a5c7cbd08bfa33df35b51a795fafe36718094",
+    "html-trailing-empty.md": "a9cfc7a141ee9195de32c238e35e0ed69b5c6d322f623065d448397543b1bd42",
+    "inbound.md": "d5ecf4377bfcbc2056a6eabb118f49566a029c9fa31d847e9c2650bd9a4dd11d",
+    "marker-text.md": "5268e24cd52f87d75b975554fd7f3467bec9c15c60e08594e9d58356a9f94705",
+    "outbound.md": "264db344db8a21bb2978483442d6632ccec4d7ac1380170e9b98703043b6b576",
+    "replay.md": "78d127597aa33da6b746e7aace3cca45f8208ac8dc6ee2a9fb1bc2fc20fb1a9c",
+    "roundtrip.md": "867ed2d29fb01f727d1997f9a99bdac1bf23eca3a57006b514f69f9794d9f640",
+    "trailing-empty.md": "26a75fd312e0efb75d646a265efd149eb7ba70c9d4bffb3a1e5e94c72cea74f2"
+  },
+  "limits": [
+    "Visible text transfer only; spreadsheet formulas and styles are not imported.",
+    "Native Excel, Windows, Linux, accessibility, OS failure handling, and input latency remain unverified.",
+    "Native screenshots were inspected during the session; the persisted artifacts contain synthetic Markdown/text only.",
+    "A desktop-control app launch stalled for roughly 585 seconds; this is not an application latency measurement."
+  ],
+  "privacy": "Private spreadsheet identifiers, account information, and browser accessibility trees are omitted."
+}

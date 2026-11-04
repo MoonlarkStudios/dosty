@@ -4,6 +4,29 @@ use crate::document::projection::{ProjectedEdit, Projection};
 use crate::document::rich_document::Table;
 use crate::document::selection::Selection;
 
+#[path = "table_controls.rs"]
+mod controls;
+pub use controls::{Command, TableEdit, command, command_at};
+#[path = "table_paste.rs"]
+mod grid_paste;
+pub use grid_paste::paste_rectangle;
+#[path = "table_input.rs"]
+mod input;
+pub use input::{
+    break_tag, clear_rectangle, commit_cell, insert_text, interior_spaces, materialize_cell,
+    read_breaks, replace_across_cells, replace_document_selection,
+};
+
+pub fn remap_selection(
+    selection: Selection,
+    edits: &[crate::document::collaboration::SourceEdit],
+) -> Selection {
+    Selection {
+        anchor: controls::remap(selection.anchor, edits),
+        head: controls::remap(selection.head, edits),
+    }
+}
+
 pub fn cell_at(projection: &Projection, selection: Selection) -> Option<(&Table, usize, usize)> {
     let selected = projection.display_selection(selection).range();
     let index = projection
@@ -125,7 +148,7 @@ pub fn paste(
 
 pub fn row_prefix(source: &str, table: &Table) -> String {
     let start = source[..table.source_range.start]
-        .rfind('\n')
+        .rfind(['\r', '\n'])
         .map_or(0, |n| n + 1);
     source[start..table.source_range.start]
         .chars()

@@ -11,9 +11,37 @@ pub const BODY_FONT: Font = Font {
 };
 
 pub const CODE_LINE_HEIGHT: f32 = 1.5;
+/// Reading space before a table also bounds its optional edge handles.
+pub const TABLE_TOP_SPACING: f32 = 8.0;
 
 pub fn code_size(body_size: f32) -> f32 {
     body_size * 0.82
+}
+
+pub fn table_header(tokens: Tokens) -> Color {
+    tokens.surface.scale_alpha(0.35)
+}
+
+pub fn table_divider(tokens: Tokens, header: bool) -> Color {
+    tokens.border.scale_alpha(if header { 1.0 } else { 0.55 })
+}
+
+pub fn context_menu(tokens: Tokens) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(tokens.elevated.into()),
+        text_color: Some(tokens.text),
+        border: Border {
+            color: tokens.border,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: tokens.shadow,
+            offset: iced::Vector::new(0.0, 5.0),
+            blur_radius: 16.0,
+        },
+        ..container::Style::default()
+    }
 }
 
 pub fn code_surface(tokens: Tokens) -> container::Style {
@@ -139,6 +167,20 @@ pub fn editor(tokens: Tokens) -> impl Fn(&Theme, text_editor::Status) -> text_ed
     move |_, _| text_editor::Style {
         background: Color::TRANSPARENT.into(),
         border: Border::default(),
+        placeholder: tokens.faint,
+        value: tokens.text,
+        selection: tokens.selection,
+    }
+}
+
+pub fn table_editor(tokens: Tokens) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style {
+    move |_, _| text_editor::Style {
+        background: tokens.canvas.into(),
+        border: Border {
+            color: tokens.accent,
+            width: 2.0,
+            ..Border::default()
+        },
         placeholder: tokens.faint,
         value: tokens.text,
         selection: tokens.selection,

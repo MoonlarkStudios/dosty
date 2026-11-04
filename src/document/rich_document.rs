@@ -220,7 +220,12 @@ impl RichDocument {
                 let tail = &source[last.end..table.range.end];
                 result.push((
                     last.end..table.range.end,
-                    if tail.ends_with('\n') { "\n" } else { "" }.into(),
+                    if tail.ends_with(['\r', '\n']) {
+                        "\n"
+                    } else {
+                        ""
+                    }
+                    .into(),
                 ));
             }
         }

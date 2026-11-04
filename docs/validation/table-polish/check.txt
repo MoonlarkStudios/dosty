@@ -1,0 +1,339 @@
+[check] $ cargo fmt --all -- --check
+[check] $ cargo clippy --locked --all-targets -- -D warnings
+    Checking dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.19s
+[check] $ cargo test --locked
+   Compiling dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running unittests src/lib.rs (target/debug/deps/dosty-b6624e0a52621333)
+
+running 314 tests
+test app::application::footnotes::tests::footnote_ui_previews ... ignored, render footnote Live, Read, and detail surfaces without native windows
+test app::application::footnotes::tests::navigation_returns_to_stable_reverse_selection_after_remote_edits ... ok
+test app::application::footnotes::tests::escaped_label_details_edit_the_complete_body_and_preview_removes_note_indentation ... ok
+test app::application::footnotes::tests::command_click_uses_measured_reference_bounds_and_does_not_move_the_caret ... ok
+test app::application::outline::tests::outline_commands_obey_loading_and_modal_guards_and_cancel_cleanly ... ok
+test app::application::footnotes::tests::missing_notes_can_be_defined_and_duplicate_labels_cannot_be_overwritten ... ok
+test app::application::footnotes::tests::invalid_continuation_and_code_context_do_not_publish_broken_notes ... ok
+test app::application::footnotes::tests::opening_a_reference_elsewhere_returns_to_that_reference_after_navigation ... ok
+test app::application::footnotes::tests::existing_notes_allow_harmless_trailing_lines_and_empty_no_op ... ok
+test app::application::footnotes::tests::existing_multiline_definition_is_unchanged_until_explicitly_edited ... ok
+test app::application::outline::tests::outline_ui_previews ... ignored, render the full outline and picker UI for visual inspection
+test app::application::outline::tests::performance_outline_sections ... ignored, release measurements for heading search, collapse, section move, and undo
+test app::application::footnotes::tests::label_collision_and_stale_session_or_reference_fail_without_source_edits ... ok
+test app::application::performance::code_surface_previews ... ignored, render code surfaces for visual inspection without opening user documents
+test app::application::footnotes::tests::stable_dialog_allows_unrelated_remote_edits_and_rejects_body_overlap ... ok
+test app::application::outline::tests::outline_fold_anchors_survive_remote_prefix_and_undo_but_not_deleted_headings ... ok
+test app::application::outline::tests::outline_read_jump_updates_current_section_without_leaving_read_mode ... ok
+test app::application::outline::tests::outline_keyboard_moves_are_separate_from_typing_and_restore_selection ... ok
+test app::application::outline::tests::outline_search_includes_folded_duplicate_headings_and_parent_context ... ok
+test app::application::footnotes::tests::insertion_preserves_prose_reverse_selection_crlf_and_one_undo_group ... ok
+test app::application::outline::tests::outline_moves_are_atomic_in_live_source_and_read_and_keep_fold_identity ... ok
+test app::application::performance::crdt_duplicate_update_keeps_saved_generation_and_projection_oracle ... ok
+test app::application::footnotes::tests::fenced_code_is_retained_in_read_and_cached_definition_preview ... ok
+test app::application::performance::large_document_collaboration ... ignored, offline remote batches through the real application, layout, and rasterizer
+test app::application::performance::large_document_interactions ... ignored, run with mise run profile; large documents and software rasterization
+test app::application::performance::large_document_load_components ... ignored, component diagnostics for large-document load
+test app::application::performance::large_offline_import_shapes ... ignored, large offline batch shapes, including bounded incremental fallback
+test app::application::performance::crdt_replace_all_rebases_reverse_selection_through_earlier_changes ... ok
+test app::application::performance::performance_code_editor ... ignored, run with mise run bench; long code block editing through software rasterization
+test app::application::performance::performance_crdt_churn ... ignored, run with mise run bench; CRDT retention, memory, and persistent growth
+test app::application::performance::performance_document_table_typing ... ignored, profile real Space, text, and Tab events in large document tables
+test app::application::performance::performance_incremental_block_parsing ... ignored, run using mise run bench; source parsing without native/render costs
+test app::application::performance::performance_source_projection_updates ... ignored, run using mise run bench; source/projection phases without native/render costs
+test app::application::performance::crdt_source_widget_composition_uses_the_same_stable_exactly_once_commit ... ok
+test app::application::performance::strikethrough_previews ... ignored, render strikethrough for visual inspection without opening user documents
+test app::application::performance::task_checkbox_previews ... ignored, render Live task controls without opening user documents
+test app::application::performance::crdt_reopening_the_same_identity_clears_old_composition_session ... ok
+test app::application::recovery::tests::late_write_cannot_resurrect_saved_or_discarded_document ... ok
+test app::application::performance::crdt_composition_replacement_preserves_remote_content_when_target_is_deleted ... ok
+test app::application::performance::crdt_proposal_uses_real_app_transaction_projection_and_independent_agent_undo ... ok
+test app::application::outline::tests::outline_real_drag_moves_a_folded_subtree_and_outside_release_cancels ... ok
+test app::application::recovery::tests::restored_draft_keeps_its_disk_conflict_guard_and_fresh_replica_identity ... ok
+test app::application::table::tests::active_cell_spaces_keep_incremental_updates_and_survive_unrelated_imports ... ok
+test app::application::performance::task_toggle_preserves_viewport_when_a_reverse_selection_head_is_offscreen ... ok
+test app::application::table::tests::backspace_removes_a_typed_cell_space_without_deleting_text_or_moving_cells ... ok
+test app::application::table::tests::context_menu_clear_targets_only_its_row_column_or_existing_rectangle_with_one_undo ... ok
+test app::application::table::tests::context_menu_preview_and_cancel_preserve_directed_selection_source_and_history ... ok
+test app::application::table::tests::cell_enter_and_shift_enter_keep_styled_text_in_the_same_cell_and_undo_once ... ok
+test app::application::table::tests::contextual_commands_are_repeatable_and_right_click_cancel_preserves_source_and_selection ... ok
+test app::application::table::tests::active_cell_displays_typed_spaces_without_revealing_existing_padding ... ok
+test app::application::table::tests::entering_short_row_cells_materializes_only_that_row_and_ignores_stale_pointer_targets ... ok
+test app::application::table::tests::context_menu_fits_window_edges_and_outside_click_cancels_without_history ... ok
+test app::application::performance::crdt_incoming_changes_preserve_composition_selection_and_derived_editor_state ... ok
+test app::application::table::tests::context_menu_commands_and_alignment_check_targets_and_restore_one_step_history ... ok
+test app::application::table::tests::losing_window_focus_dismisses_only_the_context_menu_without_changing_selection ... ok
+test app::application::table::tests::modified_tab_chords_do_not_indent_table_text_or_move_to_another_cell ... ok
+test app::application::table::tests::performance_table_controls ... ignored, release-only table command measurements; excludes rendering and native presentation
+test app::application::performance::canceled_preedit_recaptures_the_next_composition_target_in_both_editors ... ok
+test app::application::table::tests::row_selection_clear_and_leave_table_are_explicit_undoable_actions ... ok
+test app::application::table::tests::replacing_a_cell_value_keeps_original_right_padding_concealed ... ok
+test app::application::table::tests::table_commands_keep_typing_separate_and_cancel_restores_focus_without_history ... ok
+test app::application::table::tests::document_selections_cross_table_boundaries_without_absorbing_or_destroying_blocks ... ok
+test app::application::table::tests::spaces_stay_in_the_current_cell_until_tab_moves_to_the_next_cell ... ok
+test app::application::table::tests::table_dialog_rejects_changed_targets_and_tracks_unrelated_replica_edits ... ok
+test app::application::table::tests::table_keyboard_dialog_and_guards_keep_ordinary_editing_available ... ok
+test app::application::table::tests::word_table_tab_replaces_contents_and_boundary_deletion_does_not_navigate ... ok
+test app::application::table::tests::typing_over_multiple_cells_is_one_undo_group_and_preserves_separator_bytes ... ok
+test app::application::table_grid::tests::cell_commit_is_one_undo_step_keeps_formatting_and_serializes_literal_unicode ... ok
+test app::application::performance::crdt_drag_and_viewport_anchors_survive_remote_edits_before_the_viewport ... ok
+test app::application::performance::spreadsheet_table_draft_keeps_line_breaks_and_ime_pending_until_commit ... ok
+test app::application::table_grid::tests::clicking_prose_commits_and_returns_the_table_to_reading_presentation ... ok
+test app::application::table::tests::header_moves_and_removing_the_final_row_or_column_are_single_undo_groups ... ok
+test app::application::table_grid::tests::drafts_follow_unrelated_source_changes_and_reject_changed_cells_and_stale_clicks ... ok
+test app::application::table_grid::tests::grid_navigation_clamps_and_final_tab_adds_a_row_with_one_structural_undo ... ok
+test app::application::table_grid::tests::column_chevron_commits_a_header_draft_once_and_shift_click_still_extends_selection ... ok
+test app::application::table_grid::tests::grid_selection_preserves_source_and_direction_and_clear_only_touches_the_rectangle ... ok
+test app::application::table_grid::tests::native_draft_paste_normalizes_crlf_without_creating_physical_table_rows ... ok
+test app::application::table_grid::tests::pending_cell_edit_cancel_and_local_undo_never_modify_markdown ... ok
+test app::application::table_grid::tests::implicit_cells_are_selected_without_source_edits_and_materialized_only_on_commit ... ok
+test app::application::table_grid::tests::keyboard_region_edges_row_column_shortcuts_and_double_click_keep_text_editing_distinct ... ok
+test app::application::table_grid::tests::quiet_tables_remember_implicit_cell_targets_for_keyboard_and_ime_reentry ... ok
+test app::application::table::tests::every_table_command_has_one_undo_step_and_restores_reverse_source_selection ... ok
+test app::application::table_grid::tests::right_clicking_another_cell_commits_the_draft_and_opens_controls_on_the_first_click ... ok
+test app::application::table_grid::tests::real_widget_drag_shift_click_gutters_and_keyboard_selection_keep_the_grid ... ok
+test app::application::table_grid::tests::tab_remembers_entry_column_and_selected_rectangles_keep_their_bounds ... ok
+test app::application::table_grid::tests::real_widget_click_type_enter_arrows_newline_escape_and_ime_use_the_cell_editor ... ok
+test app::application::table_grid::tests::selecting_a_large_column_keeps_the_active_cell_and_viewport_and_drafts_survive_table_removal ... ok
+test app::application::table::tests::keyboard_menu_choices_are_visible_and_changing_groups_resets_scrolling ... ok
+test app::application::task_tests::keyboard_task_command_targets_only_its_physical_line_and_preserves_caret ... ok
+test app::application::task_tests::read_task_controls_use_the_same_source_preserving_transaction ... ok
+test app::application::table_grid::tests::right_clicking_table_handles_and_the_pending_cell_opens_the_targeted_context_menu ... ok
+test app::application::outline::tests::outline_real_keyboard_picker_navigation_escape_and_source_shortcuts ... ok
+test app::application::task_tests::task_toggle_rejects_stale_non_task_loading_and_modal_commands ... ok
+test app::application::task_tests::task_toggle_has_separate_history_from_typing_and_other_toggles ... ok
+test app::application::table_grid::tests::table_handles_outside_the_viewport_do_not_select_hidden_rows ... ok
+test app::application::tests::collapsing_select_all_does_not_leave_an_invisible_selection ... ok
+test app::application::tests::disclosure_follows_selection_head_and_reuses_projection_within_a_context ... ok
+test app::application::task_tests::task_toggle_preserves_reverse_source_selection_and_one_step_history ... ok
+test app::application::tests::code_edits_preserve_source_selection_and_atomic_history_in_both_modes ... ok
+test app::application::table_grid::tests::table_activation_and_escape_keep_content_geometry_source_and_viewport ... ok
+test app::application::tests::editing_a_visible_delimiter_and_undoing_restores_caret_and_source ... ok
+test app::application::tests::focus_disclosure_preserves_a_caret_inside_syntax_without_editing_history ... ok
+test app::application::tests::enter_continues_tasks_and_exits_an_empty_item ... ok
+test app::application::tests::geometric_caret_move_clears_native_selection_before_inserting_a_marker ... ok
+test app::application::tests::empty_code_accepts_typing_paste_and_ime_without_consuming_its_fence ... ok
+test app::application::tests::distant_disclosure_splices_preserve_native_text_reverse_selection_and_history ... ok
+test app::application::tests::formatting_across_table_cells_and_image_preserves_structure ... ok
+test app::application::tests::completed_markup_conceals_immediately_and_discloses_only_the_edited_span ... ok
+test app::application::tests::all_heading_levels_reveal_and_support_literal_level_changes ... ok
+test app::application::tests::performance_continuous_edit_projection ... ignored, run with mise run bench
+test app::application::tests::deferred_document_keeps_cross_block_selection_composition_and_history ... ok
+test app::application::tests::image_arrow_selection_delete_and_undo_are_atomic ... ok
+test app::application::tests::native_arrow_motion_can_reach_revealed_syntax ... ok
+test app::application::tests::incremental_unicode_edit_preserves_disclosure_cursor_and_reverse_history ... ok
+test app::application::tests::selection_and_replacement_cross_multiple_blocks_in_one_buffer ... ok
+test app::application::tests::source_editing_and_file_safety_still_preserve_later_edits ... ok
+test app::application::tests::source_only_search_matches_reveal_source_mode ... ok
+test app::application::tests::strikethrough_shortcut_keeps_ordinary_cut_available ... ok
+test app::application::tests::select_all_replacement_keeps_matching_prefix_and_clears_old_markup ... ok
+test app::application::tests::initial_caret_edits_heading_and_formatted_content_without_touching_prefixes ... ok
+test app::application::tests::source_toggle_preserves_reverse_unicode_selection ... ok
+test app::application::tests::native_snapshot_preserves_crlf_reverse_replacement_and_history_across_modes ... ok
+test app::application::theme_tests::document_table_previews ... ignored, render document table editing and its contextual footer in every theme
+test app::application::theme_tests::table_context_previews ... ignored, render contextual table menus in all themes and at viewport edges
+test app::application::theme_tests::table_controls_previews ... ignored, render table controls in every preset and narrow windows without opening native documents
+test app::application::theme_tests::table_grid_previews ... ignored, render spreadsheet cell/range selection and native draft editing in all themes
+test app::application::theme_tests::table_hover_previews ... ignored, render hover-only table controls without opening native windows
+test app::application::theme_tests::theme_ui_previews ... ignored, render Dosty themes, narrow windows, overlays, and focus mode for visual inspection
+test app::application::table::tests::table_controls_receive_real_live_and_source_widget_keyboard_events ... ok
+test app::application::tests::visible_heading_prefix_can_be_selected_deleted_and_undone ... ok
+test app::application::tests::setext_heading_reveals_its_editable_underline_with_the_title ... ok
+test app::application::tests::unicode_commit_paste_is_one_lossless_edit ... ok
+test app::application::tests::strikethrough_formatting_preserves_reverse_selection_and_atomic_history ... ok
+test app::application::theme_tests::switching_appearance_preserves_the_document_and_reverse_selection ... ok
+test app::application::writing::tests::document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_intact ... ok
+test app::application::writing::tests::canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_history ... ok
+test app::application::writing::tests::delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_content ... ok
+test app::application::writing::tests::image_completion_keeps_focus_and_transient_form_edits_in_the_open_dialog ... ok
+test app::application::writing::tests::late_paste_precedes_later_typing_at_its_gap_and_keeps_the_current_caret ... ok
+test app::application::writing::tests::overlapping_remote_edit_leaves_details_open_and_does_not_overwrite_new_text ... ok
+test app::application::writing::tests::local_link_navigation_closes_details_and_respects_the_unsaved_guard ... ok
+test document::code_edit::tests::block_indent_preserves_reverse_utf8_selection_and_excludes_end_line ... ok
+test document::code_edit::tests::enter_indents_pairs_and_preserves_crlf ... ok
+test app::application::writing::tests::selected_url_paste_and_ime_commit_have_separate_undo_steps ... ok
+test app::application::writing::tests::image_properties_and_quote_credits_preserve_crlf_neighbors_and_exact_undo ... ok
+test app::application::tests::table_navigation_editing_and_rows_keep_source_and_history ... ok
+test document::collaboration::tests::resolved_deleted_positions_do_not_poison_new_position_capture ... ok
+test document::footnotes::tests::collapsed_reference_edits_use_complete_source_and_keep_selection_direction ... ok
+test document::collaboration_wire::tests::malformed_counts_identifiers_and_random_input_are_controlled_errors ... ok
+test document::collaboration::tests::text_and_history_admission_fail_without_partial_mutation ... ok
+test document::footnotes::tests::current_syntax_keeps_adjacent_definitions_and_nested_continuations ... ok
+test document::footnotes::tests::escaped_labels_use_the_actual_unescaped_definition_header ... ok
+test document::footnotes::tests::new_definition_serialization_keeps_nested_markdown_and_line_endings ... ok
+test document::footnotes::tests::performance_footnotes_parse_and_read ... ignored, measure release footnote parsing and cold/warm Read caching serially
+test document::footnotes::tests::numbers_follow_first_reference_order_with_unicode_case_folding ... ok
+test document::footnotes::tests::read_continuations_preserve_outer_quotes_and_lists ... ok
+test document::footnotes::tests::read_cache_refreshes_global_numbers_and_source_offset_links ... ok
+test document::footnotes::tests::unresolved_only_metadata_refreshes_and_escaped_or_code_lookalikes_stay_literal ... ok
+test document::outline::tests::outline_hierarchy_excludes_container_and_fenced_headings ... ok
+test document::outline::tests::moves_across_parents_keep_child_levels_and_unrelated_selection ... ok
+test document::outline::tests::rejects_unsafe_or_noop_drops_without_touching_source ... ok
+test document::outline::tests::setext_indentation_crlf_and_missing_final_newline_survive_moves ... ok
+test document::outline::tests::section_moves_preserve_every_byte_and_reverse_selection_with_one_undo ... ok
+test document::projection::block_update::tests::consecutive_deletions_and_topology_changes_keep_reusable_metadata_exact ... ok
+test document::projection::block_update::tests::equal_length_word_replacements_share_unchanged_offsets ... ok
+test document::projection::block_update::tests::local_updates_retain_owned_payloads_and_immutable_layout_snapshots ... ok
+test document::projection::block_update::tests::rejected_batch_preflight_keeps_the_predecessor_intact ... ok
+test document::collaboration::tests::batch_delta_matches_positional_edits_and_sticky_affinities_in_fragmented_unicode ... ok
+test document::projection::block_update::tests::stale_windows_and_distant_disclosure_take_the_general_path ... ok
+test document::projection::disclosure_update::tests::line_disclosure_matches_full_styles_and_structure_at_every_caret ... ok
+test app::application::writing::tests::dropped_image_import_keeps_later_reverse_selection_remote_edits_and_undo ... ok
+test document::projection::incremental::tests::chunked_differences_are_utf8_safe_and_round_trip ... ok
+test document::projection::incremental::tests::structural_and_reference_edits_require_full_parsing ... ok
+test document::projection::tests::active_heading_and_inline_span_retain_semantic_styles ... ok
+test document::projection::tests::active_table_rows_and_images_retain_their_rich_structure ... ok
+test document::projection::tests::block_boundaries_are_normal_editable_newlines ... ok
+test document::projection::tests::completed_markup_disappears_and_incomplete_markup_remains ... ok
+test document::projection::tests::completed_span_conceals_at_its_end_and_autolinks_disclose ... ok
+test document::projection::tests::crlf_fences_and_literal_escapes_keep_lossless_source_mapping ... ok
+test document::projection::tests::cross_span_deletion_repairs_surviving_formatting ... ok
+test document::projection::tests::deleting_last_styled_character_removes_empty_delimiters ... ok
+test document::projection::tests::full_document_selection_replaces_hidden_headings_and_delimiters ... ok
+test document::projection::tests::images_are_atomic_and_deletion_and_replacement_preserve_neighbors ... ok
+test document::projection::tests::inline_formatting_preserves_blocks_and_toggles_exact_marks ... ok
+test document::projection::tests::literal_backslashes_and_fenced_code_are_not_accidentally_concealed ... ok
+test document::projection::tests::nested_styles_links_and_unicode_map_without_phantom_cursor_positions ... ok
+test document::projection::tests::only_the_innermost_span_under_the_caret_is_disclosed ... ok
+test document::projection::tests::parser_upgrade_keeps_wikilinks_and_superscripts_literal ... ok
+test document::projection::tests::replacements_over_every_visible_range_preserve_the_unselected_text ... ok
+test document::projection::tests::rich_table_hides_structure_and_maps_every_cell_to_its_source ... ok
+test document::projection::tests::strikethrough_preserves_its_parsed_delimiters_and_nested_styles ... ok
+test document::projection::tests::table_padding_stays_on_its_own_side_of_pipes_and_row_breaks ... ok
+test document::projection::tests::tables_accept_empty_ragged_escaped_and_nested_cells ... ok
+test document::projection::tests::task_marker_queries_use_parser_metadata_after_disclosure_and_word_rebasing ... ok
+test document::projection::tests::typing_after_a_completed_span_stays_outside_but_typing_inside_inherits_style ... ok
+test document::rich_document::tests::code_metadata_preserves_normalized_content_and_literal_shorter_fences ... ok
+test document::source::collaboration_tests::disclosure_is_local_over_identical_replicated_source ... ok
+test document::source::collaboration_tests::equal_length_disjoint_batches_invalidate_changed_renderings ... ok
+test app::application::writing::tests::save_as_keeps_images_referenced_only_by_undo_history ... ok
+test document::source::collaboration_tests::human_redo_preserves_remote_edits_received_after_undo ... ok
+test document::source::collaboration_tests::invalid_oversized_and_foreign_updates_leave_authority_untouched ... ok
+test document::source::collaboration_tests::known_insertions_do_not_hide_delete_only_updates_or_invalid_envelopes ... ok
+test document::source::collaboration_tests::mixed_batches_retain_one_full_parse_fallback_and_exact_markdown ... ok
+test document::source::collaboration_tests::origin_scoped_undo_redo_survives_intervening_remote_and_agent_edits ... ok
+test document::source::collaboration_tests::original_state_batch_offsets_are_validated_before_any_mutation ... ok
+test document::source::collaboration_tests::fragmented_unicode_items_keep_byte_anchors_history_and_reopen_compatibility ... ok
+test document::source::collaboration_tests::pending_delete_only_updates_survive_reopen_before_their_insert_arrives ... ok
+test app::application::performance::crdt_sparse_import_keeps_reverse_selection_preedit_and_viewport ... ok
+test document::source::collaboration_tests::reopening_and_cloning_never_reuses_the_saved_writer_identity ... ok
+test document::source::collaboration_tests::stable_selections_keep_direction_affinity_unicode_and_deleted_target_gaps ... ok
+test document::source::collaboration_tests::three_replicas_converge_after_concurrent_replacements_and_reordered_duplicate_delivery ... ok
+test document::source::collaboration_tests::versioned_proposals_allow_unrelated_edits_and_reject_overlap_and_stale_gaps ... ok
+test document::projection::incremental::tests::accepted_word_edits_match_full_parse_and_every_source_mapping ... ok
+test document::source::tests::localized_edits_adjust_offsets_and_undo_exactly ... ok
+test document::source::tests::nested_structures_form_single_editable_blocks ... ok
+test document::source::tests::performance_large_document_source_edits ... ignored, run using mise run bench
+test document::source::tests::reading_cache_is_lazy_retains_unchanged_blocks_and_invalidates_code_edits ... ok
+test document::source::tests::repeated_splits_joins_and_history_keep_full_parse_equivalence ... ok
+test document::source::tests::replacement_and_redo_branching_are_unicode_safe ... ok
+test document::source::tests::round_trips_crlf_unicode_fences_and_references_losslessly ... ok
+test document::source::tests::word_count_does_not_count_inline_delimiters_or_punctuation_as_words ... ok
+test document::table_edit::controls::tests::column_commands_handle_unicode_padding_and_literal_backslashes_at_row_end ... ok
+test app::application::table_grid::tests::hover_chevrons_open_scoped_menus_without_moving_cells_or_changing_selection ... ok
+test document::table_edit::controls::tests::exact_column_edits_retain_whitespace_escaped_pipes_and_extra_source_cells ... ok
+test document::projection::block_update::tests::sparse_batches_match_full_projection_at_every_disclosure_position ... ok
+test document::table_edit::controls::tests::short_rows_and_header_only_tables_remain_editable ... ok
+test document::table_edit::input::tests::only_bare_inline_table_breaks_are_projected_and_prepared_for_read ... ok
+test document::table_edit::input::tests::partial_formatted_boundary_cells_keep_visible_unselected_text ... ok
+test app::application::writing::tests::focusing_details_reconciles_editor_focus_and_settles_the_native_redraw_loop ... ok
+test document::table_edit::tests::pipes_and_empty_pasted_cells_do_not_change_column_count ... ok
+test document::table_edit::tests::rectangular_paste_preserves_unedited_markdown_and_adds_rows ... ok
+test document::writing::tests::changing_a_destination_retains_formatted_labels_and_markdown_titles ... ok
+test document::writing::tests::dialog_targets_rebase_unrelated_changes_and_reject_overlap_and_reopen ... ok
+test document::writing::tests::portable_figures_and_links_round_trip_unicode_and_delimiters ... ok
+test document::table_edit::controls::tests::nested_lists_missing_edge_pipes_and_final_line_endings_keep_their_structure ... ok
+test editor::code_highlight::tests::multiline_syntax_is_utf8_safe_and_contrasts_with_each_surface ... ok
+test document::table_edit::input::tests::replacing_forward_and_reverse_cell_selections_preserves_the_grid_and_outside_source ... ok
+test app::application::writing::tests::representative_document_edits_undo_merge_save_reopen_and_export ... ok
+test document::footnotes::tests::disclosure_and_incremental_word_updates_match_fresh_maps_at_every_boundary ... ok
+test document::source::collaboration_tests::randomized_three_replica_delivery_matches_fresh_source_and_parser_oracles ... ok
+test editor::native_buffer::tests::performance_native_snapshots ... ignored, run using mise run bench; native action and snapshot costs only
+test document::table_edit::controls::tests::commands_preserve_cells_containers_line_endings_and_surrounding_source ... ok
+test document::source::collaboration_tests::replace_all_keeps_thousands_of_disjoint_matches_in_one_undo_group ... ok
+test editor::code_highlight::tests::cached_grammar_matches_fresh_runs_after_edits_across_snapshots ... ok
+test document::projection::block_update::tests::block_updates_match_full_projection_styles_and_every_mapping ... ok
+test editor::native_buffer::tests::deferred_loading_matches_native_text_cursor_and_line_endings ... ok
+test editor::rich_editor::tests::copying_a_rich_document_retains_heading_table_and_image_markdown ... ok
+test editor::rich_editor::tests::code_copy_button_uses_normalized_content_without_moving_selection ... ok
+test editor::rich_editor::tests::ime_preedit_is_transient_and_commit_produces_one_edit ... ok
+test editor::rich_editor::tests::strikethrough_remains_visible_over_opaque_forward_and_reverse_selections ... ok
+test editor::rich_editor::tests::drag_anchor_survives_contextual_disclosure_between_widget_updates ... ok
+test app::application::performance::live_table_space_and_tab_use_real_keyboard_events_without_crossing_on_spaces ... ok
+test editor::native_buffer::tests::deferred_buffer_preserves_native_unicode_movement_and_editing ... ok
+test editor::rich_editor::tests::table_handles_only_hit_the_active_table_without_reserving_content_space ... ok
+test editor::rich_editor::tests::virtualized_task_checkbox_is_clickable_after_a_distant_source_jump ... ok
+test editor::rich_editor::tests::widget_drag_selection_crosses_heading_table_image_and_paragraph_in_both_directions ... ok
+test editor::rich_layout::tests::clipped_selection_and_drawing_match_full_geometry_in_wrapping_tables ... ok
+test editor::rich_editor::tests::wrap_affinity_survives_eviction_before_keyboard_navigation ... ok
+test editor::rich_layout::tests::code_rows_keep_blank_line_height_wrapping_and_source_hits ... ok
+test editor::rich_layout::tests::column_alignment_uses_the_same_origin_for_caret_and_pointer ... ok
+test editor::rich_layout::tests::empty_code_has_a_full_height_content_row_inside_its_surface ... ok
+test editor::rich_layout::tests::disclosure_reflows_locally_and_keeps_source_hit_testing ... ok
+test editor::rich_layout::tests::headings_have_distinct_measured_sizes_and_pointer_hits ... ok
+test editor::rich_layout::tests::image_is_one_hit_tested_stop_between_text_blocks ... ok
+test editor::rich_layout::tests::hidden_delimiters_and_long_destinations_occupy_no_layout_space ... ok
+test editor::rich_layout::tests::multiline_table_cells_keep_unicode_carets_and_empty_cell_pointer_targets ... ok
+test editor::rich_layout::tests::performance_rich_layout_cache ... ignored, run with mise run bench
+test editor::native_buffer::collaboration_tests::sparse_batch_sync_round_trips_unicode_and_mixed_endings_without_large_envelopes ... ok
+test editor::rich_layout::tests::revealed_heading_keeps_its_size_and_makes_every_marker_reachable ... ok
+test editor::rich_layout::tests::pointer_and_vertical_navigation_retain_source_positions_on_disclosed_setext ... ok
+test editor::rich_layout::tests::strikethrough_leaves_revealed_syntax_unstruck_and_keeps_semantic_colors ... ok
+test editor::rich_layout::tests::table_cells_wrap_independently_and_vertical_motion_keeps_the_column ... ok
+test editor::rich_layout::tests::strikethrough_follows_wrapped_nested_and_bidirectional_glyphs_without_reflow ... ok
+test editor::rich_layout::tests::visual_line_end_and_pointer_keep_the_correct_side_of_a_wrap ... ok
+test editor::rich_editor::tests::disclosure_reflow_anchors_caret_viewport_and_wrap_affinity ... ok
+test editor::rich_layout::tests::typed_cell_edge_spaces_advance_the_measured_caret_and_remain_selectable ... ok
+test editor::virtual_layout::tests::cell_space_disclosure_matches_fresh_geometry_in_a_virtual_window ... ok
+test editor::virtual_layout::tests::height_sums_and_inverse_queries_follow_updates ... ok
+test editor::native_buffer::tests::local_snapshots_copy_bounded_lines_and_navigation_copies_nothing ... ok
+test editor::virtual_layout::tests::large_table_rows_and_fifty_thousand_blocks_keep_geometry_bounded ... ok
+test io::assets::tests::immutable_assets_survive_reimport_and_save_as_with_spaces ... ok
+test io::assets::tests::refuses_symlink_assets_and_parent_traversal ... ok
+test io::collaboration_store::missing_checkpoint_tests::a_missing_checkpoint_does_not_silently_reset_a_known_local_history ... ok
+test io::collaboration_store::tests::checkpoint_checksum_size_and_symlink_guards_preserve_files ... ok
+test io::collaboration_store::tests::daytrip_checkpoints_and_locks_remain_compatible_with_dosty ... ok
+test io::collaboration_store::tests::external_markdown_stale_metadata_and_foreign_identity_are_explicit_conflicts ... ok
+test io::collaboration_store::tests::interruptions_at_each_publication_boundary_recover_one_consistent_generation ... ok
+test io::collaboration_store::tests::pending_updates_and_causal_only_saves_survive_reopen ... ok
+test io::collaboration_store::writer_tests::independent_writers_detect_checkpoint_conflicts_under_the_same_file_lock ... ok
+test io::export::tests::exported_document_keeps_local_images_credits_and_safe_links_without_script_execution ... ok
+test io::export::tests::parser_upgrade_keeps_wikilinks_and_superscripts_literal_in_export ... ok
+test io::image_store::tests::http_images_and_response_limits_are_checked ... ok
+test io::image_store::tests::local_images_decode_relative_percent_encoded_and_file_urls ... ok
+test io::recovery::tests::atomic_recovery_retains_baseline_and_reopens_with_a_fresh_writer ... ok
+test io::storage::tests::atomic_save_replaces_exact_bytes ... ok
+test io::storage::tests::detects_external_changes_before_overwriting ... ok
+test io::storage::tests::html_export_escapes_raw_scripts ... ok
+test io::storage::tests::html_export_keeps_safe_cell_breaks_and_spaces_without_enabling_html ... ok
+test theme::definition::tests::built_in_text_controls_and_selections_keep_readable_contrast ... ok
+test theme::definition::tests::legacy_custom_themes_resolve_optional_brand_and_light_primary_colors ... ok
+test theme::definition::tests::presets_resolve_to_the_same_semantic_palette ... ok
+test theme::definition::tests::rejects_invalid_colors_unknown_fields_and_unsafe_metrics ... ok
+test theme::styles::tests::interactive_states_remain_legible_on_their_surfaces ... ok
+test editor::rich_editor::tests::virtualized_navigation_disclosure_resize_and_drag_keep_source_anchors ... ok
+test app::application::table::tests::large_column_batches_preserve_selections_remote_cells_and_one_step_history ... ok
+test editor::rich_editor::tests::task_checkbox_hit_and_release_use_measured_geometry_without_changing_selection ... ok
+test editor::native_buffer::tests::synchronization_splices_preserve_exact_bytes_inside_paired_endings ... ok
+test editor::virtual_layout::tests::resident_geometry_and_selection_match_full_layout_after_distant_evictions ... ok
+test editor::rich_layout::tests::incremental_geometry_matches_fresh_layout_through_repeated_reflow ... ok
+test editor::virtual_layout::tests::index_patches_match_fresh_units_and_geometry_through_edits_and_disclosure ... ok
+test editor::native_buffer::tests::snapshots_match_native_edits_at_unicode_boundaries_and_selections ... ok
+test editor::native_buffer::tests::snapshots_follow_native_lines_through_repeated_joins_and_motions ... ok
+test editor::virtual_layout::tests::numbered_footnotes_keep_source_geometry_through_virtual_evictions_and_disclosure ... ok
+test document::source::tests::local_and_fallback_edits_match_full_commonmark_boundaries ... ok
+
+test result: ok. 287 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 13.22s
+
+     Running unittests src/main.rs (target/debug/deps/dosty-da2bef467f59cd8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dosty
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

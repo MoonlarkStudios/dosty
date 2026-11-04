@@ -12,7 +12,7 @@ use pulldown_cmark::{Event, Parser, Tag};
 
 use crate::document::block_parser::{self, BlockChange, MARKDOWN_OPTIONS};
 use crate::document::footnotes::Footnotes;
-use crate::document::selection::Selection;
+use crate::document::selection::{Selection, TableSelection};
 
 #[derive(Debug)]
 pub struct Block {
@@ -74,9 +74,12 @@ impl Document {
     /// Read view has its own syntax highlighter. Build it only on demand and
     /// invalidate it together with the parsed block containing the source edit.
     pub fn rendered(&self, index: usize) -> &[markdown::Item] {
-        self.blocks[index]
-            .rendered
-            .get_or_init(|| markdown::parse(self.block_source(index)).collect())
+        self.blocks[index].rendered.get_or_init(|| {
+            markdown::parse(&crate::document::table_edit::read_breaks(
+                self.block_source(index),
+            ))
+            .collect()
+        })
     }
 
     pub fn rendered_with_footnotes(
@@ -89,7 +92,7 @@ impl Document {
         }
         self.blocks[index].rendered.get_or_init(|| {
             let source = footnotes.read_block(&self.source, self.blocks[index].range.clone());
-            markdown::parse(&source).collect()
+            markdown::parse(&crate::document::table_edit::read_breaks(&source)).collect()
         })
     }
 
@@ -124,6 +127,33 @@ impl Document {
         let changes =
             self.collaboration
                 .commit(&self.source, edits, origin, selection, separate)?;
+        #[cfg(test)]
+        {
+            self.costs.crdt += start.elapsed();
+        }
+        self.consume(changes);
+        Ok(())
+    }
+    /// A table operation restores its directed grid independently of the source
+    /// caret. Table metadata always receives a separate history group.
+    pub(crate) fn transact_table(
+        &mut self,
+        edits: &[SourceEdit],
+        origin: EditOrigin,
+        selection: Option<(Selection, Selection)>,
+        table_selection: (TableSelection, TableSelection),
+        separate: bool,
+    ) -> Result<(), CollaborationError> {
+        #[cfg(test)]
+        let start = std::time::Instant::now();
+        let changes = self.collaboration.commit_table(
+            &self.source,
+            edits,
+            origin,
+            selection,
+            table_selection,
+            separate,
+        )?;
         #[cfg(test)]
         {
             self.costs.crdt += start.elapsed();
@@ -276,6 +306,11 @@ impl Document {
                 .unwrap_or_else(|| Selection::caret(fallback))
                 .clamp(&self.source),
         ))
+    }
+    /// Consume the grid stored by the last successful history operation, if any.
+    /// Ordinary history and failed/empty attempts never reuse an earlier grid.
+    pub(crate) fn take_history_table_selection(&mut self) -> Option<TableSelection> {
+        self.collaboration.take_history_table_selection()
     }
     #[cfg(test)]
     pub fn undo(&mut self) -> Option<Selection> {
@@ -599,6 +634,190 @@ fn parse_block(source: &str, range: Range<usize>, independent: bool) -> Block {
 #[cfg(test)]
 mod tests {
     use super::Document;
+    use crate::document::collaboration::{CollaborationError, EditOrigin, SourceEdit};
+    use crate::document::selection::{Selection, TableSelection};
+
+    #[test]
+    fn table_history_keeps_directed_implicit_cells_and_rebases_the_table() {
+        let source = "| A | B | C |\n|---|---|---|\n| old |\n| stay | x | y |\n";
+        let mut document = Document::new(source.into());
+        let start = source.find("old").unwrap();
+        let before = Selection {
+            anchor: start + 3,
+            head: start,
+        };
+        let after = Selection::caret(start + "updated".len());
+        let grid_before = TableSelection {
+            source: 0,
+            anchor: (1, 2),
+            head: (1, 1),
+            active: (1, 2),
+        };
+        let grid_after = TableSelection {
+            source: 0,
+            anchor: (1, 1),
+            head: (2, 2),
+            active: (2, 1),
+        };
+        document
+            .transact_table(
+                &[SourceEdit {
+                    range: start..start + 3,
+                    text: "updated".into(),
+                }],
+                EditOrigin::Human,
+                Some((before, after)),
+                (grid_before, grid_after),
+                true,
+            )
+            .unwrap();
+        // Another origin's prefix survives human history and shifts the table.
+        let prefix = "Intro 🦀\n\n";
+        document
+            .transact(
+                &[SourceEdit {
+                    range: 0..0,
+                    text: prefix.into(),
+                }],
+                EditOrigin::Agent,
+                None,
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            document.undo(),
+            Some(Selection {
+                anchor: before.anchor + prefix.len(),
+                head: before.head + prefix.len(),
+            })
+        );
+        assert_eq!(document.source(), format!("{prefix}{source}"));
+        assert_eq!(
+            document.take_history_table_selection(),
+            Some(TableSelection {
+                source: prefix.len(),
+                ..grid_before
+            })
+        );
+        assert_eq!(document.take_history_table_selection(), None);
+        assert_eq!(
+            document.redo(),
+            Some(Selection::caret(after.head + prefix.len()))
+        );
+        assert_eq!(
+            document.take_history_table_selection(),
+            Some(TableSelection {
+                source: prefix.len(),
+                ..grid_after
+            })
+        );
+    }
+
+    #[test]
+    fn table_history_metadata_does_not_leak_across_plain_failed_or_empty_operations() {
+        let mut document = Document::new("old".into());
+        let grid = TableSelection {
+            source: 0,
+            anchor: (0, 0),
+            head: (0, 0),
+            active: (0, 0),
+        };
+        document
+            .transact_table(
+                &[SourceEdit {
+                    range: 0..3,
+                    text: "new".into(),
+                }],
+                EditOrigin::Human,
+                None,
+                (grid, grid),
+                false,
+            )
+            .unwrap();
+        document.replace(3..3, "!").unwrap();
+        document.undo();
+        assert_eq!(document.source(), "new");
+        assert_eq!(document.take_history_table_selection(), None);
+        document.undo();
+        assert_eq!(document.source(), "old");
+        assert_eq!(document.take_history_table_selection(), Some(grid));
+        assert_eq!(document.undo(), None);
+        assert_eq!(document.take_history_table_selection(), None);
+        document.redo();
+        assert!(matches!(
+            document.transact_table(
+                &[SourceEdit {
+                    range: 9..9,
+                    text: String::new()
+                }],
+                EditOrigin::Human,
+                None,
+                (grid, grid),
+                true,
+            ),
+            Err(CollaborationError::InvalidRange)
+        ));
+        assert_eq!(document.take_history_table_selection(), None);
+        document.undo();
+        document
+            .transact_table(&[], EditOrigin::Human, None, (grid, grid), true)
+            .unwrap();
+        assert_eq!(document.take_history_table_selection(), None);
+    }
+
+    #[test]
+    fn table_history_rebases_when_the_first_header_value_was_replaced() {
+        let source = "Before\n\nHeader | B\n---|---\nold|two\n";
+        let mut document = Document::new(source.into());
+        let table_start = source.find("Header").unwrap();
+        let grid = TableSelection {
+            source: table_start,
+            anchor: (0, 0),
+            head: (0, 1),
+            active: (0, 0),
+        };
+        document
+            .transact_table(
+                &[SourceEdit {
+                    range: table_start..table_start + 6,
+                    text: "Updated".into(),
+                }],
+                EditOrigin::Human,
+                None,
+                (grid, grid),
+                true,
+            )
+            .unwrap();
+        let prefix = "Intro\n\n";
+        document
+            .transact(
+                &[SourceEdit {
+                    range: 0..0,
+                    text: prefix.into(),
+                }],
+                EditOrigin::Agent,
+                None,
+                true,
+            )
+            .unwrap();
+        document.undo();
+        assert_eq!(document.source(), format!("{prefix}{source}"));
+        assert_eq!(
+            document.take_history_table_selection(),
+            Some(TableSelection {
+                source: table_start + prefix.len(),
+                ..grid
+            })
+        );
+        document.redo();
+        assert_eq!(
+            document.take_history_table_selection(),
+            Some(TableSelection {
+                source: table_start + prefix.len(),
+                ..grid
+            })
+        );
+    }
 
     #[test]
     fn reading_cache_is_lazy_retains_unchanged_blocks_and_invalidates_code_edits() {

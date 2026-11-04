@@ -177,6 +177,7 @@ pub struct RichLayout {
     pub fragments: Vec<Fragment>,
     pub decorations: Vec<(Rectangle, Decoration)>,
     pub rows: Vec<VisualRow>,
+    cells: Vec<CellGeometry>,
     pub height: f32,
     cache: HashMap<ParagraphKey, Arc<CachedParagraph>>,
     tokens: Option<Tokens>,
@@ -188,6 +189,14 @@ pub struct RichLayout {
     metrics: Option<LayoutMetrics>,
     patches: usize,
     code_cache: code_highlight::Cache,
+}
+
+struct CellGeometry {
+    range: Range<usize>,
+    bounds: Rectangle,
+    table: usize,
+    row: usize,
+    column: usize,
 }
 
 pub struct Fragment {
@@ -214,8 +223,7 @@ pub enum FragmentKind {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Decoration {
-    Header,
-    Border,
+    TableRow { header: bool },
     Code { first: bool, last: bool },
     InlineCode,
     Strikethrough(iced::Color),
@@ -283,6 +291,7 @@ impl RichLayout {
         self.metrics = None;
         self.fragments.clear();
         self.rows.clear();
+        self.cells.clear();
         self.decorations.clear();
         let mut builder = Builder {
             layout: self,
@@ -315,7 +324,7 @@ impl RichLayout {
                         builder.line(unit.range.clone(), size, heading.is_some());
                     }
                     UnitKind::TableRow { table, row } => {
-                        builder.table_row(&projection.rich.tables[table], row)
+                        builder.table_row(&projection.rich.tables[table], row, table)
                     }
                 }
                 builder.y - top
@@ -357,6 +366,7 @@ impl RichLayout {
         self.fragments.clear();
         self.decorations.clear();
         self.rows.clear();
+        self.cells.clear();
         self.mapping = Some(Arc::clone(&projection.mapping));
         let mut builder = Builder {
             layout: self,
@@ -385,7 +395,7 @@ impl RichLayout {
                 if table.range.start > start {
                     builder.line(start..table.range.start, builder.size, false);
                 }
-                builder.table(table);
+                builder.table(table, table_index);
                 table_index += 1;
                 if table.range.end > start {
                     start = table.range.end;
@@ -612,6 +622,12 @@ impl RichLayout {
             }
         }
         self.decorations.extend(part.decorations);
+        for cell in &mut self.cells {
+            if cell.range.start >= old_range.end {
+                cell.range = shifted(cell.range.start)..shifted(cell.range.end);
+                cell.bounds.y += dy;
+            }
+        }
         self.fragments[i] = part
             .fragments
             .pop()
@@ -716,9 +732,19 @@ impl RichLayout {
     }
 
     fn hit_display(&self, point: Point) -> usize {
+        let cell = self
+            .cells
+            .iter()
+            .find(|cell| cell.bounds.contains(point))
+            .map(|cell| &cell.range);
         let Some(fragment) = self
             .fragments
             .iter()
+            .filter(|fragment| {
+                cell.is_none_or(|cell| {
+                    cell.start <= fragment.range.start && fragment.range.end <= cell.end
+                })
+            })
             .min_by(|a, b| distance(a.bounds, point).total_cmp(&distance(b.bounds, point)))
         else {
             return 0;
@@ -730,9 +756,25 @@ impl RichLayout {
                 origin,
                 display_start,
                 ..
-            } => paragraph
-                .hit_test(point - (*origin - Point::ORIGIN))
-                .map_or(*display_start, |hit| display_start + hit.cursor()),
+            } => {
+                let point = point - (*origin - Point::ORIGIN);
+                // Iced's paragraph hit returns only the line-local byte index.
+                // Retain the physical line so later cell lines hit their own text.
+                paragraph
+                    .buffer()
+                    .hit(point.x, point.y)
+                    .map_or(*display_start, |cursor| {
+                        display_start
+                            + cursor.index
+                            + paragraph
+                                .buffer()
+                                .lines
+                                .iter()
+                                .take(cursor.line)
+                                .map(|line| line.text().len() + line.ending().as_str().len())
+                                .sum::<usize>()
+                    })
+            }
             FragmentKind::Image { .. } => {
                 if point.x < fragment.bounds.center_x() {
                     fragment.range.start
@@ -769,6 +811,26 @@ impl RichLayout {
             })
             .map_or(0.0, |row| row.bounds.y);
         (self.source_offset(offset), y)
+    }
+
+    pub fn cell_at(&self, point: Point) -> Option<(usize, usize, usize)> {
+        self.cells
+            .iter()
+            .find(|cell| cell.bounds.contains(point))
+            .map(|cell| (cell.table, cell.row, cell.column))
+    }
+
+    pub fn cells(&self) -> impl Iterator<Item = (usize, usize, usize, Rectangle)> + '_ {
+        self.cells
+            .iter()
+            .map(|cell| (cell.table, cell.row, cell.column, cell.bounds))
+    }
+
+    pub fn cell_bounds(&self, table: usize, row: usize, column: usize) -> Option<Rectangle> {
+        self.cells
+            .iter()
+            .find(|cell| cell.table == table && cell.row == row && cell.column == column)
+            .map(|cell| cell.bounds)
     }
 
     fn vertical_row(
@@ -820,6 +882,49 @@ impl RichLayout {
     ) -> Option<(usize, f32)> {
         self.vertical_row(caret, x, direction, page)
             .map(|row| (self.source_offset(row.display_hit(x)), row.bounds.y))
+    }
+
+    /// Hit a specific source line at the preferred X, including when that X is
+    /// outside an indented block. Empty delimiter/separator rows lose to text.
+    pub fn source_row_target(&self, source: usize, x: f32) -> Option<(usize, f32)> {
+        let offset = self
+            .mapping
+            .as_ref()
+            .map_or(source, |map| map.to_display(source));
+        let rows = self.rows_at(offset);
+        let caret = self.source_caret(source, None);
+        let row = rows
+            .iter()
+            .filter(|row| !row.display_range.is_empty())
+            .min_by(|a, b| {
+                (a.bounds.y - caret.y)
+                    .abs()
+                    .total_cmp(&(b.bounds.y - caret.y).abs())
+            })
+            .or_else(|| rows.last())
+            .or_else(|| {
+                self.rows.get(
+                    self.rows
+                        .partition_point(|row| row.display_range.end <= offset)
+                        .saturating_sub(1),
+                )
+            })?;
+        if row.display_range.is_empty() {
+            return Some((source, row.bounds.y));
+        }
+        let hit = row.display_hit(x);
+        let head = self.mapping.as_ref().map_or(hit, |map| {
+            map.to_source(
+                hit,
+                if hit == row.display_range.end {
+                    Affinity::Before
+                } else {
+                    Affinity::After
+                },
+                None,
+            )
+        });
+        Some((head, row.bounds.y))
     }
 
     pub fn source_line_edge(&self, source: usize, caret: Rectangle, end: bool) -> usize {
@@ -1229,7 +1334,21 @@ impl Builder<'_> {
                 });
                 let mut rows = Vec::new();
                 let mut strike_glyphs = Vec::new();
+                // Shaped glyph offsets are local to their physical text line.
+                // A table cell can contain several such lines, including empty
+                // ones, while our caret ranges address the whole paragraph.
+                let line_starts = paragraph
+                    .buffer()
+                    .lines
+                    .iter()
+                    .scan(0, |offset, line| {
+                        let start = *offset;
+                        *offset += line.text().len() + line.ending().as_str().len();
+                        Some(start)
+                    })
+                    .collect::<Vec<_>>();
                 for run in paragraph.buffer().layout_runs() {
+                    let line_start = line_starts[run.line_i];
                     let mut stops = Vec::new();
                     for glyph in run.glyphs {
                         if let Some(&color) = strike_spans.get(&glyph.metadata)
@@ -1249,7 +1368,7 @@ impl Builder<'_> {
                                 color,
                             ));
                         }
-                        let cluster = &key.text[glyph.start..glyph.end];
+                        let cluster = &run.text[glyph.start..glyph.end];
                         let graphemes = cluster
                             .grapheme_indices(true)
                             .map(|(n, _)| n)
@@ -1265,11 +1384,11 @@ impl Builder<'_> {
                                     } else {
                                         fraction
                                     };
-                            stops.push((glyph.start + index, x));
+                            stops.push((line_start + glyph.start + index, x));
                         }
                     }
                     if stops.is_empty() {
-                        stops.push((0, 0.0));
+                        stops.push((line_start, 0.0));
                     }
                     stops.sort_by_key(|(index, _)| *index);
                     stops.dedup_by_key(|(index, _)| *index);
@@ -1361,17 +1480,25 @@ impl Builder<'_> {
         height
     }
 
-    fn table(&mut self, table: &crate::document::rich_document::Table) {
+    fn table(&mut self, table: &crate::document::rich_document::Table, table_index: usize) {
         for row_index in 0..table.rows.len() {
-            self.table_row(table, row_index);
+            self.table_row(table, row_index, table_index);
         }
     }
 
-    fn table_row(&mut self, table: &crate::document::rich_document::Table, row_index: usize) {
+    fn table_row(
+        &mut self,
+        table: &crate::document::rich_document::Table,
+        row_index: usize,
+        table_index: usize,
+    ) {
         let columns = table.alignment.len().max(1);
         let cell_width = self.width / columns as f32;
         let padding = (self.size * 0.65).min(cell_width / 4.0);
         let row = &table.rows[row_index];
+        if row_index == 0 {
+            self.y += styles::TABLE_TOP_SPACING * self.zoom;
+        }
         let y = self.y;
         let mut height = self.size * self.line_height + padding * 2.0;
         for (column, cell) in row.iter().enumerate() {
@@ -1391,17 +1518,25 @@ impl Builder<'_> {
             height = height.max(h + padding * 2.0);
         }
         let bounds = Rectangle::new(Point::new(0.0, y), Size::new(self.width, height));
-        if row_index == 0 {
-            self.layout.decorations.push((bounds, Decoration::Header));
-        }
+        self.layout.decorations.push((
+            bounds,
+            Decoration::TableRow {
+                header: row_index == 0,
+            },
+        ));
         for column in 0..columns {
-            self.layout.decorations.push((
-                Rectangle::new(
-                    Point::new(column as f32 * cell_width, y),
-                    Size::new(cell_width, height),
-                ),
-                Decoration::Border,
-            ));
+            if let Some(cell) = row.get(column) {
+                self.layout.cells.push(CellGeometry {
+                    range: cell.clone(),
+                    table: table_index,
+                    row: row_index,
+                    column,
+                    bounds: Rectangle::new(
+                        Point::new(column as f32 * cell_width, y),
+                        Size::new(cell_width, height),
+                    ),
+                });
+            }
         }
         self.y += height;
     }
@@ -1658,6 +1793,56 @@ mod tests {
     }
 
     #[test]
+    fn typed_cell_edge_spaces_advance_the_measured_caret_and_remain_selectable() {
+        for (value, leading) in [("", false), ("word", false), ("word", true)] {
+            let source = format!("| A | B |\n|---|---|\n| {value} | right |\n");
+            let (projection, layout) = layout(&source, 600.0);
+            let cell = projection.rich.tables[0].source_rows[1][0].clone();
+            let point = if leading { cell.start } else { cell.end };
+            let mut previous = layout.source_caret(point, None);
+            for count in 1..=3 {
+                let mut edited = source.clone();
+                edited.insert_str(point, &" ".repeat(count));
+                let tracked = cell.start..cell.end + count;
+                let projection =
+                    Projection::with_editing_cell(&edited, Some(point + count), Some(tracked));
+                let mut layout = RichLayout::default();
+                layout.rebuild(
+                    &projection,
+                    &Preset::Paper.resolve(),
+                    1.0,
+                    600.0,
+                    None,
+                    &ImageStore::default(),
+                );
+                let caret = layout.source_caret(point + count, None);
+                assert!(
+                    caret.x > previous.x + 1.0,
+                    "{value:?}, leading={leading}, count={count}: {previous:?} -> {caret:?}"
+                );
+                assert_eq!(caret.y, previous.y);
+                let selection = Selection {
+                    anchor: point,
+                    head: point + count,
+                };
+                assert!(
+                    layout
+                        .source_selection_rects(selection)
+                        .iter()
+                        .any(|rect| rect.width > 1.0)
+                );
+                assert_eq!(
+                    layout
+                        .hit_source_with_row(Point::new(caret.x + 0.1, caret.center_y()))
+                        .0,
+                    point + count
+                );
+                previous = caret;
+            }
+        }
+    }
+
+    #[test]
     fn headings_have_distinct_measured_sizes_and_pointer_hits() {
         let (projection, layout) = layout("# Large\n\n## Medium\n\nBody", 600.0);
         let large = layout.caret(0);
@@ -1826,6 +2011,40 @@ mod tests {
     }
 
     #[test]
+    fn multiline_table_cells_keep_unicode_carets_and_empty_cell_pointer_targets() {
+        let source = "| A | B |\n|---|---|\n| α<br><br>日本語<br>last | |\n";
+        let (projection, layout) = layout(source, 320.0);
+        let cell = projection.rich.tables[0].rows[1][0].clone();
+        assert_eq!(&projection.text[cell], "α\n\n日本語\nlast");
+        let mut last_y = 0.0;
+        for word in ["α", "日本語", "last"] {
+            let point = source.find(word).unwrap();
+            let caret = layout.source_caret(point, None);
+            assert!(caret.y > last_y);
+            last_y = caret.y;
+            assert_eq!(
+                layout
+                    .hit_source_with_row(Point::new(caret.x + 0.1, caret.center_y()))
+                    .0,
+                point
+            );
+        }
+        let empty = layout
+            .cells
+            .iter()
+            .find(|cell| cell.table == 0 && cell.row == 1 && cell.column == 1)
+            .unwrap();
+        let point = Point::new(
+            empty.bounds.center_x(),
+            empty.bounds.y + empty.bounds.height - 2.0,
+        );
+        assert_eq!(layout.cell_at(point), Some((0, 1, 1)));
+        let hit = layout.hit_source_with_row(point).0;
+        let expected = &projection.rich.tables[0].source_rows[1][1];
+        assert!(expected.start <= hit && hit <= expected.end);
+    }
+
+    #[test]
     fn image_is_one_hit_tested_stop_between_text_blocks() {
         let (projection, layout) = layout("Before\n\n![Alt](missing.png)\n\nAfter", 500.0);
         let image = &projection.rich.images[0];
@@ -1867,7 +2086,7 @@ mod tests {
         let center = layout.caret(row[1].start).x;
         let right = layout.caret(row[2].start).x;
         assert!(
-            left < 30.0 && center > 280.0 && right > 550.0,
+            left - layout.cell_bounds(0, 1, 0).unwrap().x < 30.0 && center > 280.0 && right > 550.0,
             "{left}, {center}, {right}"
         );
         for cell in row {

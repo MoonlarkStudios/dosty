@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-30",
+  "base_commit": "4769d8c2d8acfa818834235aa4bae343c3922c9b",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.1\nBuildVersion:\t\t25G241",
+  "architecture": "arm64",
+  "hardware": {
+    "chip_type": "Apple M2 Max",
+    "physical_memory": "32 GB",
+    "machine_model": "Mac14,6",
+    "number_processors": "proc 12:8:4:0"
+  },
+  "rust": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "baseline_note": "Retained release test executable before changing collaboration.rs. Same table controls and timed benchmark body; later correctness tests do not change the fixture or timed operation. Original collaboration.rs is the file at base_commit.",
+  "baseline_collaboration_sha256": "40e21dfb830beeb42973a931cdf21087e398d592a88111a8c809d0a495cd7a77",
+  "baseline_binary_sha256": "38beef6efa3633b8b84db58423328ef2afc5e9428aca34a183d035a3623094e5",
+  "after_binary_sha256": "fffe49288e7d2166b7c38bc159de801249402881b915f5dc817106d07ba2e2aa",
+  "samples": 30,
+  "body_rows": [
+    1000,
+    5000
+  ],
+  "mode": "Live",
+  "source_sha256": {
+    "src/document/collaboration.rs": "c677639e431381d9f9d823f6112cd2db786596bee5a2062cb42e86ec361a14c0",
+    "src/document/source.rs": "401d5b16cf1bb213ddcad79d09ad89cb904dcba553e45b23a9c3f98143562910",
+    "src/document/table_controls.rs": "638b05397e76d3fb04fe43b2f6d6b121d5a6328fbcc49bba8ddcc8c903ce2f91",
+    "src/document/table_edit.rs": "67f80fd19294d38de16e9bfacae343a2c4b1fbfaa9657a79d7bdbdb85987b159",
+    "src/app/table.rs": "9945bafe695d18282c71f57c31ba8ec657f0db0142cf7cc8e227a7ebc9b26514",
+    "src/app/table_tests.rs": "540cb188f1dadf05a20a007ce9b2819cb09e7ab3b5b24fd83c8e646a1c50cac4",
+    "src/app/application.rs": "2b81a686bd02b17d2e20fcda5cd45c1331aa9c5480422663c17875fe7c14e69c",
+    "src/editor/native_buffer.rs": "6f745d2f8e12fc820b6b08fe136283074a3e1b7ff2019721b1fcaa7f241e434f",
+    "Cargo.toml": "398d0b6ac4b4cdae97e6dc2c484e484fe7cecfd7f3fed941bbdf905c593fa662",
+    "Cargo.lock": "2b73381eb38e9a63395b5d894b13eb4981827d7c18415514dcd03e2ce884a009",
+    "mise.toml": "b218767f2af031221fc17a6a54bcf854a5f4c59ab05b6f54e8c85e4a817bf00b"
+  },
+  "limitations": [
+    "Other desktop activity was not controlled.",
+    "Times exclude App construction, rendering, native OS delivery and presentation.",
+    "No memory reduction, linear scaling or general frame-time guarantee is claimed."
+  ]
+}

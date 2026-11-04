@@ -32,6 +32,26 @@ was changed. RFD 0.17 uses the native `libdbus` portal path on Linux with a Zeni
 fallback; packaging needs those runtime components and a supported desktop portal.
 See [RFD's platform requirements](https://docs.rs/rfd/0.17.2/rfd/#linux--bsd-backends).
 
+## Parser security repair (2026-11-03)
+
+The hosted audit for the table-editing PR reported
+[RUSTSEC-2026-0433](https://rustsec.org/advisories/RUSTSEC-2026-0433.html)
+against `pulldown-cmark 0.13.5`. Nested image wikilinks can require quadratic
+parsing work when `ENABLE_WIKILINKS` is enabled, including through
+`Options::all()`. The option is off by default; Dosty's shared Markdown options
+do not enable it. The compatible security update is included in this PR.
+
+The direct requirement and lockfile now select **0.13.6**, the compatible
+[upstream security release](https://github.com/pulldown-cmark/pulldown-cmark/releases/tag/v0.13.6)
+that backports the fix. No other package version changed. Iced's separate
+`pulldown-cmark 0.12.2` is unchanged and falls within the advisory's unaffected
+range. No vendored code, audit policy, or exception was changed.
+
+`mise run audit` passed after the update with the same four reviewed maintenance
+notices. The [new audit output](validation/dependencies/pulldown-cmark-0.13.6-audit.txt)
+records this review; earlier measurements and audit output below retain their
+original dependency versions.
+
 ## Reviewed maintenance exceptions
 
 The current application lockfile has no vulnerability, unsoundness or yanked-package

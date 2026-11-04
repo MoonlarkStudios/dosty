@@ -1,0 +1,20 @@
+   Compiling dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.63s
+     Running unittests src/lib.rs (target/debug/deps/dosty-b6624e0a52621333)
+
+running 6 tests
+test app::application::table_grid::tests::plain_vertical_table_escape_preserves_modifier_ranges_and_native_draft_arrows ... ok
+test app::application::table_grid::tests::plain_vertical_table_escape_crosses_adjacent_tables_in_the_same_measured_column ... ok
+test app::application::table_grid::tests::plain_vertical_table_escape_reaches_prose_from_a_virtualized_last_implicit_cell ... ok
+test app::application::table_grid::tests::plain_vertical_table_escape_clamps_document_edges_and_uses_existing_blank_paragraphs ... ok
+test app::application::table_grid::tests::plain_vertical_table_escape_preserves_quoted_and_nested_table_containers ... ok
+test app::application::table_grid::tests::plain_vertical_table_escape_reaches_prose_and_typing_keeps_the_table_unchanged ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 314 filtered out; finished in 1.02s
+
+     Running unittests src/main.rs (target/debug/deps/dosty-da2bef467f59cd8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

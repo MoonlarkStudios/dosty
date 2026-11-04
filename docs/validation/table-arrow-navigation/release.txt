@@ -1,0 +1,3 @@
+[release] $ cargo build --locked --release
+   Compiling dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `release` profile [optimized] target(s) in 53.72s

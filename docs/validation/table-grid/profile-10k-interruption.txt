@@ -1,0 +1,2 @@
+[profile] $ cargo test --locked --release large_document_interactions -- --ignored --nocapture --test-threads=1
+    Blocking waiting for file lock on artifact directory

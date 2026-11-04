@@ -1,8 +1,8 @@
 //! Yrs ownership, UTF-8 transactions, stable intent, and origin-scoped history.
 //!
 //! Only `Document` commits edits. Transactions contain sorted, non-overlapping
-//! ranges in the ORIGINAL source and are applied from right to left. CRDT deltas
-//! use that same coordinate system; caches consume them only after commit.
+//! ranges in the ORIGINAL source. Batches advance one UTF-16 delta cursor;
+//! derived caches consume predecessor-coordinate changes only after commit.
 
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,7 @@ use yrs::{
     StickyIndex, Text, TextRef, Transact, Update,
 };
 
-use crate::document::selection::Selection;
+use crate::document::selection::{Selection, TableSelection};
 
 pub const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_TRANSACTION_EDITS: usize = 65_536;
@@ -93,6 +93,8 @@ pub struct CompositionTarget {
 struct HistorySelection {
     before: Option<HistoryTarget>,
     after: Option<HistoryTarget>,
+    table_before: Option<HistoryTableTarget>,
+    table_after: Option<HistoryTableTarget>,
     removed_bytes: usize,
     inserted_bytes: usize,
     removed_units: usize,
@@ -108,6 +110,11 @@ struct HistorySelection {
 struct HistoryTarget {
     stable: StableSelection,
     regions: Vec<HistoryRegion>,
+}
+#[derive(Debug, Clone)]
+struct HistoryTableTarget {
+    target: HistoryTarget,
+    selection: TableSelection,
 }
 #[derive(Debug, Clone)]
 struct HistoryRegion {
@@ -189,6 +196,7 @@ pub struct Collaboration {
     human: UndoManager<HistorySelection>,
     agent: UndoManager<HistorySelection>,
     history_context: Arc<Mutex<HistorySelection>>,
+    history_table_selection: Option<TableSelection>,
     observed: Arc<Mutex<Observed>>,
     // Conservative admission accounting, reset to encoded size on reopen.
     retained_bytes: usize,
@@ -298,6 +306,10 @@ impl Collaboration {
                     meta.before = context.before.clone();
                 }
                 meta.after = context.after.clone();
+                if meta.table_before.is_none() {
+                    meta.table_before = context.table_before.clone();
+                }
+                meta.table_after = context.table_after.clone();
                 meta.removed_bytes = meta.removed_bytes.saturating_add(context.removed_bytes);
                 meta.inserted_bytes = meta.inserted_bytes.saturating_add(context.inserted_bytes);
                 meta.removed_units += context.removed_units;
@@ -318,6 +330,7 @@ impl Collaboration {
             human,
             agent,
             history_context,
+            history_table_selection: None,
             observed,
             retained_bytes,
             retained_structures: 2,
@@ -503,10 +516,45 @@ impl Collaboration {
         selection: Option<(Selection, Selection)>,
         separate: bool,
     ) -> Result<Vec<SourceEdit>, CollaborationError> {
+        self.commit_with_table(source, edits, origin, selection, None, separate)
+    }
+
+    pub(crate) fn commit_table(
+        &mut self,
+        source: &str,
+        edits: &[SourceEdit],
+        origin: EditOrigin,
+        selection: Option<(Selection, Selection)>,
+        table_selection: (TableSelection, TableSelection),
+        separate: bool,
+    ) -> Result<Vec<SourceEdit>, CollaborationError> {
+        self.commit_with_table(
+            source,
+            edits,
+            origin,
+            selection,
+            Some(table_selection),
+            separate,
+        )
+    }
+
+    fn commit_with_table(
+        &mut self,
+        source: &str,
+        edits: &[SourceEdit],
+        origin: EditOrigin,
+        selection: Option<(Selection, Selection)>,
+        table_selection: Option<(TableSelection, TableSelection)>,
+        separate: bool,
+    ) -> Result<Vec<SourceEdit>, CollaborationError> {
+        self.history_table_selection = None;
         validate_edits(source, edits)?;
         if let Some((before, _)) = selection
             && (source.get(..before.anchor).is_none() || source.get(..before.head).is_none())
         {
+            return Err(CollaborationError::InvalidRange);
+        }
+        if table_selection.is_some_and(|(before, _)| source.get(..before.source).is_none()) {
             return Err(CollaborationError::InvalidRange);
         }
         let cost: usize = edits
@@ -543,7 +591,8 @@ impl Collaboration {
             return Ok(Vec::new());
         }
         let now = Instant::now();
-        let coalesce = !separate
+        let coalesce = table_selection.is_none()
+            && !separate
             && self.last_edit.is_some_and(|(last, previous)| {
                 previous == origin && now.duration_since(last) < Duration::from_millis(650)
             });
@@ -559,6 +608,20 @@ impl Collaboration {
                 self.position(offset, assoc)
             })
         });
+        let table_before = table_selection.map(|(before, _)| {
+            let regions: Vec<_> = edits
+                .iter()
+                .map(|edit| (edit.range.clone(), &source[edit.range.clone()]))
+                .collect();
+            HistoryTableTarget {
+                target: history_target(
+                    Selection::caret(before.source),
+                    &regions,
+                    |offset, assoc| self.position(offset, assoc),
+                ),
+                selection: before,
+            }
+        });
         let mut next_index = self.index.clone();
         patch_index(&mut next_index, edits);
         if let Some((_, after)) = selection {
@@ -570,15 +633,21 @@ impl Collaboration {
                 }
             }
         }
+        if let Some((_, after)) = table_selection
+            && (after.source > next_index.len_bytes()
+                || next_index.char_to_byte(next_index.byte_to_char(after.source)) != after.source)
+        {
+            return Err(CollaborationError::InvalidRange);
+        }
         let mut txn = self.doc.transact_mut_with(origin.key());
         edit_text(&mut txn, &self.text, &self.index, edits);
         let mut post_positions = PositionCache {
             generation: self.generation + 1,
             entries: Vec::new(),
         };
-        let after = selection.map(|(_, after)| {
+        let regions = if selection.is_some() || table_selection.is_some() {
             let mut shift = 0isize;
-            let regions: Vec<_> = edits
+            edits
                 .iter()
                 .map(|edit| {
                     let start = edit
@@ -589,30 +658,39 @@ impl Collaboration {
                     shift += edit.text.len() as isize - edit.range.len() as isize;
                     (start..start + edit.text.len(), edit.text.as_str())
                 })
-                .collect();
-            history_target(after, &regions, |offset, assoc| {
-                let index = if let Some((_, index, _)) =
-                    post_positions
-                        .entries
-                        .iter()
-                        .find(|(byte, index, captured)| {
-                            *captured && *byte == offset && index.assoc == assoc
-                        }) {
-                    index.clone()
-                } else {
-                    let index = sticky(&self.text, &txn, units(&next_index, offset), assoc);
-                    post_positions.insert(offset, index.clone(), true);
-                    index
-                };
-                StablePosition {
-                    document: self.id,
-                    index,
-                }
-            })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut post_position = |offset, assoc| {
+            let index = if let Some((_, index, _)) =
+                post_positions
+                    .entries
+                    .iter()
+                    .find(|(byte, index, captured)| {
+                        *captured && *byte == offset && index.assoc == assoc
+                    }) {
+                index.clone()
+            } else {
+                let index = sticky(&self.text, &txn, units(&next_index, offset), assoc);
+                post_positions.insert(offset, index.clone(), true);
+                index
+            };
+            StablePosition {
+                document: self.id,
+                index,
+            }
+        };
+        let after = selection.map(|(_, after)| history_target(after, &regions, &mut post_position));
+        let table_after = table_selection.map(|(_, after)| HistoryTableTarget {
+            target: history_target(Selection::caret(after.source), &regions, &mut post_position),
+            selection: after,
         });
         *self.history_context.lock().expect("history context lock") = HistorySelection {
             before,
             after,
+            table_before,
+            table_after,
             removed_bytes: edits.iter().map(|edit| edit.range.len()).sum(),
             inserted_bytes: edits.iter().map(|edit| edit.text.len()).sum(),
             removed_units: edits
@@ -643,7 +721,7 @@ impl Collaboration {
         }
         self.generation += 1;
         *self.positions.lock().expect("position cache lock") = post_positions;
-        if separate {
+        if separate || table_selection.is_some() {
             self.reset_group();
         } else {
             self.last_edit = Some((now, origin));
@@ -655,6 +733,7 @@ impl Collaboration {
         origin: EditOrigin,
         redo: bool,
     ) -> Result<Option<HistoryChange>, CollaborationError> {
+        self.history_table_selection = None;
         let stack = self.manager(origin);
         let Some(item) = (if redo {
             stack.redo_stack()
@@ -741,7 +820,22 @@ impl Collaboration {
         let changes = self.take_edits().expect("undo only emits plain text");
         let selection = if redo { meta.after } else { meta.before }
             .and_then(|selection| self.resolve_history(&selection));
+        let table = if redo {
+            meta.table_after
+        } else {
+            meta.table_before
+        };
+        self.history_table_selection = table.and_then(|target| {
+            self.resolve_history(&target.target)
+                .map(|position| TableSelection {
+                    source: position.head,
+                    ..target.selection
+                })
+        });
         Some((changes, selection))
+    }
+    pub(crate) fn take_history_table_selection(&mut self) -> Option<TableSelection> {
+        self.history_table_selection.take()
     }
     fn resolve_history(&self, target: &HistoryTarget) -> Option<Selection> {
         let mut selection = self.resolve_selection(&target.stable)?;
@@ -796,6 +890,7 @@ impl Collaboration {
         source: &str,
         state: &ReplicaState,
     ) -> Result<Vec<SourceEdit>, CollaborationError> {
+        self.history_table_selection = None;
         if state.document != self.id {
             return Err(CollaborationError::Identity);
         }
@@ -961,6 +1056,29 @@ fn edit_text(
     index: &Rope,
     edits: &[SourceEdit],
 ) {
+    if edits.len() > 1 {
+        // Delta retains consume ORIGINAL UTF-16 coordinates. One advancing Yrs
+        // cursor keeps large batches linear in traversed items instead of
+        // restarting a positional search for every insertion/deletion. Leave
+        // unchanged text in place so sticky positions and replica edits retain
+        // their identities. Admission and the active Doc use this same path.
+        let mut previous_end = 0;
+        let delta = edits.iter().flat_map(|edit| {
+            let start = units(index, edit.range.start) as u32;
+            let end = units(index, edit.range.end) as u32;
+            let retained = start - previous_end;
+            previous_end = end;
+            [
+                (retained > 0).then_some(Delta::Retain(retained, None)),
+                (end > start).then_some(Delta::Deleted(end - start)),
+                (!edit.text.is_empty()).then_some(Delta::Inserted(edit.text.as_str(), None)),
+            ]
+            .into_iter()
+            .flatten()
+        });
+        text.apply_delta(txn, delta);
+        return;
+    }
     for edit in edits.iter().rev() {
         let start = units(index, edit.range.start) as u32;
         if !edit.range.is_empty() {
@@ -1173,6 +1291,106 @@ mod encoded_update {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batch_delta_matches_positional_edits_and_sticky_affinities_in_fragmented_unicode() {
+        for fragmented in [false, true] {
+            let mut source = "日本語 café e\u{301} 🧑‍💻 שלום\r\n".repeat(30);
+            let mut base = Collaboration::new(&source);
+            if fragmented {
+                for point in (0..20).rev() {
+                    let at = source.char_indices().nth(point * 7).unwrap().0;
+                    base.commit(
+                        &source,
+                        &[SourceEdit {
+                            range: at..at,
+                            text: "!".into(),
+                        }],
+                        EditOrigin::Human,
+                        None,
+                        true,
+                    )
+                    .unwrap();
+                    source.insert(at, '!');
+                }
+            }
+            let boundaries: Vec<_> = source
+                .char_indices()
+                .map(|(point, _)| point)
+                .chain([source.len()])
+                .collect();
+            let positions: Vec<_> = boundaries
+                .iter()
+                .step_by(11)
+                .flat_map(|&point| {
+                    [
+                        base.position(point, Assoc::Before),
+                        base.position(point, Assoc::After),
+                    ]
+                })
+                .collect();
+            let mut edits = vec![SourceEdit {
+                range: 0..0,
+                text: "Prefix 🦀\r\n".into(),
+            }];
+            edits.push(SourceEdit {
+                range: boundaries[1]..boundaries[2],
+                text: "A".into(),
+            });
+            edits.push(SourceEdit {
+                range: boundaries[2]..boundaries[3],
+                text: "B".into(),
+            });
+            for (number, start) in (5..boundaries.len() - 2).step_by(5).enumerate() {
+                edits.push(SourceEdit {
+                    range: boundaries[start]..boundaries[start + usize::from(number % 3 != 0)],
+                    text: match number % 3 {
+                        0 => "中",
+                        1 => "",
+                        _ => "e\u{301}🦀",
+                    }
+                    .into(),
+                });
+            }
+            edits.push(SourceEdit {
+                range: source.len()..source.len(),
+                text: "\r\nSuffix".into(),
+            });
+            let state = base.state();
+            let (mut forward, _) = Collaboration::from_state(&state).unwrap();
+            let (mut positional, _) = Collaboration::from_state(&state).unwrap();
+            let changes = forward
+                .commit(&source, &edits, EditOrigin::Human, None, true)
+                .unwrap();
+            let mut expected = source.clone();
+            {
+                let mut txn = positional.doc.transact_mut_with(EditOrigin::Human.key());
+                for edit in edits.iter().rev() {
+                    let start = units(&positional.index, edit.range.start) as u32;
+                    if !edit.range.is_empty() {
+                        positional.text.remove_range(
+                            &mut txn,
+                            start,
+                            (units(&positional.index, edit.range.end) - start as usize) as u32,
+                        );
+                    }
+                    if !edit.text.is_empty() {
+                        positional.text.insert(&mut txn, start, &edit.text);
+                    }
+                    expected.replace_range(edit.range.clone(), &edit.text);
+                }
+                txn.commit();
+            }
+            let reference = positional.take_edits().unwrap();
+            positional.generation += 1;
+            assert_eq!(changes, reference);
+            assert_eq!(forward.materialize(), expected);
+            assert_eq!(positional.materialize(), expected);
+            assert_eq!(forward.index.to_string(), expected);
+            for position in &positions {
+                assert_eq!(forward.resolve(position), positional.resolve(position));
+            }
+        }
+    }
     #[test]
     fn resolved_deleted_positions_do_not_poison_new_position_capture() {
         let mut collaboration = Collaboration::new("abc");

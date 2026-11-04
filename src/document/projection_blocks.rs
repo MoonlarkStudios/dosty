@@ -17,8 +17,10 @@ impl Projection {
         source: &str,
         change: &BlockChange,
         caret: Option<usize>,
+        cell: Option<Range<usize>>,
     ) -> bool {
-        self.block_update(source, change, caret).is_some()
+        self.block_update(source, change, caret, cell.as_ref())
+            .is_some()
     }
 
     fn block_update(
@@ -26,6 +28,7 @@ impl Projection {
         source: &str,
         change: &BlockChange,
         caret: Option<usize>,
+        cell: Option<&Range<usize>>,
     ) -> Option<()> {
         let old = &change.old;
         let new = &change.new;
@@ -38,11 +41,13 @@ impl Projection {
         {
             return None;
         }
-        let local = Self::with_context(
+        let local = Self::with_editing_cell(
             &source[new.clone()],
             caret
                 .filter(|&head| new.start <= head && head <= new.end)
                 .map(|head| head - new.start),
+            cell.filter(|range| new.start <= range.start && range.end <= new.end)
+                .map(|range| range.start - new.start..range.end - new.start),
         );
         if local.parsed.global_dependencies {
             return None;
@@ -60,19 +65,29 @@ impl Projection {
                     .iter()
                     .map(|r| r.start + new.start..r.end + new.start)
                     .collect(),
+                local
+                    .disclosure
+                    .1
+                    .as_ref()
+                    .map(|range| range.start + new.start..range.end + new.start),
             )
         } else {
-            let mut disclosure = self.disclosure_at(caret.map(|head| raw.previous_offset(head)));
-            for range in &mut disclosure.0 {
+            let mut disclosure = self.disclosure_with_editing_cell(
+                caret.map(|head| raw.previous_offset(head)),
+                cell.map(|range| raw.previous_offset(range.start)..raw.previous_offset(range.end)),
+            );
+            for range in disclosure.0.iter_mut().chain(disclosure.1.iter_mut()) {
                 if range.start >= old.end {
                     translate(range, old.end, new.end);
                 }
             }
             disclosure
         };
-        let outside = |ranges: &[Range<usize>], window: &Range<usize>, base: usize| {
-            ranges
+        let outside = |disclosure: &Disclosure, window: &Range<usize>, base: usize| {
+            disclosure
+                .0
                 .iter()
+                .chain(disclosure.1.iter())
                 .filter(|r| r.end <= window.start || r.start >= window.end)
                 .map(|r| {
                     if r.start >= window.end {
@@ -83,7 +98,7 @@ impl Projection {
                 })
                 .collect::<Vec<_>>()
         };
-        if outside(&self.disclosure.0, old, new.end) != outside(&disclosure.0, new, new.end) {
+        if outside(&self.disclosure, old, new.end) != outside(&disclosure, new, new.end) {
             return None;
         }
         let display = self.to_display(old.start)..self.to_display(old.end);
@@ -503,7 +518,8 @@ mod tests {
         assert!(projection.update_blocks(
             document.source(),
             document.block_changes.first().unwrap(),
-            Some(point + 8)
+            Some(point + 8),
+            None
         ));
         assert_full(&projection, document.source(), Some(point + 8));
         assert_eq!(source_storage, projection.source.as_ptr());
@@ -569,7 +585,7 @@ mod tests {
                             continue;
                         };
                         let head = Some(point + inserted.len());
-                        if !next.update_blocks(document.source(), change, head) {
+                        if !next.update_blocks(document.source(), change, head, None) {
                             continue;
                         };
                         accepted += 1;
@@ -606,11 +622,9 @@ mod tests {
             let end = document.source().rfind("\n\nTail").unwrap();
             document.replace(start..end, replacement).unwrap();
             let head = Some(start + replacement.len());
-            if document
-                .block_changes
-                .first()
-                .is_some_and(|change| projection.update_blocks(document.source(), change, head))
-            {
+            if document.block_changes.first().is_some_and(|change| {
+                projection.update_blocks(document.source(), change, head, None)
+            }) {
                 accepted += 1;
             } else {
                 projection = Projection::with_context(document.source(), head);
@@ -635,9 +649,9 @@ mod tests {
         let point = source.find("words").unwrap();
         document.replace(point..point, "日本").unwrap();
         let change = document.block_changes.first().unwrap();
-        assert!(!old.update_blocks(document.source(), change, Some(point)));
+        assert!(!old.update_blocks(document.source(), change, Some(point), None));
         let mut stale = Projection::new(&format!("Other {source}"));
-        assert!(!stale.update_blocks(document.source(), change, None));
+        assert!(!stale.update_blocks(document.source(), change, None, None));
     }
 
     #[test]
@@ -677,7 +691,8 @@ mod tests {
                 projection.update_block_batch(
                     document.source(),
                     &document.block_changes,
-                    next_head
+                    next_head,
+                    None
                 ),
                 "head={head}"
             );
@@ -715,7 +730,7 @@ mod tests {
             ),
         ] {
             let mut projection = Projection::with_context(source, Some(3));
-            assert!(!projection.update_block_batch(&next, &document.block_changes, caret));
+            assert!(!projection.update_block_batch(&next, &document.block_changes, caret, None));
             assert_full(&projection, source, Some(3));
         }
     }
