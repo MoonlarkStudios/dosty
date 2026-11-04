@@ -166,6 +166,31 @@ Use an appropriate type such as `feat`, `fix`, `refactor`, `perf`, `test`, `docs
 
 ## Documentation and repository maintenance
 
+Express implementation contracts in types, visibility, and tests where practical.
+Keep local invariants and non-obvious reasons beside the code they explain.
+Repository prose should help someone use or change the current application:
+
+- README and the bundled guide describe setup and user workflows.
+- Architecture and feature docs describe current behavior, ownership, cross-module
+  contracts, and design reasons that are difficult to discover from one module.
+  Avoid duplicating function listings or walking through code line by line.
+- CONTRIBUTING defines development practices and points to executable commands
+  and configuration as their source of truth.
+- PR descriptions and commits record change summaries, review findings,
+  alternatives, and routine validation results. Issues track proposed work.
+  Do not add a repository report for each task or review.
+
+Update existing docs when behavior, an architectural contract, or a contributor
+workflow changes. An internal refactor that preserves those contracts does not
+need a prose changelog. Create a new document only for a distinct, lasting reader
+need that an existing document cannot serve.
+
+Retain reproducible performance measurements and native validation evidence when
+they support a claim that code and automated tests alone cannot establish. Label
+them with the implementation, environment, method, and limitations; keep them
+distinct from current behavior descriptions. Routine passing test counts belong
+in the PR or CI results.
+
 Keep the [documentation index](docs/README.md), README, bundled guide and architecture map consistent with user-visible changes. Label historical measurements clearly and retain their evidence and limitations. Do not delete a benchmark, fixture, generated brand asset or upstream file merely because application code does not import it; check its documented purpose. Remove unused application code and dependencies instead of silencing warnings. Keep third-party lint exceptions confined to the documented vendor manifest.
 
 CI runs the locked Rust checks and release build on macOS, Linux and Windows, plus repository hygiene, full-history secret scanning and dependency auditing on Linux. GitHub Actions use full commit IDs, read-only or disabled token permissions, no persisted checkout credentials and bounded job durations. Follow [GitHub's workflow security guidance](https://docs.github.com/en/actions/reference/security/secure-use) when changing them. Dependabot proposes weekly compatible Cargo and action updates; review changes and validation before merging. Yrs, cryoglyph and Iced highlighter upgrades follow the explicit vendor rebase policy.
