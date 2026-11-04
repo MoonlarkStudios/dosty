@@ -44,7 +44,7 @@ fn synced(app: &App) {
     assert_eq!(app.editor.snapshot(), fresh.text);
     assert_eq!(
         app.document.source(),
-        app.document.collaboration.materialize()
+        app.document.collaboration().materialize()
     );
 }
 
@@ -980,7 +980,7 @@ fn clicking_prose_commits_and_returns_the_table_to_reading_presentation() {
     h.click(1, 1);
     h.key(Key::Character("A".into()), Modifiers::empty(), Some("A"));
     let point = SOURCE.find("Notes and decisions").unwrap() + 3;
-    let stable = h.app.document.collaboration.position(point, Assoc::After);
+    let stable = h.app.document.collaboration().position(point, Assoc::After);
     drop(
         h.app
             .update_message(AppMessage::SelectSource(Selection::caret(point))),
@@ -991,7 +991,7 @@ fn clicking_prose_commits_and_returns_the_table_to_reading_presentation() {
     assert_eq!(value(&h.app, 1, 1), "A");
     assert_eq!(
         h.app.selection.head,
-        h.app.document.collaboration.resolve(&stable).unwrap()
+        h.app.document.collaboration().resolve(&stable).unwrap()
     );
     drop(h.app.update_message(AppMessage::Undo));
     assert_eq!(h.app.document.source(), SOURCE);

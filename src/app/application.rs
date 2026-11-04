@@ -31,17 +31,17 @@ use crate::theme::styles::{self, Button};
 use crate::theme::{Preset, ResolvedTheme};
 
 #[path = "footnotes.rs"]
-pub(crate) mod footnotes;
+pub(super) mod footnotes;
 #[path = "outline.rs"]
-pub(crate) mod outline;
+pub(super) mod outline;
 #[path = "recovery.rs"]
-pub(crate) mod recovery;
+mod recovery;
 #[path = "table.rs"]
-pub(crate) mod table;
+pub(super) mod table;
 #[path = "table_grid.rs"]
-pub(crate) mod table_grid;
+pub(super) mod table_grid;
 #[path = "writing.rs"]
-pub(crate) mod writing;
+pub(super) mod writing;
 
 const EDITOR: &str = "document-editor";
 const SCROLL: &str = "document-scroll";
@@ -378,7 +378,7 @@ impl App {
                 && !self.loading
                 && self
                     .recovery
-                    .needs_checkpoint(self.document.collaboration.generation())
+                    .needs_checkpoint(self.document.collaboration().generation())
             {
                 iced::time::every(std::time::Duration::from_secs(1))
                     .map(|_| Message::Recovery(recovery::Message::Tick))
@@ -403,10 +403,15 @@ impl App {
     }
 
     fn image_tasks(&mut self) -> Task<Message> {
-        self.images.request(
-            &self.projection.rich.images,
-            self.path.as_deref().and_then(std::path::Path::parent),
-        )
+        self.images
+            .request(
+                &self.projection.rich.images,
+                self.path.as_deref().and_then(std::path::Path::parent),
+            )
+            .map(|completion| Message::ImageLoaded {
+                key: completion.key,
+                result: completion.result,
+            })
     }
 
     fn update_message(&mut self, mut message: Message) -> Task<Message> {
@@ -494,7 +499,7 @@ impl App {
             let stable = if self.grid.draft.is_some()
                 && let Message::SelectSource(selection) = message
             {
-                Some(self.document.collaboration.selection(selection))
+                Some(self.document.collaboration().selection(selection))
             } else {
                 None
             };
@@ -505,7 +510,7 @@ impl App {
                     )
                     | Message::Footnote(footnotes::Message::OpenAt(point)) => Some(
                         self.document
-                            .collaboration
+                            .collaboration()
                             .position(*point, yrs::Assoc::After),
                     ),
                     _ => None,
@@ -517,13 +522,13 @@ impl App {
                 return Task::none();
             }
             if let Some(stable) = stable
-                && let Some(selection) = self.document.collaboration.resolve_selection(&stable)
+                && let Some(selection) = self.document.collaboration().resolve_selection(&stable)
             {
                 message = Message::SelectSource(selection);
             }
             if let Some(point) = stable_point
                 .as_ref()
-                .and_then(|p| self.document.collaboration.resolve(p))
+                .and_then(|p| self.document.collaboration().resolve(p))
             {
                 match &mut message {
                     Message::Writing(
@@ -608,7 +613,8 @@ impl App {
             Message::Writing(message) => return self.update_writing(message),
             Message::Recovery(message) => return self.update_recovery(message),
             Message::CommitComposition { target, text } => {
-                if let Some(selection) = self.document.collaboration.resolve_composition(&target) {
+                if let Some(selection) = self.document.collaboration().resolve_composition(&target)
+                {
                     self.selection = selection.clamp(self.document.source());
                     self.sync_editor();
                     self.document.break_history_group();
@@ -651,7 +657,10 @@ impl App {
             }
             Message::ShowCollaboration => self.overlay = Some(Overlay::Collaboration),
             Message::ExportReplica | Message::ExportAgentSnapshot => {
-                let snapshot = self.document.collaboration.snapshot(self.document.source());
+                let snapshot = self
+                    .document
+                    .collaboration()
+                    .snapshot(self.document.source());
                 let agent = matches!(message, Message::ExportAgentSnapshot);
                 return Task::perform(
                     async move {
@@ -710,15 +719,15 @@ impl App {
                 );
             }
             Message::ReplicaLoaded(result) => {
-                let selection = self.document.collaboration.selection(self.selection);
+                let selection = self.document.collaboration().selection(self.selection);
                 match result {
                     Ok(state) => match self.document.receive(&state) {
                         Ok(()) => {
                             self.preserve_viewport_generation =
-                                Some(self.document.collaboration.generation());
+                                Some(self.document.collaboration().generation());
                             self.selection = self
                                 .document
-                                .collaboration
+                                .collaboration()
                                 .resolve_selection(&selection)
                                 .unwrap_or_default();
                             self.sync_editor();
@@ -731,15 +740,15 @@ impl App {
                 }
             }
             Message::ProposalLoaded(result) => {
-                let selection = self.document.collaboration.selection(self.selection);
+                let selection = self.document.collaboration().selection(self.selection);
                 match result {
                     Ok(proposal) => match self.document.accept(&proposal) {
                         Ok(()) => {
                             self.preserve_viewport_generation =
-                                Some(self.document.collaboration.generation());
+                                Some(self.document.collaboration().generation());
                             self.selection = self
                                 .document
-                                .collaboration
+                                .collaboration()
                                 .resolve_selection(&selection)
                                 .unwrap_or_default();
                             self.sync_editor();
@@ -747,7 +756,7 @@ impl App {
                             self.notification = Some(format!(
                                 "Accepted proposal from {}",
                                 self.document
-                                    .collaboration
+                                    .collaboration()
                                     .last_agent_author()
                                     .unwrap_or(&proposal.author)
                             ));
@@ -758,7 +767,7 @@ impl App {
                 }
             }
             Message::AgentUndo | Message::AgentRedo => {
-                let selection = self.document.collaboration.selection(self.selection);
+                let selection = self.document.collaboration().selection(self.selection);
                 if self
                     .document
                     .history(EditOrigin::Agent, matches!(message, Message::AgentRedo))
@@ -769,10 +778,10 @@ impl App {
                     .is_some()
                 {
                     self.preserve_viewport_generation =
-                        Some(self.document.collaboration.generation());
+                        Some(self.document.collaboration().generation());
                     self.selection = self
                         .document
-                        .collaboration
+                        .collaboration()
                         .resolve_selection(&selection)
                         .unwrap_or_default();
                     self.sync_editor();
@@ -829,7 +838,7 @@ impl App {
             }
             Message::ToggleTask { block, task } => {
                 let marker =
-                    self.document.blocks.get(block).and_then(|block| {
+                    self.document.blocks().get(block).and_then(|block| {
                         self.projection.task_markers(block.range.clone()).nth(task)
                     });
                 if let Some(marker) = marker {
@@ -854,7 +863,7 @@ impl App {
                 let current = self.document.block_at(self.selection.head);
                 let index = current
                     .saturating_add_signed(direction as isize)
-                    .min(self.document.blocks.len() - 1);
+                    .min(self.document.blocks().len() - 1);
                 return self.activate(index, direction < 0);
             }
             Message::Format(format) => return self.format(format),
@@ -962,7 +971,7 @@ impl App {
                         self.saved_version = Some(version);
                         self.saved_generation = generation;
                         self.dirty = self.document.source() != self.saved_source
-                            || self.document.collaboration.generation() != self.saved_generation;
+                            || self.document.collaboration().generation() != self.saved_generation;
                         self.remember(path);
                         if !self.dirty {
                             self.recovery.retire();
@@ -1207,7 +1216,7 @@ impl App {
                         Some("Replacement would exceed the 16 MiB document limit.".into());
                     return Task::none();
                 }
-                let selection = self.document.collaboration.selection(self.selection);
+                let selection = self.document.collaboration().selection(self.selection);
                 let count = self
                     .document
                     .replace_all(&self.query, &self.replacement)
@@ -1217,10 +1226,11 @@ impl App {
                     });
                 self.selection = self
                     .document
-                    .collaboration
+                    .collaboration()
                     .resolve_selection(&selection)
                     .unwrap_or_default();
-                self.preserve_viewport_generation = Some(self.document.collaboration.generation());
+                self.preserve_viewport_generation =
+                    Some(self.document.collaboration().generation());
                 self.active = None;
                 let failed = self.edit_error.is_some();
                 self.changed();
@@ -1270,7 +1280,7 @@ impl App {
     fn changed(&mut self) {
         self.recovery.edited();
         self.dirty = self.document.source() != self.saved_source
-            || self.document.collaboration.generation() != self.saved_generation;
+            || self.document.collaboration().generation() != self.saved_generation;
         self.notification = self.edit_error.take();
         self.refresh_matches();
     }
@@ -1561,7 +1571,7 @@ impl App {
                     .tables
                     .iter()
                     .position(|t| std::ptr::eq(t, table))
-                    .unwrap();
+                    .expect("cell_at returns a table borrowed from this projection");
                 return self.update_grid(table_grid::Message::Select {
                     revision: Arc::clone(&self.projection.source_id),
                     table,
@@ -1616,19 +1626,19 @@ impl App {
             (self.mode == EditorMode::Live && self.editor_focused).then_some(self.selection.head);
         let cell = self.editing_cell_range();
         let previous_highlights = Arc::clone(&self.projection.highlights);
-        if self.projection_revision != Some(self.document.revision) {
+        if self.projection_revision != Some(self.document.revision()) {
             let previous_revision = self.projection_revision;
-            self.projection_revision = Some(self.document.revision);
+            self.projection_revision = Some(self.document.revision());
             let updated = (cell.is_none()
                 && self.projection.update_words(self.document.source(), caret))
                 || (self
                     .document
-                    .block_changes
+                    .block_changes()
                     .first()
                     .is_some_and(|change| Some(change.previous_revision) == previous_revision)
                     && self.projection.update_block_batch(
                         self.document.source(),
-                        &self.document.block_changes,
+                        self.document.block_changes(),
                         caret,
                         cell.clone(),
                     ));
@@ -1758,7 +1768,7 @@ impl App {
         let selection = self.selection;
         self.document.break_history_group();
         self.commit_local(marker, replacement, selection, selection);
-        self.preserve_viewport_generation = Some(self.document.collaboration.generation());
+        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
         self.sync_editor();
         self.changed();
         self.document.break_history_group();
@@ -1840,7 +1850,7 @@ impl App {
         if self.busy {
             return Task::none();
         }
-        let Some(block) = self.document.blocks.get(index) else {
+        let Some(block) = self.document.blocks().get(index) else {
             return Task::none();
         };
         let offset = if at_end {
@@ -2105,7 +2115,7 @@ impl App {
         self.overlay = None;
         self.document = document;
         self.projection = Projection::new(self.document.source());
-        self.projection_revision = Some(self.document.revision);
+        self.projection_revision = Some(self.document.revision());
         self.editor_source = self.mode == EditorMode::Source;
         self.editor = native_buffer::Buffer::new(if self.editor_source {
             self.document.source()
@@ -2140,9 +2150,9 @@ impl App {
         let expected = path.as_ref().map(|_| self.saved_source.clone());
         let source = Arc::new(self.document.source().to_owned());
         let result_source = Arc::clone(&source);
-        let state = self.document.collaboration.state();
+        let state = self.document.collaboration().state();
         let version = collaboration_store::version(&state);
-        let generation = self.document.collaboration.generation();
+        let generation = self.document.collaboration().generation();
         let expected_version = if save_as {
             None
         } else {
@@ -2478,7 +2488,7 @@ impl App {
         settings.h5_size = (settings.h5_size.0 * self.zoom).into();
         settings.h6_size = (settings.h6_size.0 * self.zoom).into();
         settings.code_size = (settings.code_size.0 * self.zoom).into();
-        for (index, _) in self.document.blocks.iter().enumerate() {
+        for (index, _) in self.document.blocks().iter().enumerate() {
             let items = self
                 .document
                 .rendered_with_footnotes(index, self.projection.footnotes());
@@ -2536,9 +2546,10 @@ impl App {
                 &self.images,
                 editor_binding,
             )
-            .collaboration(&self.document.collaboration)
+            .collaboration(self.document.collaboration())
             .preserve_viewport(
-                self.preserve_viewport_generation == Some(self.document.collaboration.generation()),
+                self.preserve_viewport_generation
+                    == Some(self.document.collaboration().generation()),
             )
             .base(self.path.as_deref().and_then(std::path::Path::parent))
             .zoom(self.zoom)
@@ -2572,7 +2583,7 @@ impl App {
                 iced::highlighter::Theme::InspiredGitHub
             },
         );
-        SourceEditor::new(base.into(), &self.document.collaboration, self.selection).into()
+        SourceEditor::new(base.into(), self.document.collaboration(), self.selection).into()
     }
 
     fn format_bar(&self) -> Element<'_, Message> {
@@ -2687,7 +2698,7 @@ impl App {
                 undo,
                 redo,
                 space::horizontal(),
-                text(format!("{} words", self.document.words))
+                text(format!("{} words", self.document.words()))
                     .size(11)
                     .color(tokens.muted)
             ]
@@ -2697,7 +2708,7 @@ impl App {
                 status = status.push(
                     text(format!(
                         "·  {} min read",
-                        self.document.words.div_ceil(200).max(1)
+                        self.document.words().div_ceil(200).max(1)
                     ))
                     .size(11)
                     .color(tokens.faint),
@@ -2796,7 +2807,7 @@ impl App {
             self.small_button("Merge approved replica…", Message::ImportReplica, false),
             self.small_button("Accept agent proposal…", Message::ImportProposal, false),
             row![self.small_button("Undo agent", Message::AgentUndo, false), self.small_button("Redo agent", Message::AgentRedo, false)].spacing(12),
-            text(format!("Document {} · Writer {}", self.document.collaboration.id(), self.document.collaboration.replica_id())).size(10).color(tokens.faint),
+            text(format!("Document {} · Writer {}", self.document.collaboration().id(), self.document.collaboration().replica_id())).size(10).color(tokens.faint),
             self.small_button("Done", Message::CloseOverlay, true),
         ].spacing(16)).padding(30).width(540).style(styles::card(tokens)).into()
     }
@@ -3387,7 +3398,10 @@ mod tests {
             let mut app = app(source);
             let at = source.find('\n').unwrap() + 1;
             send(&mut app, Message::SelectSource(Selection::caret(at)));
-            let target = app.document.collaboration.composition_target(app.selection);
+            let target = app
+                .document
+                .collaboration()
+                .composition_target(app.selection);
             send(
                 &mut app,
                 Message::CommitComposition {
@@ -3592,7 +3606,7 @@ mod tests {
             &mut app,
             Message::Edit(Action::Edit(Edit::Paste(Arc::new(committed.into())))),
         );
-        assert!(!app.document.block_changes.is_empty());
+        assert!(!app.document.block_changes().is_empty());
         assert!(app.projection.change.is_some());
         assert!(Arc::ptr_eq(
             &old_tail,
@@ -3603,7 +3617,7 @@ mod tests {
         send(&mut app, Message::Undo);
         assert_eq!(app.document.source(), source);
         assert_eq!(app.selection, before);
-        assert!(!app.document.block_changes.is_empty());
+        assert!(!app.document.block_changes().is_empty());
         assert!(app.projection.change.is_some());
 
         let selection = Selection {
@@ -3801,17 +3815,17 @@ mod tests {
     fn focus_disclosure_preserves_a_caret_inside_syntax_without_editing_history() {
         let mut app = app("### 日本語\n\n**Next**");
         send(&mut app, Message::SelectSource(Selection::caret(1)));
-        let revision = app.document.revision;
+        let revision = app.document.revision();
         send(&mut app, Message::EditorFocused(false));
         assert_eq!(app.editor.content().text(), "日本語\n\nNext");
         assert_eq!(app.selection, Selection::caret(1));
         send(&mut app, Message::EditorFocused(true));
         assert_eq!(app.editor.content().text(), "### 日本語\n\nNext");
         assert_eq!(app.editor.content().cursor().position.column, 1);
-        assert_eq!(app.document.revision, revision);
+        assert_eq!(app.document.revision(), revision);
         assert!(!app.dirty);
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.revision, revision);
+        assert_eq!(app.document.revision(), revision);
         assert_eq!(app.selection, Selection::caret(1));
     }
 

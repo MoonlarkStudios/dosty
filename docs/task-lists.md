@@ -28,25 +28,5 @@ or releasing outside the checkbox cancels an outstanding press. Right clicks
 and ordinary text selection do not toggle checkboxes. Commands are ignored while
 a document loads or an application dialog is open.
 
-## Validation
-
-Private regressions exercise parser-certified task ranges, contextual disclosure,
-incremental word rebasing, nested/quoted tasks, Unicode, CRLF, uppercase checked
-markers, keyboard targeting, command guards, stale source events, separate
-Undo/Redo groups, and retained reverse selections. Widget tests exercise real
-press/move/release events, measured hit regions, cancellation and distant
-virtualized task navigation. An application/software-renderer regression checks
-that toggling preserves the viewport while the reverse selection head is offscreen.
-
-The shared [fixture](../tests/fixtures/live-tasks.md) includes task controls and
-lookalike literal code/prose. Reproduce the focused tests and optional theme previews:
-
-```sh
-mise exec -- cargo test --locked --lib task
-mise exec -- cargo test --locked --lib task_checkbox_previews -- --ignored --nocapture --test-threads=1
-```
-
-Previews are written to `/tmp/dosty-live-tasks-Paper.png`,
-`/tmp/dosty-live-tasks-Midnight.png`, and `/tmp/dosty-live-tasks-Sage.png` without
-opening user documents. Automated geometry and software rendering do not establish
-native accessibility, real IME behavior, or Windows/Linux platform readiness.
+See the [shared fixture](../tests/fixtures/live-tasks.md) and the
+[visual validation guide](validation/README.md#software-previews).

@@ -520,7 +520,7 @@ fn real_widget_paste_grows_both_axes_without_wrapping_and_is_one_source_undo() {
     let keep = h
         .app
         .document
-        .collaboration
+        .collaboration()
         .position(source.find("keep").unwrap(), Assoc::After);
     h.focus_cell(0, 1, 1);
     h.clipboard.standard = Some("one\ttwo\tthree\r\nfour\tfive\tsix\r\n".into());
@@ -538,7 +538,7 @@ fn real_widget_paste_grows_both_axes_without_wrapping_and_is_one_source_undo() {
     assert_eq!(view.active, (1, 1));
     assert!(h.app.document.source().starts_with("Before\n\n"));
     assert!(h.app.document.source().ends_with("\n\nAfter\n"));
-    let keep = h.app.document.collaboration.resolve(&keep).unwrap();
+    let keep = h.app.document.collaboration().resolve(&keep).unwrap();
     assert!(h.app.document.source()[keep..].starts_with("keep"));
     synced(&h.app);
     command(&mut h, "z");

@@ -14,7 +14,7 @@ fn send(app: &mut App, message: AppMessage) {
     drop(app.update(message));
     assert_eq!(
         app.document.source(),
-        app.document.collaboration.materialize()
+        app.document.collaboration().materialize()
     );
     let fresh = Projection::with_context(
         app.document.source(),
@@ -62,12 +62,12 @@ async fn dropped_image_import_keeps_later_reverse_selection_remote_edits_and_und
         head: original.find("Heading").unwrap(),
     };
     select(&mut app, selection);
-    let stable_selection = app.document.collaboration.selection(selection);
-    let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+    let stable_selection = app.document.collaboration().selection(selection);
+    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
     peer.replace(0..0, "Remote prefix.\n\n").unwrap();
     send(
         &mut app,
-        AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+        AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
     let before_import = app.document.source().to_owned();
     let mut outputs = iced_runtime::task::into_stream(task).unwrap();
@@ -94,7 +94,7 @@ async fn dropped_image_import_keeps_later_reverse_selection_remote_edits_and_und
     assert_eq!(
         app.selection,
         app.document
-            .collaboration
+            .collaboration()
             .resolve_selection(&stable_selection)
             .unwrap()
     );
@@ -132,7 +132,7 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
     drop(app.update_message(AppMessage::Dropped(PathBuf::from("photo.png"))));
     assert!(app.busy);
     assert!(app.writing.pending_media.is_some());
-    let generation = app.document.collaboration.generation();
+    let generation = app.document.collaboration().generation();
     send(
         &mut app,
         AppMessage::Saved {
@@ -192,7 +192,7 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
         .replace("the-quiet-hour.assets/coast.png", &destination);
     let mut app = app(&source);
     app.path = Some(path.clone());
-    let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
     let start = source.find("CommonMark reference").unwrap();
     let before = Selection {
         anchor: start + "CommonMark reference".len(),
@@ -221,7 +221,7 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     .unwrap();
     send(
         &mut app,
-        AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+        AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
     tool(&mut app, Message::Accept);
     assert!(
@@ -263,9 +263,9 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
             .source()
             .contains("> — Dosty notebook, [A place to begin](<#a-place-to-begin>)")
     );
-    peer.receive(&app.document.collaboration.state()).unwrap();
+    peer.receive(&app.document.collaboration().state()).unwrap();
     assert_eq!(peer.source(), app.document.source());
-    let state = app.document.collaboration.state();
+    let state = app.document.collaboration().state();
     collaboration_store::save_document(
         path.clone(),
         app.document.source().into(),
@@ -279,8 +279,8 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     let reopened = Document::from_state(&loaded.collaboration.unwrap()).unwrap();
     assert_eq!(reopened.source(), app.document.source());
     assert_ne!(
-        reopened.collaboration.replica_id(),
-        app.document.collaboration.replica_id()
+        reopened.collaboration().replica_id(),
+        app.document.collaboration().replica_id()
     );
     let html = export::html(reopened.source(), Some(root.path())).unwrap();
     assert!(html.contains("data:image/png;base64,"));
@@ -293,7 +293,7 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
 #[test]
 fn overlapping_remote_edit_leaves_details_open_and_does_not_overwrite_new_text() {
     let mut app = app("A [link](https://example.com).\n");
-    let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
     select(&mut app, Selection::caret(5));
     tool(&mut app, Message::Details(Kind::Link));
     peer.transact(
@@ -308,7 +308,7 @@ fn overlapping_remote_edit_leaves_details_open_and_does_not_overwrite_new_text()
     .unwrap();
     send(
         &mut app,
-        AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+        AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
     let current = app.document.source().to_owned();
     tool(
@@ -372,7 +372,7 @@ fn delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_con
     };
     select(&mut app, selection);
     let target = DeferredTarget::new(&app, selection);
-    let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
     peer.transact(
         &[SourceEdit {
             range: 7..13,
@@ -385,7 +385,7 @@ fn delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_con
     .unwrap();
     send(
         &mut app,
-        AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+        AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
     let source = app.document.source().to_owned();
     tool(
@@ -427,7 +427,10 @@ fn selected_url_paste_and_ime_commit_have_separate_undo_steps() {
     );
     let linked = app.document.source().to_owned();
     assert!(linked.contains("[café](<https://example.com/>)"));
-    let target = app.document.collaboration.composition_target(app.selection);
+    let target = app
+        .document
+        .collaboration()
+        .composition_target(app.selection);
     send(
         &mut app,
         AppMessage::CommitComposition {
@@ -630,10 +633,10 @@ async fn save_as_keeps_images_referenced_only_by_undo_history() {
         &app.images.history(),
     )
     .unwrap();
-    let state = app.document.collaboration.state();
+    let state = app.document.collaboration().state();
     let version = collaboration_store::version(&state);
     let source = Arc::new(app.document.source().to_owned());
-    let generation = app.document.collaboration.generation();
+    let generation = app.document.collaboration().generation();
     collaboration_store::save_document(copy.clone(), (*source).clone(), state, None, None)
         .await
         .unwrap();

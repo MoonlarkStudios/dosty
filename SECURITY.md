@@ -3,7 +3,7 @@
 Dosty is pre-release software. Security fixes target the current development
 branch; there are no maintained release branches yet.
 
-Use the repository's [private vulnerability report](https://github.com/MoonlarkStudios/daytrip-editor/security/advisories/new)
+Use the repository's [private vulnerability report](https://github.com/MoonlarkStudios/dosty/security/advisories/new)
 form. If that form is unavailable, open an issue asking for a
 private reporting channel without including exploit details, credentials, or
 private documents. Include a minimal synthetic reproduction, affected revision,
@@ -26,8 +26,8 @@ and [recovery behavior](docs/writing-workflows.md#recovery-and-export).
 
 Run `mise run audit` against current RustSec data and `mise run check-secrets`
 against a full clone before publication. Keep the application lockfile committed.
-The [dependency health report](docs/dependency-health.md) records known transitive
-warnings and their scope. Audit warnings stay visible; a passing audit is not a
+The [dependency health guide](docs/dependency-health.md) describes audit policy and
+patch maintenance. Audit warnings stay visible; a passing audit is not a
 claim that every dependency is maintained or free from defects.
 
 The [vendored dependency patches](vendor/README.md) have their own provenance and validation

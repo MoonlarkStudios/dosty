@@ -14,7 +14,7 @@ fn send(app: &mut App, message: AppMessage) {
     drop(app.update(message));
     assert_eq!(
         app.document.source(),
-        app.document.collaboration.materialize()
+        app.document.collaboration().materialize()
     );
     let fresh = Projection::with_context(
         app.document.source(),
@@ -129,11 +129,11 @@ fn navigation_returns_to_stable_reverse_selection_after_remote_edits() {
     tool(&mut app, Message::Details);
     tool(&mut app, Message::Definition);
     assert_eq!(app.selection.head, source.find("Definition").unwrap());
-    let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
     peer.replace(0..0, "Remote.\n\n").unwrap();
     send(
         &mut app,
-        AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+        AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
     tool(&mut app, Message::Back);
     assert_eq!(
@@ -154,7 +154,7 @@ fn stable_dialog_allows_unrelated_remote_edits_and_rejects_body_overlap() {
         send(&mut app, AppMessage::SelectSource(Selection::caret(5)));
         tool(&mut app, Message::Details);
         body(&mut app, "Revised note.");
-        let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+        let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
         let at = if overlap {
             source.find("Original").unwrap()
         } else {
@@ -163,7 +163,7 @@ fn stable_dialog_allows_unrelated_remote_edits_and_rejects_body_overlap() {
         peer.replace(at..at, "Remote ").unwrap();
         send(
             &mut app,
-            AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+            AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
         );
         let before = app.document.source().to_owned();
         tool(&mut app, Message::Apply);
@@ -212,7 +212,7 @@ fn label_collision_and_stale_session_or_reference_fail_without_source_edits() {
         body(&mut app, "New note.");
         let label = app.footnotes.form.as_ref().unwrap().label.clone();
         if scenario == 0 {
-            let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+            let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
             peer.replace(
                 source.len()..source.len(),
                 &format!("\n\n[^{label}]: Remote definition.\n"),
@@ -220,10 +220,10 @@ fn label_collision_and_stale_session_or_reference_fail_without_source_edits() {
             .unwrap();
             send(
                 &mut app,
-                AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+                AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
             );
         } else if scenario == 1 {
-            let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+            let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
             peer.replace(
                 source.len()..source.len(),
                 &format!("\n\nUnresolved[^{label}].\n"),
@@ -231,7 +231,7 @@ fn label_collision_and_stale_session_or_reference_fail_without_source_edits() {
             .unwrap();
             send(
                 &mut app,
-                AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+                AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
             );
         } else {
             let form = app.footnotes.form.take();
@@ -286,11 +286,11 @@ fn opening_a_reference_elsewhere_returns_to_that_reference_after_navigation() {
             tool(&mut app, Message::OpenAt(at));
         }
         tool(&mut app, Message::Definition);
-        let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+        let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
         peer.replace(0..0, "Remote ").unwrap();
         send(
             &mut app,
-            AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+            AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
         );
         tool(&mut app, Message::Back);
         assert_eq!(app.selection, Selection::caret(at + "Remote ".len()));
@@ -371,7 +371,7 @@ fn command_click_uses_measured_reference_bounds_and_does_not_move_the_caret() {
             &app.images,
             Binding::from_key_press,
         )
-        .collaboration(&app.document.collaboration)
+        .collaboration(app.document.collaboration())
         .selection(app.selection)
         .focused(true);
         let mut tree = widget::Tree::new(&editor as &dyn Widget<AppMessage, iced::Theme, Renderer>);
@@ -419,7 +419,7 @@ fn fenced_code_is_retained_in_read_and_cached_definition_preview() {
     let definition = &app.projection.footnotes().definitions[0];
     let index = app
         .document
-        .blocks
+        .blocks()
         .iter()
         .position(|block| block.range.start == definition.range.start)
         .unwrap();

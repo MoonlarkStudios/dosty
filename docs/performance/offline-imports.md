@@ -1,6 +1,9 @@
 # Incremental offline imports
 
-Measured 2026-10-23 against clean baseline **229d89d**, Apple M2 Max / 32 GiB, macOS 26.7.1, mise Rust 1.95.0, Iced 0.14, release/thin LTO/codegen-units=1. [Environment](performance/offline-imports/environment.txt) and [measured source hashes](performance/offline-imports/source-sha256.txt) are retained. No dependency or CRDT wire-format change is involved.
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
+Measured 2026-10-23 against clean baseline **229d89d**, Apple M2 Max / 32 GiB, macOS 26.7.1, mise Rust 1.95.0, Iced 0.14, release/thin LTO/codegen-units=1. [Environment](offline-imports/environment.txt) and [measured source hashes](offline-imports/source-sha256.txt) are retained. No dependency or CRDT wire-format change is involved.
 
 ## What changed
 
@@ -83,8 +86,6 @@ All seven release component benchmarks also passed. The distributed model churn 
 
 ## Validation and reproduction
 
-All **133 ordinary application tests** pass, along with seven release component benchmarks, the existing core and remote/churn profiles, and the extended batch-shape profile. New tests cover every disclosure character position in mixed CRLF/Unicode headings, tables, images and paragraphs; immutable predecessor mapping/highlight snapshots; rejection without partial projection mutation; delete-only and malformed-known envelopes; mixed full-parser fallbacks; and real widget reverse selection, preedit/exactly-once commit, undo/redo and viewport anchoring through sparse imports. Existing deterministic three-replica convergence, pending/out-of-order/duplicate delivery, restart, independent human/agent history and Source/Live IME tests remain active. No timing assertions were added.
-
 ```sh
 mise run check
 mise run release
@@ -99,9 +100,9 @@ RUST_TEST_THREADS=1 mise run bench
 mise run profile
 ```
 
-- [Fresh baseline imports](performance/offline-imports/before-remote.txt), [final imports](performance/offline-imports/after-remote.txt).
-- [Fresh baseline interactions](performance/offline-imports/before.txt), [final interactions](performance/offline-imports/after.txt), [independent mise profile](performance/offline-imports/mise-profile.txt).
-- [Extended shapes and first imports](performance/offline-imports/batch-shapes.txt), [earlier extended run](performance/offline-imports/batch-shapes-initial.txt), [three-sample diagnostic before the single-map optimization](performance/offline-imports/diagnostic.txt).
-- [Required checks](performance/offline-imports/check.txt), [release](performance/offline-imports/release.txt), [test build](performance/offline-imports/test-build.txt), [benchmarks](performance/offline-imports/bench.txt), [bundle/signature verification](performance/offline-imports/bundle.txt).
+- [Fresh baseline imports](offline-imports/before-remote.txt), [final imports](offline-imports/after-remote.txt).
+- [Fresh baseline interactions](offline-imports/before.txt), [final interactions](offline-imports/after.txt), [independent mise profile](offline-imports/mise-profile.txt).
+- [Extended shapes and first imports](offline-imports/batch-shapes.txt), [earlier extended run](offline-imports/batch-shapes-initial.txt), [three-sample diagnostic before the single-map optimization](offline-imports/diagnostic.txt).
+- [Required checks](offline-imports/check.txt), [release](offline-imports/release.txt), [test build](offline-imports/test-build.txt), [benchmarks](offline-imports/bench.txt), [bundle/signature verification](offline-imports/bundle.txt).
 
 Existing editor windows and unsaved documents were preserved; no application was launched or restarted. Native OS CJK IME delivery, accessibility and GPU presentation remain manual platform validation. File persistence and wire formats are unchanged.

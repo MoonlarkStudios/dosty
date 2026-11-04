@@ -1,6 +1,6 @@
 # Dosty
 
-[![Check](https://github.com/MoonlarkStudios/daytrip-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/MoonlarkStudios/daytrip-editor/actions/workflows/ci.yml)
+[![Check](https://github.com/MoonlarkStudios/dosty/actions/workflows/ci.yml/badge.svg)](https://github.com/MoonlarkStudios/dosty/actions/workflows/ci.yml)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="branding/dosty/logos/pen-page-reverse.svg">
@@ -12,15 +12,8 @@ A quiet, native Markdown editor built with Rust and Iced. Write with headings,
 emphasis, strikethrough, editable tables, images, task checkboxes, footnotes, and
 themes, or switch to the Markdown source at any time.
 
-Live tables render with quiet headers and row rules, revealing spreadsheet
-controls when selected. Hover a row or column label for its menu button, or
-right-click a cell or label for contextual actions. Cell/range selection,
-keyboard navigation, and cancellable in-cell
-editing stay on the page. Vertical arrow navigation continues into surrounding
-text and creates a paragraph when needed at a document edge. Copy and paste
-rectangular values with spreadsheet applications, including quoted multiline
-cells; paste can fill a selection or grow the table in one undo step.
-See [table editing](docs/table-editing.md).
+See the [writing guide](assets/guide.md) for everyday editing and
+[table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.
 
 Dosty is in early development. See the [current limitations](docs/evaluation.md).
 Previously named Koan and Daytrip; [existing settings and drafts remain compatible](docs/identity-migration.md).
@@ -35,8 +28,8 @@ Install [mise](https://mise.jdx.dev/getting-started.html) and the
 [native build tools](CONTRIBUTING.md#development-environment) for your platform, then:
 
 ```sh
-git clone https://github.com/MoonlarkStudios/daytrip-editor.git
-cd daytrip-editor
+git clone https://github.com/MoonlarkStudios/dosty.git
+cd dosty
 mise trust
 mise install
 mise run dev
@@ -46,7 +39,7 @@ mise run dev
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and pull requests.
 The [documentation](docs/README.md) covers editing, architecture, and design.
-Report bugs and suggest features through [GitHub issues](https://github.com/MoonlarkStudios/daytrip-editor/issues).
+Report bugs and suggest features through [GitHub issues](https://github.com/MoonlarkStudios/dosty/issues).
 Report vulnerabilities [privately](SECURITY.md).
 
 Copyright © 2026 Dosty contributors. Licensed under [GPLv3 or later](LICENSE).

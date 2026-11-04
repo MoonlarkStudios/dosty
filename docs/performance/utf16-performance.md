@@ -1,16 +1,19 @@
 # Cached Yrs UTF-16 traversal
 
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
 The subsequent [offline import optimization](offline-imports.md) supersedes the remote-batch costs below.
 
 Dosty pins Yrs 0.28.0 with a narrow dependency patch that reuses existing item lengths. `Item.len` already records UTF-16 clock length. Previously `content_len(Utf16)` recounted every scalar of the retained string while traversing text, including retained suffixes in edit deltas and prefixes in stable-position capture/resolution. Successful item merging also recounted the concatenated text. The patch returns the cached length for UTF-16 and adds the two cached lengths on merge. Byte lengths keep their original path. Construction, splitting, trimming, and GC already maintain this invariant.
 
 This removes repeated **scalar counting**, not traversal of the item list, conversion within an item during splitting, or copying split string contents. It adds no fields or per-position metadata. Dosty keeps its UTF-16 Yrs configuration and incremental Ropey byte bridge. Stable positions, origin-scoped undo, history-selection restoration, transient preedit/exactly-once IME commit, persistence format, replica identity, and offline admission paths are unchanged.
 
-The registry version has no equivalent length reuse, so the exact source is retained under `vendor/yrs`, selected by Cargo's `[patch.crates-io]`. The complete [patch](../vendor/yrs.patch), registry archive/original source checksums, MIT license, upstream revision, and upgrade/removal policy are retained in [vendor/README.md](../vendor/README.md). There is one application package and one CRDT backend. The third-party source keeps upstream formatting and existing unsafe internals; the patch and application add no unsafe code. Dependency compilation now exposes upstream warnings that Cargo normally caps for registry dependencies; application Clippy still passes with warnings denied.
+The registry version has no equivalent length reuse, so the exact source is retained under `vendor/yrs`, selected by Cargo's `[patch.crates-io]`. The complete [patch](../../vendor/yrs.patch), registry archive/original source checksums, MIT license, upstream revision, and upgrade/removal policy are retained in [vendor/README.md](../../vendor/README.md). There is one application package and one CRDT backend. The third-party source keeps upstream formatting and existing unsafe internals; the patch and application add no unsafe code. Dependency compilation now exposes upstream warnings that Cargo normally caps for registry dependencies; application Clippy still passes with warnings denied.
 
 ## Comparable release measurements
 
-Measured 2026-10-23 on Apple M2 Max / 32 GiB, macOS 26.7.1 build 25G241, aarch64, mise Rust 1.95.0, Iced 0.14, release/thin LTO/codegen-units=1. The fresh baseline is clean commit **81d1f1c**. Only the Yrs dependency override changes production execution; the source/fixture/profile code and all other application dependency versions remain unchanged. [Environment](performance/utf16/environment.txt) and measured source hashes accompany the raw results.
+Measured 2026-10-23 on Apple M2 Max / 32 GiB, macOS 26.7.1 build 25G241, aarch64, mise Rust 1.95.0, Iced 0.14, release/thin LTO/codegen-units=1. The fresh baseline is clean commit **81d1f1c**. Only the Yrs dependency override changes production execution; the source/fixture/profile code and all other application dependency versions remain unchanged. [Environment](utf16/environment.txt) and measured source hashes accompany the raw results.
 
 Both runs use the existing 10k/50k rich-block fixtures (910,450 / 4,574,450 bytes), 30 warm samples, Newsreader fonts, 720×800 viewport, persistent widget tree, and software rasterization. Builds and checks completed before serial final measurements; no competing build was run during those measurements. These are event/App/layout/draw/raster CPU totals. They exclude OS/GPU presentation, file IO, decoded images, and actual OS IME delivery. Initialization/first frame and IME/undo/redo each have n=1; do not infer their tail distributions.
 
@@ -79,15 +82,13 @@ The core-profile process peak was **664.3 → 684.9 MiB** (+3.1%). The remote/ch
 
 ## Raw evidence
 
-- [Baseline core](performance/utf16/before.txt), [final core](performance/utf16/after.txt), [paired baseline repeat](performance/utf16/before-repeat.txt), [paired optimized repeat](performance/utf16/after-repeat.txt).
-- [Baseline remote/app churn](performance/utf16/before-remote.txt), [optimized remote/app churn](performance/utf16/after-remote.txt).
-- [Baseline component benchmarks](performance/utf16/before-bench.txt), [seven optimized component benchmarks](performance/utf16/bench.txt), [independent mise profile](performance/utf16/mise-profile.txt).
-- [Application checks](performance/utf16/check.txt), [upstream tests](performance/utf16/yrs-tests.txt), [release build](performance/utf16/release.txt), [test build](performance/utf16/test-build.txt), [bundle/signature verification](performance/utf16/bundle.txt).
+- [Baseline core](utf16/before.txt), [final core](utf16/after.txt), [paired baseline repeat](utf16/before-repeat.txt), [paired optimized repeat](utf16/after-repeat.txt).
+- [Baseline remote/app churn](utf16/before-remote.txt), [optimized remote/app churn](utf16/after-remote.txt).
+- [Baseline component benchmarks](utf16/before-bench.txt), [seven optimized component benchmarks](utf16/bench.txt), [independent mise profile](utf16/mise-profile.txt).
+- [Application checks](utf16/check.txt), [upstream tests](utf16/yrs-tests.txt), [release build](utf16/release.txt), [test build](utf16/test-build.txt), [bundle/signature verification](utf16/bundle.txt).
 
 
 ## Correctness and reproduction
-
-All **128 application tests**, seven release component benchmarks, and both profile paths pass. The application regression extends coverage to fragmented Unicode items: cached and fresh captures with both affinities, byte resolution beyond the 32-entry position cache, reversed selection spanning rich blocks, a composition target rebased by a peer, local undo/redo after incoming edits, duplicate delivery and compatible reopen. Existing tests cover three-replica randomized and delayed/out-of-order convergence, contextual disclosure, viewport/drag/wrap anchors, independent human/agent history and Source/Live native-widget exactly-once IME behavior. Fresh source materialization and parsing remain test oracles outside timed paths.
 
 The dependency regression compares cached and freshly counted lengths at every valid scalar split and subsequent squash of text containing CJK, combining characters, ZWJ emoji, RTL and CRLF, checking UTF-16 and byte modes. It also checks non-text/non-countable item lengths. At this measurement stage, the upstream suite passed **378 tests**, with one upstream ignored test and seven external-asset tests explicitly excluded: five edit-trace files and two dataset files are absent from the published crate. Those assets were not substituted or their tests described as passing.
 
@@ -106,4 +107,4 @@ mise run profile
 
 The fresh baseline used `target/release/deps/daytrip-0360e0d741012cb4` built at 81d1f1c. Its core profile, remote/app churn and all component benchmarks were captured before rebuilding. `initial-optimized.txt` retains an exploratory optimized run before restoring Cargo's unrelated tempfile/getrandom lockfile resolution to match baseline; the final comparison uses `after.txt`. No timing thresholds were added to regression tests. Existing windows and unsaved documents were preserved; no editor was launched or restarted. Actual platform CJK IME delivery, GPU presentation and accessibility remain manual validation.
 
-The later [pending-update repair](yrs-pending-updates.md) adds a separate correctness fix and regression to the same vendor patch; the measurements above predate it.
+The later [pending-update repair](../yrs-pending-updates.md) adds a separate correctness fix and regression to the same vendor patch; the measurements above predate it.

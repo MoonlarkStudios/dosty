@@ -1,5 +1,8 @@
 # Source and projection updates
 
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
 Measured on 2026-10-22 with mise's Rust 1.95.0, locked Iced 0.14 / pulldown-cmark 0.12, release optimization, macOS 26.7.1 on Apple silicon (arm64), and bundled Newsreader fonts. The baseline is `740fc00`, after [native buffer snapshots](native-snapshots.md).
 
 ## Ownership and update boundaries
@@ -62,8 +65,6 @@ The byte counter measures replacement input to the projection's retained source 
 
 ## Validation and remaining work
 
-`mise run check` passes formatting, Clippy with warnings denied, and 96 regression tests; eight benchmarks/profiles are ignored by default. All six release benchmarks, the complete 10k/50k interaction profile, and `mise run release` pass. The macOS bundle is rebuilt and ad-hoc signed without opening or restarting existing windows.
-
 Full-parse differential tests compare accepted word/block updates with text, styles, reusable parsed metadata, rich structures, line starts, disclosure and every UTF-8 source/display mapping in both affinities. The block mutation matrix accepts 1,180 updates across headings, tables, images, containers, references, footnotes and uncertain boundaries, including CRLF and EOF table decorations. Uncertain cases retain fallback parsing. Ownership tests verify retained source/display buffers and table/image payloads, unchanged old layout snapshots, equal-length map/index sharing and fresh predecessor identity. Virtual geometry tests include skipped intermediate updates followed by equal-length replacement, repeated reflow, Unicode input and topology changes.
 
 Existing application and widget tests cover cursor motion, forward/reverse cross-block selections, table/image editing, disclosure, scroll anchoring, wrap affinity, source/live switching, clipboard, history and transient IME composition. No dependencies, public library APIs, history semantics, document limits or theme behavior change.
@@ -89,7 +90,7 @@ target/release/deps/dosty-<hash> performance_source_projection_updates --ignored
 
 The baseline was measured before edits. To reproduce it, archive `740fc00` into a temporary directory, build through mise from the trusted repository with `--manifest-path` pointing there, and run its executable before rebuilding the current version. A shared `CARGO_TARGET_DIR` reuses dependencies; executable filenames can be identical. The interaction fixture, input sequence and sample count are unchanged. The component diagnostic is new; `mise run bench` runs all six benchmarks concurrently by default, so its component timings are retained separately from the serial diagnostic.
 
-- [Baseline interactions and process metrics](performance/source-projection/before-interactions.txt).
-- [Final interactions and process metrics](performance/source-projection/after-interactions.txt).
-- [Serial source/projection diagnostic](performance/source-projection/source-projection-component.txt).
-- [All release benchmarks](performance/source-projection/model-layout.txt).
+- [Baseline interactions and process metrics](source-projection/before-interactions.txt).
+- [Final interactions and process metrics](source-projection/after-interactions.txt).
+- [Serial source/projection diagnostic](source-projection/source-projection-component.txt).
+- [All release benchmarks](source-projection/model-layout.txt).

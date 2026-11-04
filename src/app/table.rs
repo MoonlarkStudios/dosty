@@ -122,7 +122,7 @@ impl App {
         let menu = form.menu.as_ref()?;
         let range = form
             .target
-            .resolve(&self.document.collaboration, self.document.source())
+            .resolve(self.document.collaboration(), self.document.source())
             .ok()?;
         let index = self
             .projection
@@ -177,7 +177,7 @@ impl App {
         // before dismissing the menu. A stale menu never retargets a nearby cell.
         let range = match form
             .target
-            .resolve(&self.document.collaboration, self.document.source())
+            .resolve(self.document.collaboration(), self.document.source())
         {
             Ok(range) => range,
             Err(error) => return self.menu_error(error),
@@ -422,11 +422,11 @@ impl App {
             self.table_editing = Some(EditingCell {
                 start: self
                     .document
-                    .collaboration
+                    .collaboration()
                     .position(cell.start, yrs::Assoc::Before),
                 end: self
                     .document
-                    .collaboration
+                    .collaboration()
                     .position(cell.end, yrs::Assoc::After),
             });
         }
@@ -439,7 +439,7 @@ impl App {
             return None;
         }
         let editing = self.table_editing.as_ref()?;
-        let collaboration = &self.document.collaboration;
+        let collaboration = self.document.collaboration();
         let range = collaboration.resolve(&editing.start)?..collaboration.resolve(&editing.end)?;
         let text = self.document.source().get(range.clone())?;
         (text.is_empty()
@@ -460,7 +460,7 @@ impl App {
             return;
         };
         let cell = &table.source_rows[row][column];
-        let collaboration = &self.document.collaboration;
+        let collaboration = self.document.collaboration();
         let source = self.document.source();
         if let Some(editing) = &self.table_editing
             && let Some(start) = collaboration.resolve(&editing.start)
@@ -1031,10 +1031,10 @@ impl App {
     fn apply_table_command(&mut self, command: Command) -> Result<(), String> {
         let form = self.table.form.as_ref().ok_or("No table is selected.")?;
         let source = self.document.source();
-        let range = form.target.resolve(&self.document.collaboration, source)?;
+        let range = form.target.resolve(self.document.collaboration(), source)?;
         let selection = self
             .document
-            .collaboration
+            .collaboration()
             .resolve_selection(&form.selection)
             .ok_or("The selected cell is no longer available.")?;
         let table = self
@@ -1057,7 +1057,7 @@ impl App {
             self.document.break_history_group();
             result.map_err(|error| error.to_string())?;
             self.selection = edit.selection;
-            self.preserve_viewport_generation = Some(self.document.collaboration.generation());
+            self.preserve_viewport_generation = Some(self.document.collaboration().generation());
             self.changed();
         }
         Ok(())
@@ -1068,11 +1068,11 @@ impl App {
         self.table.form = Some(Form {
             menu: None,
             target: Target::new(
-                &self.document.collaboration,
+                self.document.collaboration(),
                 self.document.source(),
                 table.source_range.clone(),
             ),
-            selection: self.document.collaboration.selection(self.selection),
+            selection: self.document.collaboration().selection(self.selection),
             selected: 1,
             row,
             column,

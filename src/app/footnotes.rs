@@ -108,11 +108,11 @@ impl App {
                 }
                 match form
                     .target
-                    .resolve(&self.document.collaboration, self.document.source())
+                    .resolve(self.document.collaboration(), self.document.source())
                 {
                     Ok(range) => {
                         self.footnotes.back = Some((
-                            self.document.collaboration.replica_id(),
+                            self.document.collaboration().replica_id(),
                             form.return_to.clone(),
                         ));
                         self.footnotes.close();
@@ -131,9 +131,9 @@ impl App {
                     return Task::none();
                 }
                 if let Some((owner, selection)) = self.footnotes.back.take()
-                    && owner == self.document.collaboration.replica_id()
+                    && owner == self.document.collaboration().replica_id()
                     && let Some(selection) =
-                        self.document.collaboration.resolve_selection(&selection)
+                        self.document.collaboration().resolve_selection(&selection)
                 {
                     return self.footnote_jump(selection);
                 }
@@ -176,16 +176,16 @@ impl App {
             number: reference
                 .and_then(|note| note.number)
                 .or_else(|| definition.and_then(|note| note.number)),
-            target: Target::new(&self.document.collaboration, source, range),
+            target: Target::new(self.document.collaboration(), source, range),
             reference: reference
-                .map(|note| Target::new(&self.document.collaboration, source, note.range.clone())),
+                .map(|note| Target::new(self.document.collaboration(), source, note.range.clone())),
             body: text_editor::Content::with_text(body),
             preview: preview(&footnotes::display_body(body, continuation_columns)),
             existing: definition.is_some(),
             ambiguous: definition.is_some_and(|note| note.ambiguous),
             source_body: body.to_owned(),
             continuation_columns,
-            return_to: self.document.collaboration.selection(return_selection),
+            return_to: self.document.collaboration().selection(return_selection),
             error: None,
         });
         self.overlay = Some(Overlay::Footnote);
@@ -197,9 +197,9 @@ impl App {
             return Err("Multiple definitions use this label. Go to the definition and resolve them in the document before editing these details.".into());
         }
         let source = self.document.source();
-        let range = form.target.resolve(&self.document.collaboration, source)?;
+        let range = form.target.resolve(self.document.collaboration(), source)?;
         if let Some(reference) = &form.reference {
-            reference.resolve(&self.document.collaboration, source)?;
+            reference.resolve(self.document.collaboration(), source)?;
         }
         let body = form.body.text();
         if form.existing && body == form.source_body {
@@ -315,7 +315,7 @@ impl App {
             )
             .map_err(|error| error.to_string())?;
         self.selection = after;
-        self.preserve_viewport_generation = Some(self.document.collaboration.generation());
+        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
         self.sync_editor();
         self.changed();
         Ok(())

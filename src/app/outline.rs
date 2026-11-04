@@ -106,12 +106,12 @@ impl State {
 
 impl App {
     pub(super) fn sync_outline(&mut self) {
-        if self.outline.revision == Some(self.document.revision) {
+        if self.outline.revision == Some(self.document.revision()) {
             return;
         }
         self.outline.cancel_drag();
         self.outline.sections = outline::sections(&self.document);
-        self.outline.revision = Some(self.document.revision);
+        self.outline.revision = Some(self.document.revision());
         self.refresh_folds();
         if matches!(self.overlay, Some(Overlay::QuickJump)) {
             self.outline.search();
@@ -122,7 +122,7 @@ impl App {
 
     fn folded_section(&self, anchors: &[StableSelection]) -> Option<usize> {
         anchors.iter().find_map(|anchor| {
-            let selection = self.document.collaboration.resolve_selection(anchor)?;
+            let selection = self.document.collaboration().resolve_selection(anchor)?;
             if selection.is_caret() {
                 return None;
             }
@@ -158,7 +158,7 @@ impl App {
                     .map_or(0, char::len_utf8);
             self.outline
                 .collapsed
-                .push(vec![self.document.collaboration.selection(Selection {
+                .push(vec![self.document.collaboration().selection(Selection {
                     anchor: start,
                     head: end,
                 })]);
@@ -255,7 +255,7 @@ impl App {
                 self.overlay = None;
                 self.outline.cancel_drag();
                 if self.mode == EditorMode::Read {
-                    self.selection = Selection::caret(self.document.blocks[block].range.start);
+                    self.selection = Selection::caret(self.document.blocks()[block].range.start);
                     self.document.break_history_group();
                     self.sync_editor();
                 }
@@ -276,13 +276,13 @@ impl App {
             }
             Message::BeginDrag(index) => {
                 if index < self.outline.sections.len() {
-                    self.outline.drag = Some((index, self.document.revision));
+                    self.outline.drag = Some((index, self.document.revision()));
                     self.outline.hover = None;
                 }
             }
             Message::Hover(target) => {
                 self.outline.hover = self.outline.drag.and_then(|(from, revision)| {
-                    (revision == self.document.revision
+                    (revision == self.document.revision()
                         && outline::destination(&self.outline.sections, from, target).is_some())
                     .then_some(target)
                 });
@@ -300,7 +300,7 @@ impl App {
                 let drag = self.outline.drag;
                 self.outline.cancel_drag();
                 if let Some((from, revision)) = drag
-                    && revision == self.document.revision
+                    && revision == self.document.revision()
                 {
                     return self.move_section(from, target);
                 }
@@ -380,7 +380,7 @@ impl App {
                             .chars()
                             .next()
                             .map_or(0, char::len_utf8);
-                    self.outline.collapsed[slot].push(self.document.collaboration.selection(
+                    self.outline.collapsed[slot].push(self.document.collaboration().selection(
                         Selection {
                             anchor: start,
                             head: end,

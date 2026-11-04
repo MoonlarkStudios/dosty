@@ -18,7 +18,7 @@ fn send(app: &mut App, message: AppMessage) {
     drop(app.update_message(message));
     assert_eq!(
         app.document.source(),
-        app.document.collaboration.materialize()
+        app.document.collaboration().materialize()
     );
     let fresh = Projection::with_context(
         app.document.source(),
@@ -146,11 +146,11 @@ fn outline_fold_anchors_survive_remote_prefix_and_undo_but_not_deleted_headings(
     let mut app = app(source);
     command(&mut app, Message::Toggle(0));
     command(&mut app, Message::BeginDrag(0));
-    let mut peer = Document::from_state(&app.document.collaboration.state()).unwrap();
+    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
     peer.replace(0..0, "Preface\n\n").unwrap();
     send(
         &mut app,
-        AppMessage::ReplicaLoaded(Ok(peer.collaboration.state())),
+        AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
     assert!(app.outline.drag.is_none());
     assert!(app.outline.folded[0]);

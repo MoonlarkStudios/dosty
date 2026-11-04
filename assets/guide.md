@@ -74,6 +74,8 @@ Select a phrase and press Cmd/Ctrl+K to add or edit a link. Normal clicks keep y
 
 Open **The quiet hour · sample** in the sidebar to try the whole workflow. **Recovery copies** holds idle checkpoints of unsaved writing; opening a copy preserves the saved-file conflict check. Save regularly, and export HTML when you want a portable reading copy.
 
-## A note on this experiment
+## Current limits
 
-Dosty is an Iced technology evaluation. Live editing uses one continuous native buffer, with inline syntax projected out of the display and mapped back to the original source. A shared rich layout supplies heading sizes, table cells, and image objects while preserving document-wide selection. Mathematics, Mermaid, and PDF export are future work.
+Dosty is experimental. Mathematics, diagrams, and PDF/office export are
+unsupported. Screen-reader support and native input-method validation remain
+incomplete.

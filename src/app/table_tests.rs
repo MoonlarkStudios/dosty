@@ -71,7 +71,7 @@ fn assert_synced(app: &App) {
     assert_eq!(app.projection.highlights, fresh.highlights);
     assert_eq!(
         app.document.source(),
-        app.document.collaboration.materialize()
+        app.document.collaboration().materialize()
     );
     assert_eq!(
         app.editor.snapshot(),
@@ -252,7 +252,7 @@ fn context_menu_commands_and_alignment_check_targets_and_restore_one_step_histor
         let mut app = app(source, EditorMode::Live);
         context_menu(&mut app, 1, 1, E::Column);
         let mut replica =
-            crate::document::Document::from_state(&app.document.collaboration.state()).unwrap();
+            crate::document::Document::from_state(&app.document.collaboration().state()).unwrap();
         let at = if overlap {
             source.find("other").unwrap()
         } else {
@@ -269,7 +269,9 @@ fn context_menu_commands_and_alignment_check_targets_and_restore_one_step_histor
                 true,
             )
             .unwrap();
-        drop(app.update_message(AppMessage::ReplicaLoaded(Ok(replica.collaboration.state()))));
+        drop(app.update_message(AppMessage::ReplicaLoaded(Ok(
+            replica.collaboration().state(),
+        ))));
         let before = app.document.source().to_owned();
         send(&mut app, Message::MenuAction(ContextAction::Clear));
         if overlap {
@@ -968,7 +970,7 @@ fn active_cell_spaces_keep_incremental_updates_and_survive_unrelated_imports() {
         assert_mappings(&app);
     }
     let mut peer =
-        crate::document::Document::from_state(&app.document.collaboration.state()).unwrap();
+        crate::document::Document::from_state(&app.document.collaboration().state()).unwrap();
     let after = peer.source().rfind("After").unwrap();
     peer.transact(
         &[
@@ -987,8 +989,8 @@ fn active_cell_spaces_keep_incremental_updates_and_survive_unrelated_imports() {
     )
     .unwrap();
     let previous = Arc::clone(&app.projection.highlights);
-    drop(app.update(AppMessage::ReplicaLoaded(Ok(peer.collaboration.state()))));
-    assert_eq!(app.document.block_changes.len(), 2);
+    drop(app.update(AppMessage::ReplicaLoaded(Ok(peer.collaboration().state()))));
+    assert_eq!(app.document.block_changes().len(), 2);
     assert!(Arc::ptr_eq(
         &previous,
         &app.projection.change.as_ref().unwrap().previous
@@ -1055,7 +1057,7 @@ fn table_dialog_rejects_changed_targets_and_tracks_unrelated_replica_edits() {
         app.sync_editor();
         send(&mut app, Message::Open);
         let mut replica =
-            crate::document::Document::from_state(&app.document.collaboration.state()).unwrap();
+            crate::document::Document::from_state(&app.document.collaboration().state()).unwrap();
         let at = if overlap {
             source.find("other").unwrap()
         } else {
@@ -1072,7 +1074,9 @@ fn table_dialog_rejects_changed_targets_and_tracks_unrelated_replica_edits() {
                 true,
             )
             .unwrap();
-        drop(app.update(AppMessage::ReplicaLoaded(Ok(replica.collaboration.state()))));
+        drop(app.update(AppMessage::ReplicaLoaded(Ok(
+            replica.collaboration().state(),
+        ))));
         let before = app.document.source().to_owned();
         send(&mut app, Message::Apply(Command::ColumnAfter));
         if overlap {
@@ -1368,12 +1372,13 @@ fn large_column_batches_preserve_selections_remote_cells_and_one_step_history() 
             app.selection = before;
             app.sync_editor();
             let count = source.rfind("12").unwrap();
-            let stable = app.document.collaboration.selection(Selection {
+            let stable = app.document.collaboration().selection(Selection {
                 anchor: count + 2,
                 head: count,
             });
             let mut peer =
-                crate::document::Document::from_state(&app.document.collaboration.state()).unwrap();
+                crate::document::Document::from_state(&app.document.collaboration().state())
+                    .unwrap();
             peer.replace(count..count + 2, "peer").unwrap();
             send(&mut app, Message::Open);
             send(&mut app, Message::Apply(command));
@@ -1381,7 +1386,7 @@ fn large_column_batches_preserve_selections_remote_cells_and_one_step_history() 
             let after = app.selection;
             let selected = app
                 .document
-                .collaboration
+                .collaboration()
                 .resolve_selection(&stable)
                 .unwrap();
             assert_eq!(&app.document.source()[selected.range()], "12");
@@ -1397,7 +1402,7 @@ fn large_column_batches_preserve_selections_remote_cells_and_one_step_history() 
             assert!(!app.document.can_undo());
             drop(app.update(AppMessage::Redo));
             assert_eq!(app.selection, after);
-            drop(app.update(AppMessage::ReplicaLoaded(Ok(peer.collaboration.state()))));
+            drop(app.update(AppMessage::ReplicaLoaded(Ok(peer.collaboration().state()))));
             assert!(app.document.source().contains("peer"));
             assert!(app.document.source().starts_with("# Before\r\n\r\n"));
             assert!(

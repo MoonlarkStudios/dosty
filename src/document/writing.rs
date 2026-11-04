@@ -409,7 +409,7 @@ mod tests {
     fn dialog_targets_rebase_unrelated_changes_and_reject_overlap_and_reopen() {
         let mut doc = Document::new("# Title\n\nA [link](https://example.com).".into());
         let link = inline_at(doc.source(), 13, false).unwrap();
-        let target = Target::new(&doc.collaboration, doc.source(), link.range.clone());
+        let target = Target::new(doc.collaboration(), doc.source(), link.range.clone());
         doc.transact(
             &[SourceEdit {
                 range: 0..0,
@@ -420,7 +420,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let rebased = target.resolve(&doc.collaboration, doc.source()).unwrap();
+        let rebased = target.resolve(doc.collaboration(), doc.source()).unwrap();
         assert_eq!(
             &doc.source()[rebased.clone()],
             "[link](https://example.com)"
@@ -435,11 +435,11 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(target.resolve(&doc.collaboration, doc.source()).is_err());
-        let reopened = Document::from_state(&doc.collaboration.state()).unwrap();
+        assert!(target.resolve(doc.collaboration(), doc.source()).is_err());
+        let reopened = Document::from_state(&doc.collaboration().state()).unwrap();
         assert!(
             target
-                .resolve(&reopened.collaboration, reopened.source())
+                .resolve(reopened.collaboration(), reopened.source())
                 .is_err()
         );
     }

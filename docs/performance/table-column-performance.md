@@ -1,10 +1,13 @@
 # Large-table column transaction performance
 
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
 On 2026-10-30, column insertion and deletion were changed to reuse one advancing
 Yrs cursor for a validated batch. Table controls still produce the same granular
 source edits. Surrounding Markdown and untouched cells retain their exact bytes
 and CRDT identities; the command remains one human transaction and one undo step.
-See [table behavior](table-editing.md) and [transaction ownership](collaboration.md#transactions-and-ownership).
+See [table behavior](../table-editing.md) and [transaction ownership](../collaboration.md#transactions-and-ownership).
 
 ## Cause and change
 
@@ -62,7 +65,7 @@ tail estimates. Native platform and GPU latency were not measured.
 The unchanged mixed-content profile passed serially at 10k and 50k blocks before
 and after, with 30 samples per repeated interaction. It includes widget input,
 App updates, layout, draw submission and software rasterization; it excludes
-the dialog and native presentation. See [methodology](performance.md#reproduce).
+the dialog and native presentation. See [methodology](../performance.md#reproduce).
 
 | 50k interaction | Before ms p50 / p95 / max | After ms p50 / p95 / max |
 | --- | ---: | ---: |
@@ -79,21 +82,6 @@ at 50k, each one sample. Separate first-layout/draw/raster samples were
 
 ## Correctness and reproduction
 
-The new differential regression compares the batch cursor with the previous
-positional implementation on fragmented Unicode, RTL, combining characters,
-joined emoji, CRLF, adjacent replacements, insertions and deletions. It checks
-exact observer deltas, materialized text, the UTF-16 index, and sticky positions
-with both affinities. Large column regressions cross the staged-admission threshold
-in Live and Source, preserve reverse selections and untouched cell identities,
-compare fresh source/display mappings, restore source/selection in one Undo, and
-retain a concurrent edit after undo/redo. Existing rich-widget, IME, viewport,
-selection, replace-all, origin-history, and replica tests also pass.
-
-Final validation passed **237 ordinary tests** (22 optional tests ignored), strict
-Clippy, formatting, repository checks, the release build, the 30-sample table
-benchmark, and both large-document profiles. Existing native windows and unsaved
-documents were preserved; no native UI session was opened for this change.
-
 ```sh
 mise run check
 mise run check-repo
@@ -107,14 +95,14 @@ The benchmark defaults to 30 samples. `DOSTY_TABLE_SAMPLES=1` is an optional
 diagnostic probe, not the comparison above. The existing HTTP image regression
 requires localhost binding permission when running the full suite in a sandbox.
 
-Raw evidence: [before benchmark](validation/table-columns/before.txt),
-[after benchmark](validation/table-columns/after.txt),
-[initial one-sample phase probe](validation/table-columns/phase-probe.txt),
-[before 10k](validation/table-columns/before-10k.txt),
-[before 50k](validation/table-columns/before-50k.txt),
-[after 10k](validation/table-columns/after-10k.txt),
-[after 50k](validation/table-columns/after-50k.txt),
-[checks](validation/table-columns/check.txt),
-[repository checks](validation/table-columns/check-repo.txt),
-[release](validation/table-columns/release.txt), and
-[environment/source and binary hashes](validation/table-columns/environment.json).
+Raw evidence: [before benchmark](../validation/table-columns/before.txt),
+[after benchmark](../validation/table-columns/after.txt),
+[initial one-sample phase probe](../validation/table-columns/phase-probe.txt),
+[before 10k](../validation/table-columns/before-10k.txt),
+[before 50k](../validation/table-columns/before-50k.txt),
+[after 10k](../validation/table-columns/after-10k.txt),
+[after 50k](../validation/table-columns/after-50k.txt),
+[checks](../validation/table-columns/check.txt),
+[repository checks](../validation/table-columns/check-repo.txt),
+[release](../validation/table-columns/release.txt), and
+[environment/source and binary hashes](../validation/table-columns/environment.json).

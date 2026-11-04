@@ -22,7 +22,7 @@ pub(crate) struct Section {
 pub(crate) fn sections(document: &Document) -> Vec<Section> {
     let mut result: Vec<Section> = Vec::new();
     let mut parents: Vec<usize> = Vec::new();
-    for (block, parsed) in document.blocks.iter().enumerate() {
+    for (block, parsed) in document.blocks().iter().enumerate() {
         let Some((level, title)) = &parsed.heading else {
             continue;
         };
@@ -313,7 +313,7 @@ mod tests {
             assert_eq!(document.undo(), Some(before));
             assert_eq!(document.source(), source);
             assert_eq!(document.redo(), Some(after));
-            assert_eq!(document.source(), document.collaboration.materialize());
+            assert_eq!(document.source(), document.collaboration().materialize());
         }
     }
 

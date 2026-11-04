@@ -71,32 +71,32 @@ pub struct DeferredTarget {
 impl DeferredTarget {
     fn new(app: &App, selection: Selection) -> Self {
         Self {
-            composition: app.document.collaboration.composition_target(selection),
+            composition: app.document.collaboration().composition_target(selection),
             gap: selection.is_caret().then(|| {
                 app.document
-                    .collaboration
+                    .collaboration()
                     .position(selection.head, yrs::Assoc::Before)
             }),
             selection,
-            generation: app.document.collaboration.generation(),
+            generation: app.document.collaboration().generation(),
         }
     }
     fn resolve(&self, app: &App) -> Option<Selection> {
         let selection = app
             .document
-            .collaboration
+            .collaboration()
             .resolve_composition(&self.composition)?;
         self.gap.as_ref().map_or(Some(selection), |gap| {
             app.document
-                .collaboration
+                .collaboration()
                 .resolve(gap)
                 .map(Selection::caret)
         })
     }
     fn displaced_cursor(&self, app: &App) -> Option<StableSelection> {
-        (self.generation != app.document.collaboration.generation()
+        (self.generation != app.document.collaboration().generation()
             || self.selection != app.selection)
-            .then(|| app.document.collaboration.selection(app.selection))
+            .then(|| app.document.collaboration().selection(app.selection))
     }
 }
 
@@ -171,7 +171,7 @@ impl App {
                 };
                 let result = form
                     .target
-                    .resolve(&self.document.collaboration, self.document.source())
+                    .resolve(self.document.collaboration(), self.document.source())
                     .and_then(|range| {
                         if !remove {
                             let destination = if form.kind == Kind::Quote {
@@ -262,7 +262,7 @@ impl App {
                     .as_ref()
                     .and_then(|form| {
                         form.target
-                            .resolve(&self.document.collaboration, self.document.source())
+                            .resolve(self.document.collaboration(), self.document.source())
                             .ok()
                     })
                     .map_or(self.selection, |range| Selection {
@@ -461,7 +461,7 @@ impl App {
             ""
         };
         self.writing.form = Some(Form {
-            target: Target::new(&self.document.collaboration, source, details.range.clone()),
+            target: Target::new(self.document.collaboration(), source, details.range.clone()),
             details,
             body: text_editor::Content::with_text(body),
             existing,
@@ -538,7 +538,7 @@ impl App {
 
     fn restore_deferred_cursor(&mut self, cursor: Option<StableSelection>) {
         if let Some(cursor) = cursor
-            && let Some(selection) = self.document.collaboration.resolve_selection(&cursor)
+            && let Some(selection) = self.document.collaboration().resolve_selection(&cursor)
         {
             self.selection = selection;
             self.sync_editor();
@@ -583,7 +583,7 @@ impl App {
         } else {
             self.mode
         };
-        self.preserve_viewport_generation = Some(self.document.collaboration.generation());
+        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
         self.sync_editor();
         self.changed();
         Ok(())
@@ -607,7 +607,7 @@ impl App {
         }
         if let Some(fragment) = destination.strip_prefix('#') {
             let fragment = percent_encoding::percent_decode_str(fragment).decode_utf8_lossy();
-            if let Some(index) = self.document.blocks.iter().position(|block| {
+            if let Some(index) = self.document.blocks().iter().position(|block| {
                 block
                     .heading
                     .as_ref()
