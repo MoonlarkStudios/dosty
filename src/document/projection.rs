@@ -34,6 +34,8 @@ pub type HighlightLines = Vec<Arc<[(Range<usize>, Style)]>>;
 
 #[path = "projection_blocks.rs"]
 mod block_update;
+#[path = "projection_cell.rs"]
+mod cell_disclosure;
 #[path = "projection_disclosure.rs"]
 mod disclosure_update;
 #[path = "projection_update.rs"]
@@ -61,7 +63,7 @@ pub struct Projection {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Disclosure(Vec<Range<usize>>);
+pub struct Disclosure(Vec<Range<usize>>, Option<Range<usize>>);
 
 #[derive(Debug)]
 struct ProjectedText {
@@ -95,7 +97,11 @@ struct Piece {
     source: Range<usize>,
     display: Range<usize>,
     identity: bool,
-    separator: bool,
+    /// Source byte offset relative to this piece where its structural separator
+    /// begins. Padding before a pipe/newline belongs to the preceding cell;
+    /// padding after it belongs to the following cell. Relative offsets survive
+    /// unchanged-piece rebasing without another document-sized index.
+    separator: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,8 +216,18 @@ impl Projection {
     }
 
     pub fn with_context(source: &str, caret: Option<usize>) -> Self {
+        Self::with_editing_cell(source, caret, None)
+    }
+
+    /// The active cell's tracked text bounds include spaces typed at its edges,
+    /// but exclude pre-existing Markdown padding.
+    pub fn with_editing_cell(
+        source: &str,
+        caret: Option<usize>,
+        cell: Option<Range<usize>>,
+    ) -> Self {
         let parsed = Self::parse(source);
-        let disclosure = Self::resolve_disclosure(source, &parsed, caret);
+        let disclosure = Self::resolve_disclosure(source, &parsed, caret, cell.as_ref());
         Self::from_parsed(source.to_owned(), disclosure, parsed)
     }
 
@@ -224,6 +240,7 @@ impl Projection {
         let mut marks = Vec::new();
         let mut pairs = Vec::new();
         let mut in_code_block = false;
+        let mut in_table = false;
         let mut link_depth = 0_usize;
         let mut safe_text = Vec::new();
         let mut block_prefixes = Vec::new();
@@ -249,6 +266,17 @@ impl Projection {
             footnotes.observe(&event, range.clone(), source);
             let raw = &source[range.clone()];
             match event {
+                Event::Start(Tag::Table(_)) => in_table = true,
+                Event::End(pulldown_cmark::TagEnd::Table) => in_table = false,
+                Event::InlineHtml(ref html)
+                    if in_table && crate::document::table_edit::break_tag(html) =>
+                {
+                    decorations.push(Decoration {
+                        range,
+                        text: "\n".into(),
+                        kind: Concealment::Structural,
+                    });
+                }
                 Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough) => {
                     let (width, style) = match &event {
                         Event::Start(Tag::Strong) => (2, Style::BOLD),
@@ -281,6 +309,21 @@ impl Projection {
                         let close = range.end - width..range.end;
                         hide(open.clone(), &mut decorations);
                         hide(close.clone(), &mut decorations);
+                        if in_table {
+                            for (offset, _) in source[open.end..close.start].match_indices('|') {
+                                let pipe = open.end + offset;
+                                if source[..pipe]
+                                    .bytes()
+                                    .rev()
+                                    .take_while(|&byte| byte == b'\\')
+                                    .count()
+                                    % 2
+                                    == 1
+                                {
+                                    hide(pipe - 1..pipe, &mut decorations);
+                                }
+                            }
+                        }
                         pairs.push(Pair {
                             body: open.end..close.start,
                             open,
@@ -396,7 +439,7 @@ impl Projection {
                 }),
                 Event::Start(Tag::BlockQuote(_)) => {
                     let mut offset = range.start;
-                    for line in raw.split_inclusive('\n') {
+                    for line in raw.split_inclusive(['\r', '\n']) {
                         let indent = line.bytes().take_while(|&byte| byte == b' ').count();
                         if line.as_bytes().get(indent) == Some(&b'>') {
                             decorations.push(Decoration {
@@ -446,6 +489,18 @@ impl Projection {
                 Event::Start(Tag::Image { .. }) => link_depth += 1,
                 Event::End(pulldown_cmark::TagEnd::Link | pulldown_cmark::TagEnd::Image) => {
                     link_depth = link_depth.saturating_sub(1)
+                }
+                Event::Text(ref text)
+                    if in_table
+                        && raw.starts_with('&')
+                        && raw.ends_with(';')
+                        && raw != text.as_ref() =>
+                {
+                    decorations.push(Decoration {
+                        range,
+                        text: text.to_string(),
+                        kind: Concealment::Structural,
+                    });
                 }
                 Event::Text(_) if !in_code_block => {
                     if link_depth == 0 {
@@ -541,17 +596,42 @@ impl Projection {
         self.task_markers(start..end).next()
     }
 
+    /// Visible quote rails are container syntax, not prose navigation targets.
+    pub fn is_quote_marker(&self, offset: usize) -> bool {
+        let first = self
+            .parsed
+            .decorations
+            .partition_point(|decoration| decoration.range.start < offset);
+        self.parsed.decorations[first..]
+            .iter()
+            .take_while(|decoration| decoration.range.start == offset)
+            .any(|decoration| decoration.kind == Concealment::Syntax && decoration.text == "│")
+    }
+
     /// Resolves the active heading and just the innermost paired inline span.
     /// The end of a completed span belongs to the surrounding prose.
     pub fn disclosure_at(&self, caret: Option<usize>) -> Disclosure {
-        Self::resolve_disclosure(&self.source, &self.parsed, caret)
+        self.disclosure_with_editing_cell(caret, self.disclosure.1.clone())
+    }
+
+    pub fn disclosure_with_editing_cell(
+        &self,
+        caret: Option<usize>,
+        cell: Option<Range<usize>>,
+    ) -> Disclosure {
+        Self::resolve_disclosure(&self.source, &self.parsed, caret, cell.as_ref())
     }
 
     pub fn footnotes(&self) -> &Footnotes {
         &self.parsed.footnotes
     }
 
-    fn resolve_disclosure(source: &str, parsed: &Parsed, caret: Option<usize>) -> Disclosure {
+    fn resolve_disclosure(
+        source: &str,
+        parsed: &Parsed,
+        caret: Option<usize>,
+        cell: Option<&Range<usize>>,
+    ) -> Disclosure {
         let Some(caret) = caret else {
             return Disclosure::default();
         };
@@ -598,16 +678,52 @@ impl Projection {
                     .map(|decoration| decoration.range.clone()),
             );
         }
-        if let Some(pair) = parsed
-            .pairs
-            .iter()
-            .filter(|pair| pair.open.start <= caret && caret < pair.close.end)
-            .min_by_key(|pair| pair.close.end - pair.open.start)
+        let table = parsed
+            .rich
+            .tables
+            .partition_point(|table| table.source_range.end <= caret);
+        let in_table = parsed
+            .rich
+            .tables
+            .get(table)
+            .is_some_and(|table| table.source_range.start <= caret);
+        if !in_table
+            && let Some(pair) = parsed
+                .pairs
+                .iter()
+                .filter(|pair| pair.open.start <= caret && caret < pair.close.end)
+                .min_by_key(|pair| pair.close.end - pair.open.start)
         {
             ranges.extend([pair.open.clone(), pair.close.clone()]);
         }
         ranges.sort_by_key(|range| range.start);
-        Disclosure(ranges)
+        let cell = cell.and_then(|range| {
+            cell_disclosure::visible_cell(source, &parsed.rich, caret, range)
+                .map(|(_, _, _, range)| range)
+        });
+        Disclosure(ranges, cell)
+    }
+
+    pub fn inline_code_at(&self, selection: Selection) -> Option<(Range<usize>, Range<usize>)> {
+        let selected = selection.range();
+        self.parsed
+            .pairs
+            .iter()
+            .find(|pair| {
+                self.source[pair.open.clone()].starts_with('`')
+                    && pair.body.start <= selected.start
+                    && selected.end <= pair.body.end
+            })
+            .map(|pair| (pair.open.start..pair.close.end, pair.body.clone()))
+    }
+
+    pub fn at_inline_boundary(&self, selection: Selection) -> bool {
+        let selected = selection.range();
+        self.parsed.pairs.iter().any(|pair| {
+            pair.body.start <= selected.start
+                && selected.end <= pair.body.end
+                && (selected.start == pair.body.start || selected.end == pair.body.end)
+        })
     }
 
     /// Changes disclosure in place, retaining source text and parsed metadata.
@@ -615,12 +731,18 @@ impl Projection {
         if self.set_disclosure_lines(&disclosure) {
             return;
         }
-        let visible = project(&self.source, &self.parsed, true, |decoration| {
-            decoration.kind == Concealment::Structural
-                || !disclosure.0.iter().any(|range| {
-                    decoration.range.start < range.end && range.start < decoration.range.end
-                })
-        });
+        let visible = project(
+            &self.source,
+            &self.parsed,
+            true,
+            disclosure.1.as_ref(),
+            |decoration| {
+                decoration.kind == Concealment::Structural
+                    || !disclosure.0.iter().any(|range| {
+                        decoration.range.start < range.end && range.start < decoration.range.end
+                    })
+            },
+        );
         let regions = self.disclosure_regions(&disclosure, &visible.mapping);
         self.change = Some(ProjectionChange {
             previous: std::mem::replace(&mut self.highlights, visible.highlights),
@@ -643,10 +765,14 @@ impl Projection {
             .0
             .iter()
             .chain(&disclosure.0)
+            .chain(self.disclosure.1.iter())
+            .chain(disclosure.1.iter())
             .map(|range| {
-                let start = self.source[..range.start].rfind('\n').map_or(0, |n| n + 1);
+                let start = self.source[..range.start]
+                    .rfind(['\r', '\n'])
+                    .map_or(0, |n| n + 1);
                 let end = self.source[range.end..]
-                    .find('\n')
+                    .find(['\r', '\n'])
                     .map_or(self.source.len(), |n| range.end + n);
                 start..end
             })
@@ -672,12 +798,18 @@ impl Projection {
     }
 
     fn from_parsed(source: String, disclosure: Disclosure, parsed: Parsed) -> Self {
-        let visible = project(&source, &parsed, true, |decoration| {
-            decoration.kind == Concealment::Structural
-                || !disclosure.0.iter().any(|range| {
-                    decoration.range.start < range.end && range.start < decoration.range.end
-                })
-        });
+        let visible = project(
+            &source,
+            &parsed,
+            true,
+            disclosure.1.as_ref(),
+            |decoration| {
+                decoration.kind == Concealment::Structural
+                    || !disclosure.0.iter().any(|range| {
+                        decoration.range.start < range.end && range.start < decoration.range.end
+                    })
+            },
+        );
         Self {
             line_starts: std::iter::once(0)
                 .chain(visible.text.match_indices('\n').map(|(n, _)| n + 1))
@@ -700,23 +832,19 @@ impl Projection {
     }
 
     fn disclosure_after(&self, edit: &Range<usize>, length: usize) -> Disclosure {
+        let shift = |offset: usize, end: bool| {
+            if offset < edit.start || offset == edit.start && !end {
+                offset
+            } else if offset >= edit.end {
+                offset - edit.len() + length
+            } else {
+                edit.start + if end { length } else { 0 }
+            }
+        };
+        let rebase = |range: &Range<usize>| shift(range.start, false)..shift(range.end, true);
         Disclosure(
-            self.disclosure
-                .0
-                .iter()
-                .map(|line| {
-                    let shift = |offset: usize, end: bool| {
-                        if offset < edit.start || offset == edit.start && !end {
-                            offset
-                        } else if offset >= edit.end {
-                            offset - edit.len() + length
-                        } else {
-                            edit.start + if end { length } else { 0 }
-                        }
-                    };
-                    shift(line.start, false)..shift(line.end, true)
-                })
-                .collect(),
+            self.disclosure.0.iter().map(rebase).collect(),
+            self.disclosure.1.as_ref().map(rebase),
         )
     }
 
@@ -1179,7 +1307,13 @@ impl OffsetMap {
             Some(piece) if offset > piece.source.start && piece.identity => {
                 piece.display.start + offset - piece.source.start
             }
-            Some(piece) if offset > piece.source.start && piece.separator => piece.display.end,
+            Some(piece) if offset > piece.source.start && piece.separator.is_some() => {
+                if offset - piece.source.start <= piece.separator.unwrap_or(0) {
+                    piece.display.start
+                } else {
+                    piece.display.end
+                }
+            }
             Some(piece) => piece.display.start,
             None => self.display_length,
         }
@@ -1190,6 +1324,25 @@ impl OffsetMap {
         let index = self
             .pieces
             .partition_point(|piece| piece.display.end <= offset);
+        // A caret can sit in concealed table padding after typing Space. Keep
+        // that exact source position only on its own side of the separator;
+        // moving across a Tab must still arrive in the next cell.
+        if let Some(hint) = hint
+            && [
+                self.pieces.get(index),
+                index.checked_sub(1).and_then(|i| self.pieces.get(i)),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|piece| {
+                piece.separator.is_some()
+                    && piece.source.start <= hint
+                    && hint <= piece.source.end
+                    && self.to_display(hint) == offset
+            })
+        {
+            return hint;
+        }
         if let Some(piece) = self.pieces.get(index)
             && offset > piece.display.start
         {
@@ -1225,8 +1378,16 @@ fn project(
     source: &str,
     parsed: &Parsed,
     paint: bool,
+    cell: Option<&Range<usize>>,
     keep: impl Fn(&Decoration) -> bool,
 ) -> ProjectedText {
+    let mut rich = parsed.rich.clone();
+    let cell =
+        cell.and_then(|range| cell_disclosure::visible_cell(source, &rich, range.end, range));
+    let bounds = cell.map(|(table, row, column, range)| {
+        let original = std::mem::replace(&mut rich.tables[table].rows[row][column], range.clone());
+        (original, range)
+    });
     let mut text = String::with_capacity(source.len());
     let mut pieces = Vec::new();
     let mut marks = if paint {
@@ -1240,11 +1401,20 @@ fn project(
         if !content.is_empty() {
             let start = text.len();
             text.push_str(content);
+            let separator = match replacement {
+                Some("\t") => Some(source[range.clone()].find('|').unwrap_or(range.len())),
+                Some("\n") => Some(
+                    source[range.clone()]
+                        .find(['\r', '\n'])
+                        .unwrap_or(range.len()),
+                ),
+                _ => None,
+            };
             pieces.push(Piece {
                 source: range,
                 display: start..text.len(),
                 identity: replacement.is_none(),
-                separator: matches!(replacement, Some("\t" | "\n")),
+                separator,
             });
         }
     };
@@ -1258,12 +1428,25 @@ fn project(
             }
             continue;
         }
-        if decoration.range.start < covered {
+        let mut range = decoration.range.clone();
+        if decoration.kind == Concealment::Structural
+            && let Some((original, visible)) = &bounds
+        {
+            // An empty tail at EOF is a following boundary. Moving its end as
+            // well would invert it for a space-only value before existing pads.
+            if range.end == original.start && !range.is_empty() {
+                range.end = visible.start;
+            }
+            if range.start == original.end {
+                range.start = visible.end;
+            }
+        }
+        if range.start < covered {
             continue;
         }
-        push(covered..decoration.range.start, None);
-        push(decoration.range.clone(), Some(&decoration.text));
-        covered = decoration.range.end;
+        push(covered..range.start, None);
+        push(range.clone(), Some(&decoration.text));
+        covered = range.end;
     }
     push(covered..source.len(), None);
     let mapping = Arc::new(OffsetMap {
@@ -1276,7 +1459,6 @@ fn project(
     } else {
         Vec::new()
     });
-    let mut rich = parsed.rich.clone();
     rich.map_ranges(|offset| mapping.to_display(offset));
     ProjectedText {
         text,
@@ -1510,7 +1692,7 @@ mod tests {
         let projection = Projection::with_context(source, Some(6));
         let table = &projection.rich.tables[0];
         assert_eq!(table.alignment.len(), 2);
-        assert_eq!(&projection.text[table.rows[0][0].clone()], "**A**");
+        assert_eq!(&projection.text[table.rows[0][0].clone()], "A");
         assert_eq!(&projection.text[table.rows[1][0].clone()], "x");
         let start = source.find("![").unwrap();
         let projection = Projection::with_context(source, Some(start));
@@ -1746,6 +1928,40 @@ mod tests {
                 )));
             }
         }
+    }
+
+    #[test]
+    fn table_padding_stays_on_its_own_side_of_pipes_and_row_breaks() {
+        let source = "| A | B |\r\n|---|---|\r\n| left   |  right   |\r\n| end | row |\r\n";
+        let projection = Projection::new(source);
+        let table = &projection.rich.tables[0];
+        for (row_index, row) in table.source_rows.iter().enumerate() {
+            for (column, cell) in row.iter().enumerate() {
+                let shown = &table.rows[row_index][column];
+                let padding_end = source[cell.end..]
+                    .find(|c: char| !matches!(c, ' ' | '\t'))
+                    .map_or(source.len(), |end| cell.end + end);
+                for point in cell.end..=padding_end {
+                    assert_eq!(projection.to_display(point), shown.end);
+                    for affinity in [Affinity::Before, Affinity::After] {
+                        assert_eq!(
+                            projection.to_source(shown.end, affinity, Some(point)),
+                            point
+                        );
+                    }
+                }
+            }
+        }
+        let left = &table.rows[1][0];
+        let right = &table.rows[1][1];
+        let pipe = source.find("|  right").unwrap();
+        assert_eq!(projection.to_display(pipe), left.end);
+        assert_eq!(projection.to_display(pipe + 1), right.start);
+        assert_eq!(
+            projection.to_source(right.start, Affinity::After, Some(pipe - 1)),
+            table.source_rows[1][1].start,
+            "Moving to the next cell must discard the previous cell's padding hint."
+        );
     }
 
     #[test]

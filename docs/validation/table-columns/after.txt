@@ -1,0 +1,23 @@
+   Compiling dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `release` profile [optimized] target(s) in 1m 00s
+     Running unittests src/lib.rs (target/release/deps/dosty-1ffcfc106c452b2a)
+
+running 1 test
+test app::application::table::tests::performance_table_controls ... table rows=1000 command=RowAfter samples=30 ms p50=1.522 p95=1.741 max=2.122 crdt_p50=0.008 source_p50=0.521
+table rows=1000 command=ColumnAfter samples=30 ms p50=5.302 p95=5.683 max=5.771 crdt_p50=2.901 source_p50=0.952
+table rows=1000 command=DeleteColumn samples=30 ms p50=5.082 p95=5.412 max=5.450 crdt_p50=3.277 source_p50=0.688
+table rows=1000 command=Align(Right) samples=30 ms p50=1.542 p95=1.588 max=1.598 crdt_p50=0.005 source_p50=0.544
+table rows=5000 command=RowAfter samples=30 ms p50=7.800 p95=8.704 max=8.752 crdt_p50=0.017 source_p50=2.793
+table rows=5000 command=ColumnAfter samples=30 ms p50=68.951 p95=71.353 max=71.390 crdt_p50=52.505 source_p50=8.193
+table rows=5000 command=DeleteColumn samples=30 ms p50=122.359 p95=129.283 max=138.623 crdt_p50=109.931 source_p50=5.597
+table rows=5000 command=Align(Right) samples=30 ms p50=7.792 p95=8.602 max=8.744 crdt_p50=0.023 source_p50=2.790
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 258 filtered out; finished in 10.56s
+
+     Running unittests src/main.rs (target/release/deps/dosty-4d5da996bcc98527)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

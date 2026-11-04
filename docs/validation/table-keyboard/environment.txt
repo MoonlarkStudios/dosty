@@ -1,0 +1,17 @@
+Date: 2026-10-30
+Platform: macOS 26.7.1 (25G241), arm64
+Hardware: Mac14,6, Apple M2 Max, 32 GB memory
+Toolchain: rustc 1.95.0 (59807616e 2026-04-14), LLVM 22.1.2
+Build: release, thin LTO, codegen-units=1
+Working branch: codex/table-controls, uncommitted changes
+Base HEAD: 4769d8c2d8acfa818834235aa4bae343c3922c9b
+Source tree SHA-256: a1c07354431a4f59a9488cb29f837e9bc04d4733a68103d58d5c2e49e8c4eb1e
+Hash input: Cargo.toml, Cargo.lock, mise.toml, sorted src/**/*.rs, then sorted files under tests/fixtures (73 paths).
+For each path, feed UTF-8 POSIX path + NUL + file bytes + NUL to SHA-256.
+Benchmark: DOSTY_TABLE_SAMPLES=30 mise exec -- cargo test --locked --release performance_table_controls -- --ignored --nocapture --test-threads=1
+Profiles: DOSTY_PROFILE_BLOCKS=10000 or 50000 DOSTY_PROFILE_SAMPLES=30 mise run profile
+Runs were serial; other desktop activity was not controlled.
+The table command benchmark excludes layout and native event delivery.
+Mixed-document profiles include software rasterization, not OS/GPU presentation.
+Neither profile specifically times a table-space keypress. Deterministic regressions cover measured cell-space geometry and incremental block updates.
+No native windows or user documents were opened or changed.

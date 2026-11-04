@@ -1,5 +1,10 @@
 # macOS clipboard, drop, and input-method validation
 
+The later [native Excel Web](table-editing.md#native-excel-web-clipboard-validation-2026-11-03)
+and [Google Sheets clipboard passes](table-editing.md#native-google-sheets-clipboard-validation-2026-11-03)
+record table value transfers on 2026-11-03. The image, drop, and input-method
+evidence below describes the earlier sessions.
+
 Validated on 2026-10-23 with macOS 26.7.1 (25G241), Apple silicon, mise Rust 1.95.0 and Iced 0.14. The starting commit was `e73e4c0`; the native PNG drop follow-up used `901cc60`. Both sessions used separate `DAYTRIP_CONFIG_DIR` directories and temporary copies of **The quiet hour**. Existing documents were not closed or reloaded. The initial scratch process was terminated only after saving; the follow-up document was left saved and open.
 
 ## Fixed composition lifetime

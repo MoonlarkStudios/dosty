@@ -1,0 +1,205 @@
+{
+  "date": "2026-11-03",
+  "scope": "Native Excel for the web in Chrome on macOS; scratch workbook and synthetic documents only",
+  "test_app_versions": {
+    "7": "Native Excel HTML import and outgoing Office whitespace markup.",
+    "8": "Final build adds guarded textless-empty-cell paste; final empty, normal Excel matrix, and Sheets checks repeated."
+  },
+  "cases": [
+    {
+      "case": "Normal Dosty to Excel to Dosty, 5x4",
+      "status": "passed for displayed values, with Excel coercion limitation",
+      "artifact": "ExcelGeneralV8.md",
+      "app_version": 8,
+      "values": [
+        [
+          "plain",
+          "say \"hello\"",
+          "\"literal\"",
+          "end"
+        ],
+        [
+          "a\tb",
+          "line1\nline2",
+          "top\n\nbottom",
+          ""
+        ],
+        [
+          "日本語 café",
+          "é 🧑‍💻",
+          "**literal** | &amp; \\",
+          "  spaced  "
+        ],
+        [
+          "123",
+          "1.23457E+19",
+          "=1+1",
+          "11/3/2026"
+        ],
+        [
+          "",
+          "",
+          "",
+          ""
+        ]
+      ],
+      "notes": "Rich export preserves tab, edge spaces, quotes, line breaks, Unicode and final blank row. Excel General converts leading zeros, long IDs, and date-like values before copying back."
+    },
+    {
+      "case": "Text-formatted Excel destination with Paste Values, 5x4",
+      "status": "limitation reproduced",
+      "artifact": "ExcelValuesV7.md",
+      "app_version": 7,
+      "values": [
+        [
+          "plain",
+          "say \"hello\"",
+          "\"literal\"",
+          "end"
+        ],
+        [
+          "ab",
+          "line1\nline2",
+          "top\n\nbottom",
+          ""
+        ],
+        [
+          "日本語 café",
+          "é 🧑‍💻",
+          "**literal** | &amp; \\",
+          "  spaced  "
+        ],
+        [
+          "00123",
+          "12345678901234567890",
+          "=1+1",
+          "2026-11-03"
+        ],
+        [
+          "",
+          "",
+          "",
+          ""
+        ]
+      ],
+      "notes": "Literal IDs/date/formula-like text retained, but Excel removes the embedded tab. It was already absent in Excel formula bar before the return copy."
+    },
+    {
+      "case": "Identifier block to Text cells with Paste Values",
+      "status": "passed",
+      "artifact": "ExcelIdentifiersV7.md",
+      "app_version": 7,
+      "values": [
+        "00123",
+        "12345678901234567890",
+        "=1+1",
+        "2026-11-03"
+      ]
+    },
+    {
+      "case": "Excel native quote-only and adjacent quote fragment cells",
+      "status": "passed",
+      "artifact": "ExcelAmbiguous.md",
+      "app_version": 7
+    },
+    {
+      "case": "Excel displayed currency and percent",
+      "status": "passed",
+      "artifact": "ExcelFormatted.md",
+      "app_version": 7
+    },
+    {
+      "case": "Excel native tab, edge spaces and multiple line breaks",
+      "status": "passed",
+      "artifact": "ExcelWhitespaceV7.md",
+      "app_version": 7
+    },
+    {
+      "case": "Excel single blank cell without a text flavor",
+      "status": "passed after fix",
+      "artifact": "ExcelBlankSingleV8.md",
+      "before_artifact": "empty-before-fix.md",
+      "app_version": 8
+    },
+    {
+      "case": "Excel pair of blank cells",
+      "status": "passed",
+      "artifact": "ExcelBlankPairV8.md",
+      "app_version": 8
+    },
+    {
+      "case": "Excel one-column value followed by empty cell",
+      "status": "passed",
+      "artifact": "ExcelBlanksV7.md",
+      "app_version": 7
+    },
+    {
+      "case": "Dosty single empty cell to nonempty Excel cell",
+      "status": "passed",
+      "app_version": 7,
+      "notes": "Copied final-row blank cell, seeded Excel P25 with clear this, pasted blank, and verified empty formula bar."
+    },
+    {
+      "case": "Paste Undo/Redo and batched Select All Cut",
+      "status": "passed",
+      "artifacts": [
+        "cut.md",
+        "ExcelGeneral.md"
+      ],
+      "app_version": 7,
+      "notes": "All 20 values cleared; Cut Undo restored complete saved source byte-for-byte, including unterminated EOF."
+    },
+    {
+      "case": "Native textless-empty paste Undo",
+      "status": "passed",
+      "artifact": "ExcelGeneralV8.md",
+      "app_version": 8,
+      "notes": "Empty Excel A15 pasted over plain; one Undo restored complete saved source byte-for-byte."
+    },
+    {
+      "case": "Google Sheets regression round trip, 5x4",
+      "status": "passed",
+      "artifact": "SheetsRegressionV8.md",
+      "app_version": 8,
+      "notes": "All 20 original values retained without destination format changes; outgoing new whitespace export verified in version7 and final read repeated in version8."
+    }
+  ],
+  "automated": {
+    "ordinary_passed": 355,
+    "ordinary_ignored": 29,
+    "focused_filter_passed": 54,
+    "focused_filter_ignored": 2,
+    "format": "passed",
+    "strict_clippy": "passed",
+    "release": "passed"
+  },
+  "retained_limits": [
+    "Excel web General coercion and Paste Values tab removal prevent a universally lossless default round trip.",
+    "No apostrophes, formulas, zero-width prefixes, destination-specific copy controls, or hidden text were added to clipboard values.",
+    "Desktop Excel, other browsers/platforms, IME, accessibility, OS failures and input latency remain unverified."
+  ],
+  "method_notes": [
+    "Temporary synthetic-only clipboard capture instrumentation was removed before final checks and release.",
+    "Earlier scratch source resets conflicted with saved collaboration checkpoints; file guards rejected opens. Final cases used fresh paths without deleting checkpoints.",
+    "Native screenshots were inspected in-session; saved evidence contains only synthetic source and metadata digests."
+  ],
+  "privacy": "Workbook identifiers, account data, clipboard tracking timestamps/user hashes/copy IDs and browser accessibility trees are omitted.",
+  "artifact_sha256": {
+    "ExcelAmbiguous.md": "16bd9d655018d6cfd8e9a7524ade2b46144622c68f33937a25b51cdac4f704d1",
+    "ExcelBlankPairV8.md": "660810b5563fc9ac8ade5606ebc095e853d397ad1e97933ee76c6c33e5c6fb0c",
+    "ExcelBlankSingleV8.md": "205c4b15a0ef305748caf87602b1d41218dff77084fd9b46e1bb26887aa3a240",
+    "ExcelBlanksV7.md": "e1ed317caba9015277dcc943c32d564fac562164cddb2ef326783fc6271609ca",
+    "ExcelFormatted.md": "9ce0ea75abe68256a78f158b37adf32410200563fc3ea4e42cec65690d1c8bfa",
+    "ExcelGeneral.md": "a17b069081e92c12130146fcc51b6d460c5e0440d6d0f2f6b62cf9534f1fc6f9",
+    "ExcelGeneralV8.md": "5091bdd1e5e92debc906b29c3d9ffc7304ae21857139585338cc350a2640b333",
+    "ExcelIdentifiersV7.md": "3844ef72e5a6bf2ff03e055e1e2a5dcfab8a2a1c0194865db0cdad8369289f0b",
+    "ExcelValuesV7.md": "f4c8b4a92f50a505f5858921ab277d23d86070d0728260efcd099f9ad9ba4afe",
+    "ExcelWhitespaceV7.md": "711fdc76bcccdee2f6e4f03f73f3cf9db3c7e39e6af7a51faaed93da7041689d",
+    "SheetsRegressionV7.md": "71ba00527b9080ef9d7ff72e2d5d087f660649fed721bb9f9c9823b2f8bb3937",
+    "SheetsRegressionV8.md": "0fb210cebd9097915f590a1c0f587412833f7227709b9ddde88c919aa8c486cd",
+    "before-fix.md": "fe092e532099cc40007deac3d2dd83317c733f62d5876afee469e7153189a34e",
+    "cut.md": "ec6aac19ca6e464699044fb2c9d5ce45df81620af01e0c26624cd1a86def332b",
+    "empty-before-fix.md": "65604042abf8c38d6c0f091b9a4de0a087fdff129c1f935313f5c4653bbd8626",
+    "expected-values.json": "8f51a03c844004f4e6747d59d0c82f4bafb1575fa05ae30a39dd0ba4a5baa367"
+  }
+}

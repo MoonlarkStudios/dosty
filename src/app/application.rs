@@ -36,6 +36,10 @@ pub(crate) mod footnotes;
 pub(crate) mod outline;
 #[path = "recovery.rs"]
 pub(crate) mod recovery;
+#[path = "table.rs"]
+pub(crate) mod table;
+#[path = "table_grid.rs"]
+pub(crate) mod table_grid;
 #[path = "writing.rs"]
 pub(crate) mod writing;
 
@@ -100,10 +104,16 @@ pub struct App {
     footnotes: footnotes::State,
     recovery: recovery::State,
     outline: outline::State,
+    table: table::State,
+    table_editing: Option<table::EditingCell>,
+    grid: table_grid::State,
+    native_table_clipboard: Option<Arc<crate::io::table_clipboard::Clipboard>>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    TableGrid(table_grid::Message),
+    Table(table::Message),
     Footnote(footnotes::Message),
     Outline(outline::Message),
     Writing(writing::Message),
@@ -226,6 +236,7 @@ pub enum SidebarTab {
 
 #[derive(Debug, Clone, Copy)]
 enum Overlay {
+    Table,
     QuickJump,
     Settings,
     Collaboration,
@@ -307,6 +318,13 @@ impl App {
             footnotes: footnotes::State::default(),
             recovery: recovery::State::default(),
             outline: outline::State::default(),
+            table: table::State::default(),
+            table_editing: None,
+            grid: table_grid::State::default(),
+            // Model/widget tests use their supplied Iced clipboard. Native
+            // ownership and extra flavors are exercised in desktop validation.
+            native_table_clipboard: (!cfg!(test))
+                .then(|| Arc::new(crate::io::table_clipboard::Clipboard::default())),
         };
         app.sync_editor();
         app.selection = app.projection.normalize_caret(app.selection);
@@ -367,7 +385,11 @@ impl App {
             } else {
                 Subscription::none()
             },
-            iced::event::listen_with(event_message),
+            iced::event::listen_with(if matches!(self.overlay, Some(Overlay::Table)) {
+                table::event_message
+            } else {
+                event_message
+            }),
         ])
     }
 
@@ -387,7 +409,134 @@ impl App {
         )
     }
 
-    fn update_message(&mut self, message: Message) -> Task<Message> {
+    fn update_message(&mut self, mut message: Message) -> Task<Message> {
+        let leaving_grid = matches!(
+            message,
+            Message::Outline(
+                outline::Message::Jump(_)
+                    | outline::Message::Move(_)
+                    | outline::Message::Drop(_)
+                    | outline::Message::Accept
+            ) | Message::Footnote(footnotes::Message::OpenAt(_) | footnotes::Message::Back)
+                | Message::Writing(
+                    writing::Message::OpenAt(_)
+                        | writing::Message::ImageAt(_)
+                        | writing::Message::Sample
+                )
+        ) || matches!(
+            message,
+            Message::Select(_)
+                | Message::SelectSource(_)
+                | Message::Edit(_)
+                | Message::ToggleSource
+                | Message::ToggleReading
+                | Message::Format(_)
+                | Message::Activate(_)
+                | Message::JumpTo(_)
+                | Message::Append
+                | Message::Navigate(_)
+                | Message::FindNext
+                | Message::FindPrevious
+                | Message::Replace
+                | Message::ReplaceAll
+        );
+        if (leaving_grid
+            || matches!(
+                message,
+                Message::Select(_)
+                    | Message::SelectSource(_)
+                    | Message::Edit(_)
+                    | Message::Undo
+                    | Message::Redo
+                    | Message::ToggleSource
+                    | Message::ToggleReading
+                    | Message::Format(_)
+                    | Message::Save
+                    | Message::SaveAs
+                    | Message::New
+                    | Message::Open
+                    | Message::OpenPath(_)
+                    | Message::Guide
+                    | Message::Welcome
+                    | Message::CloseRequested(_)
+                    | Message::Dropped(_)
+                    | Message::ConfirmSave
+                    | Message::Export
+                    | Message::ShowSettings
+                    | Message::ShowCollaboration
+                    | Message::Writing(
+                        writing::Message::Details(_)
+                            | writing::Message::PickImage
+                            | writing::Message::Paste(_)
+                            | writing::Message::OpenAt(_)
+                            | writing::Message::ImageAt(_)
+                            | writing::Message::Sample
+                            | writing::Message::ResumeImage
+                    )
+                    | Message::Footnote(_)
+                    | Message::Outline(
+                        outline::Message::Toggle(_)
+                            | outline::Message::FoldAll(_)
+                            | outline::Message::FoldCurrent(_)
+                            | outline::Message::Jump(_)
+                            | outline::Message::Move(_)
+                            | outline::Message::BeginDrag(_)
+                            | outline::Message::Drop(_)
+                            | outline::Message::QuickJump
+                            | outline::Message::Accept
+                    )
+            ))
+            && !self.loading
+            && self.overlay.is_none()
+        {
+            // Background outline cancellation is emitted on every mouse
+            // release. Only intentional navigation/actions finish a draft.
+            let stable = if self.grid.draft.is_some()
+                && let Message::SelectSource(selection) = message
+            {
+                Some(self.document.collaboration.selection(selection))
+            } else {
+                None
+            };
+            let stable_point = if self.grid.draft.is_some() {
+                match &message {
+                    Message::Writing(
+                        writing::Message::OpenAt(point) | writing::Message::ImageAt(point),
+                    )
+                    | Message::Footnote(footnotes::Message::OpenAt(point)) => Some(
+                        self.document
+                            .collaboration
+                            .position(*point, yrs::Assoc::After),
+                    ),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if !self.commit_cell() {
+                return Task::none();
+            }
+            if let Some(stable) = stable
+                && let Some(selection) = self.document.collaboration.resolve_selection(&stable)
+            {
+                message = Message::SelectSource(selection);
+            }
+            if let Some(point) = stable_point
+                .as_ref()
+                .and_then(|p| self.document.collaboration.resolve(p))
+            {
+                match &mut message {
+                    Message::Writing(
+                        writing::Message::OpenAt(target) | writing::Message::ImageAt(target),
+                    )
+                    | Message::Footnote(footnotes::Message::OpenAt(target)) => *target = point,
+                    _ => {}
+                }
+            }
+            if leaving_grid {
+                self.clear_grid();
+            }
+        }
         if self.loading
             && matches!(
                 message,
@@ -452,6 +601,8 @@ impl App {
             return Task::none();
         }
         match message {
+            Message::TableGrid(message) => return self.update_grid(message),
+            Message::Table(message) => return self.update_table(message),
             Message::Footnote(message) => return self.update_footnote(message),
             Message::Outline(message) => return self.update_outline(message),
             Message::Writing(message) => return self.update_writing(message),
@@ -708,6 +859,7 @@ impl App {
             }
             Message::Format(format) => return self.format(format),
             Message::Undo | Message::Redo => {
+                let grid = self.grid_view();
                 let selection = if matches!(message, Message::Undo) {
                     self.document.history(EditOrigin::Human, false)
                 } else {
@@ -726,6 +878,11 @@ impl App {
                     }
                     self.selection = selection;
                     self.sync_editor();
+                    if let Some(selection) = self.document.take_history_table_selection() {
+                        self.restore_clipboard_selection(selection);
+                    } else if let Some(grid) = grid {
+                        self.restore_grid(grid);
+                    }
                     self.changed();
                     return operation::focus(EDITOR);
                 }
@@ -910,6 +1067,7 @@ impl App {
             }
             Message::CloseOverlay => {
                 let quick_jump = matches!(self.overlay, Some(Overlay::QuickJump));
+                let table = matches!(self.overlay, Some(Overlay::Table));
                 drop(self.update_outline(outline::Message::CancelDrag));
                 if !self.busy {
                     if self.overlay.is_none() {
@@ -922,8 +1080,13 @@ impl App {
                     self.overlay = None;
                     self.writing.close_details();
                     self.footnotes.close();
+                    self.table = table::State::default();
                     self.pending = None;
-                    if quick_jump {
+                    if table {
+                        self.editor_focused = true;
+                        self.sync_editor();
+                    }
+                    if quick_jump || table {
                         return operation::focus(EDITOR);
                     }
                 }
@@ -1160,27 +1323,88 @@ impl App {
             }
             return Task::none();
         }
+        if self.mode == EditorMode::Live && !before.is_caret() {
+            let text = match &action {
+                text_editor::Action::Edit(text_editor::Edit::Insert(character)) => {
+                    Some(character.to_string())
+                }
+                text_editor::Action::Edit(text_editor::Edit::Paste(text)) => Some(text.to_string()),
+                text_editor::Action::Edit(text_editor::Edit::Enter) => Some("\n".into()),
+                text_editor::Action::Edit(
+                    text_editor::Edit::Backspace | text_editor::Edit::Delete,
+                ) => Some(String::new()),
+                _ => None,
+            };
+            if let Some(text) = text {
+                if let Some(edit) = table_edit::replace_document_selection(
+                    &self.projection,
+                    self.document.source(),
+                    before,
+                    &text,
+                ) {
+                    self.apply_table_input(
+                        edit,
+                        !matches!(
+                            &action,
+                            text_editor::Action::Edit(text_editor::Edit::Insert(_))
+                        ),
+                    );
+                    return Task::none();
+                }
+                let selected = before.range();
+                if self.projection.rich.tables.iter().any(|table| {
+                    table.source_range.start <= selected.start
+                        && selected.end <= table.source_range.end
+                }) && table_edit::cell_at(&self.projection, before).is_none()
+                {
+                    return Task::none();
+                }
+            }
+        }
         if self.mode == EditorMode::Live
             && let Some((table, row, column)) = table_edit::cell_at(&self.projection, before)
         {
             let cell = &table.rows[row][column];
             let display = self.projection.display_selection(before);
-            if matches!(action, text_editor::Action::Edit(text_editor::Edit::Enter)) {
-                return self.table_move(false, true);
-            }
-            if matches!(&action, text_editor::Action::Edit(text_editor::Edit::Paste(text)) if text.as_str() == "\n")
-            {
-                let end = table.source_range.end;
-                let text = if self.document.source()[..end].ends_with('\n') {
-                    "\n"
-                } else {
-                    "\n\n"
-                };
-                self.apply_table_edit(projection::ProjectedEdit {
-                    range: end..end,
-                    text: text.into(),
-                    selection: Selection::caret(end + text.len()),
-                });
+            let inline = match &action {
+                text_editor::Action::Edit(text_editor::Edit::Insert('|'))
+                    if self.document.source()[..before.head]
+                        .bytes()
+                        .rev()
+                        .take_while(|&byte| byte == b'\\')
+                        .count()
+                        % 2
+                        == 0 =>
+                {
+                    Some("|")
+                }
+                text_editor::Action::Edit(text_editor::Edit::Insert(' '))
+                    if display.head == cell.start
+                        || display.head == cell.end
+                        || self.projection.at_inline_boundary(before) =>
+                {
+                    Some(" ")
+                }
+                text_editor::Action::Edit(text_editor::Edit::Enter) => Some("\n"),
+                text_editor::Action::Edit(text_editor::Edit::Paste(text))
+                    if !text.contains('\t') =>
+                {
+                    Some(text.as_str())
+                }
+                _ => None,
+            };
+            if let Some(text) = inline {
+                if let Some(edit) =
+                    table_edit::insert_text(&self.projection, self.document.source(), before, text)
+                {
+                    self.apply_table_input(
+                        edit,
+                        !matches!(
+                            &action,
+                            text_editor::Action::Edit(text_editor::Edit::Insert(_))
+                        ),
+                    );
+                }
                 return Task::none();
             }
             if before.is_caret() {
@@ -1192,21 +1416,7 @@ impl App {
                     matches!(action, text_editor::Action::Edit(text_editor::Edit::Delete))
                         && display.head == cell.end;
                 if backward || forward {
-                    let cells = table.rows.iter().flatten().collect::<Vec<_>>();
-                    let index = cells.iter().position(|range| *range == cell).unwrap_or(0);
-                    let point = if backward {
-                        index
-                            .checked_sub(1)
-                            .and_then(|index| cells.get(index))
-                            .map_or(cell.start.saturating_sub(1), |cell| cell.end)
-                    } else {
-                        cells
-                            .get(index + 1)
-                            .map_or((cell.end + 1).min(self.projection.text.len()), |cell| {
-                                cell.start
-                            })
-                    };
-                    return self.update_message(Message::Select(Selection::caret(point)));
+                    return Task::none();
                 }
             }
             let text = match &action {
@@ -1237,7 +1447,12 @@ impl App {
                 return Task::none();
             }
         }
+        let inserted = matches!(
+            &action,
+            text_editor::Action::Edit(text_editor::Edit::Insert(_))
+        );
         let edited = action.is_edit();
+        let moving = matches!(action, text_editor::Action::Move(_));
         if self.mode == EditorMode::Live && before.is_caret() {
             let source = self.document.source();
             let line_start = source[..before.head].rfind('\n').map_or(0, |i| i + 1);
@@ -1334,9 +1549,31 @@ impl App {
                 self.document.break_history_group();
             }
             self.sync_editor();
+            if moving
+                && self.mode == EditorMode::Live
+                && self.selection.is_caret()
+                && let Some((table, row, column)) =
+                    table_edit::cell_at(&self.projection, self.selection)
+            {
+                let table = self
+                    .projection
+                    .rich
+                    .tables
+                    .iter()
+                    .position(|t| std::ptr::eq(t, table))
+                    .unwrap();
+                return self.update_grid(table_grid::Message::Select {
+                    revision: Arc::clone(&self.projection.source_id),
+                    table,
+                    row,
+                    column,
+                    extend: false,
+                    extent: table_grid::Extent::Cell,
+                });
+            }
             return Task::none();
         }
-        let edit = if self.mode == EditorMode::Source {
+        let mut edit = if self.mode == EditorMode::Source {
             let diff = projection::difference(self.document.source(), after);
             projection::ProjectedEdit {
                 range: diff.old,
@@ -1347,6 +1584,9 @@ impl App {
             self.projection
                 .edit(self.document.source(), after, before, display_selection)
         };
+        if self.mode == EditorMode::Live && inserted {
+            table_edit::interior_spaces(&self.projection, self.document.source(), &mut edit);
+        }
         if self.document.source().len() - edit.range.len() + edit.text.len()
             > storage::MAX_FILE_BYTES as usize
         {
@@ -1374,11 +1614,13 @@ impl App {
         self.selection = self.selection.clamp(self.document.source());
         let caret =
             (self.mode == EditorMode::Live && self.editor_focused).then_some(self.selection.head);
+        let cell = self.editing_cell_range();
         let previous_highlights = Arc::clone(&self.projection.highlights);
         if self.projection_revision != Some(self.document.revision) {
             let previous_revision = self.projection_revision;
             self.projection_revision = Some(self.document.revision);
-            let updated = self.projection.update_words(self.document.source(), caret)
+            let updated = (cell.is_none()
+                && self.projection.update_words(self.document.source(), caret))
                 || (self
                     .document
                     .block_changes
@@ -1388,15 +1630,19 @@ impl App {
                         self.document.source(),
                         &self.document.block_changes,
                         caret,
+                        cell.clone(),
                     ));
             if !updated {
-                self.projection = Projection::with_context(self.document.source(), caret);
+                self.projection =
+                    Projection::with_editing_cell(self.document.source(), caret, cell);
             }
-        } else {
-            let disclosure = self.projection.disclosure_at(caret);
-            if self.projection.disclosure != disclosure {
-                self.projection.set_disclosure(disclosure);
-            }
+        }
+        self.sync_table_editing();
+        let disclosure = self
+            .projection
+            .disclosure_with_editing_cell(caret, self.editing_cell_range());
+        if self.projection.disclosure != disclosure {
+            self.projection.set_disclosure(disclosure);
         }
         let native_edited = std::mem::take(&mut self.native_edited);
         let current = self.editor.snapshot();
@@ -1474,6 +1720,30 @@ impl App {
         self.document.break_history_group();
     }
 
+    fn apply_table_plan(&mut self, edit: table_edit::TableEdit, separate: bool) -> bool {
+        if edit.edits.is_empty() {
+            return false;
+        }
+        let before = self.selection;
+        match self.document.transact(
+            &edit.edits,
+            crate::document::collaboration::EditOrigin::Human,
+            Some((before, edit.selection)),
+            separate,
+        ) {
+            Ok(()) => {
+                self.selection = edit.selection;
+                self.sync_editor();
+                self.changed();
+                true
+            }
+            Err(error) => {
+                self.notification = Some(error.to_string());
+                false
+            }
+        }
+    }
+
     fn toggle_task(&mut self, marker: Range<usize>) {
         if self.projection.task_marker_at(marker.start) != Some(marker.clone()) {
             return;
@@ -1495,48 +1765,68 @@ impl App {
     }
 
     fn table_tab(&mut self, backward: bool) -> Task<Message> {
-        self.table_move(backward, false)
+        self.table_move(backward)
     }
 
-    fn table_move(&mut self, backward: bool, next_row: bool) -> Task<Message> {
-        let Some((table, row, column)) = table_edit::cell_at(&self.projection, self.selection)
+    fn table_move(&mut self, backward: bool) -> Task<Message> {
+        let Some((table, row, column)) =
+            table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
         else {
             return Task::none();
         };
-        let target = if next_row {
-            table.rows.get(row + 1).and_then(|row| row.get(column))
-        } else {
-            let cells = table.rows.iter().flatten().collect::<Vec<_>>();
-            let index = cells
-                .iter()
-                .position(|cell| **cell == table.rows[row][column])
-                .unwrap_or(0);
-            if backward {
-                index
-                    .checked_sub(1)
-                    .and_then(|index| cells.get(index).copied())
+        let columns = table.alignment.len();
+        let target = if backward {
+            if column > 0 {
+                Some((row, column - 1))
             } else {
-                cells.get(index + 1).copied()
+                row.checked_sub(1).map(|row| (row, columns - 1))
             }
+        } else if column + 1 < columns {
+            Some((row, column + 1))
+        } else {
+            table.rows.get(row + 1).map(|_| (row + 1, 0))
         };
-        if let Some(cell) = target {
-            let point = cell.start;
-            return self.update_message(Message::Select(Selection::caret(point)));
+        if let Some((row, column)) = target {
+            if let Some(edit) =
+                table_edit::materialize_cell(self.document.source(), row, column, table)
+            {
+                self.apply_table_plan(edit, true);
+                return Task::none();
+            }
+            let cell = &table.rows[row][column];
+            self.selection = Selection {
+                anchor: self
+                    .projection
+                    .to_source(cell.start, projection::Affinity::After, None),
+                head: self
+                    .projection
+                    .to_source(cell.end, projection::Affinity::Before, None),
+            };
+            self.editor_focused = true;
+            self.document.break_history_group();
+            self.sync_editor();
+            return Task::none();
         }
         if !backward {
             let end = table.source_range.end;
             let prefix = table_edit::row_prefix(self.document.source(), table);
-            let newline = if self.document.source()[..end].ends_with('\n') {
-                ""
+            let ending = if self.document.source()[table.source_range.clone()].contains("\r\n") {
+                "\r\n"
+            } else if self.document.source()[table.source_range.clone()].contains('\r') {
+                "\r"
             } else {
                 "\n"
             };
+            let newline = if self.document.source()[..end].ends_with(['\r', '\n']) {
+                ""
+            } else {
+                ending
+            };
             let text = format!(
-                "{newline}{prefix}|{}\n",
+                "{newline}{prefix}|{}{ending}",
                 "  |".repeat(table.alignment.len())
             );
-            let point =
-                end + newline.len() + prefix.len() + 3 + if next_row { column * 3 } else { 0 };
+            let point = end + newline.len() + prefix.len() + 3;
             self.apply_table_edit(projection::ProjectedEdit {
                 range: end..end,
                 text,
@@ -1808,6 +2098,9 @@ impl App {
         self.writing = writing::State::default();
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
+        self.table = table::State::default();
+        self.table_editing = None;
+        self.grid = table_grid::State::default();
         self.images.clear_history();
         self.overlay = None;
         self.document = document;
@@ -1941,14 +2234,27 @@ impl App {
         .height(Fill);
         let mut layers = stack![base];
         if let Some(overlay) = self.overlay {
-            let backdrop = mouse_area(
-                container(space())
-                    .width(Fill)
-                    .height(Fill)
-                    .style(styles::panel(tokens.scrim)),
-            )
+            let backdrop = mouse_area(container(space()).width(Fill).height(Fill).style(
+                styles::panel(
+                    if matches!(overlay, Overlay::Table) && self.table.is_menu() {
+                        iced::Color::TRANSPARENT
+                    } else {
+                        tokens.scrim
+                    },
+                ),
+            ))
             .on_press(Message::CloseOverlay);
+            let backdrop = if matches!(overlay, Overlay::Table) && self.table.is_menu() {
+                backdrop
+                    .on_right_press(Message::CloseOverlay)
+                    .on_scroll(|_| Message::CloseOverlay)
+            } else {
+                backdrop
+            };
             let modal = responsive(move |size| {
+                if matches!(overlay, Overlay::Table) && self.table.is_menu() {
+                    return self.table_menu_view(size);
+                }
                 let modal = match overlay {
                     Overlay::Settings => self.settings_view((size.height - 48.0).min(760.0)),
                     Overlay::Collaboration => self.collaboration_view(),
@@ -1957,6 +2263,7 @@ impl App {
                     Overlay::Footnote => self.footnote_view(),
                     Overlay::Recovery => self.recovery_view(),
                     Overlay::QuickJump => self.quick_jump_view(),
+                    Overlay::Table => self.table_view(),
                 };
                 container(
                     scrollable(container(modal).padding(16))
@@ -2237,6 +2544,8 @@ impl App {
             .zoom(self.zoom)
             .selection(self.selection)
             .focused(self.editor_focused)
+            .table_grid(self.grid_view(), self.cell_editor())
+            .table_resume(self.grid_resume())
             .into();
         }
         let tokens = self.resolved_theme.tokens;
@@ -2283,6 +2592,11 @@ impl App {
         ] {
             let message = if matches!(format, Format::Quote) {
                 Message::Writing(writing::Message::Details(writing::Kind::Quote))
+            } else if matches!(format, Format::Table)
+                && table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
+                    .is_some()
+            {
+                Message::Table(table::Message::OpenMenu)
             } else {
                 Message::Format(format)
             };
@@ -2297,7 +2611,7 @@ impl App {
                 Format::List => "List",
                 Format::Task => "Task",
                 Format::Fence => "Code block",
-                Format::Table => "Table",
+                Format::Table => "Insert table / table controls · ⌘/Ctrl Shift T",
             };
             toolbar = toolbar.push(self.icon_button(kind, hint, message, false));
         }
@@ -2566,6 +2880,7 @@ impl App {
             ("Create / edit link", "⌘/Ctrl K"),
             ("Toggle current task", "⌘/Ctrl Enter"),
             ("Create / edit footnote", "⌘/Ctrl Shift N"),
+            ("Table row / column controls", "⌘/Ctrl Shift T"),
             ("Live preview / source", "⌘/Ctrl Shift M"),
             ("Focus mode", "⌘/Ctrl Shift F"),
             ("Previous / next block", "Alt ↑ / ↓"),
@@ -2907,7 +3222,9 @@ fn editor_binding(press: text_editor::KeyPress) -> Option<text_editor::Binding<M
             });
         }
     }
-    if matches!(press.key, Key::Named(key::Named::Tab)) {
+    if matches!(press.key, Key::Named(key::Named::Tab))
+        && (press.modifiers.is_empty() || press.modifiers == keyboard::Modifiers::SHIFT)
+    {
         return Some(text_editor::Binding::Custom(Message::Edit(
             text_editor::Action::Edit(if press.modifiers.shift() {
                 text_editor::Edit::Unindent
@@ -2990,6 +3307,7 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
         Key::Character(character) if modifiers.command() => {
             match character.to_ascii_lowercase().as_str() {
                 "n" if modifiers.shift() => Some(Message::Footnote(footnotes::Message::Details)),
+                "t" if modifiers.shift() => Some(Message::Table(table::Message::OpenMenu)),
                 "n" => Some(Message::New),
                 "o" => Some(Message::Open),
                 "s" => Some(if modifiers.shift() {
@@ -3621,25 +3939,27 @@ mod tests {
         assert_eq!(app.selection, before);
         send(&mut app, Message::TableTab(false));
         type_text(&mut app, "New ");
-        assert!(app.document.source().contains("| first | New last |"));
+        assert!(app.document.source().contains("| first | New&#32; |"));
         send(&mut app, Message::Edit(Action::Edit(Edit::Enter)));
-        assert_eq!(app.projection.rich.tables[0].rows.len(), 3);
+        assert_eq!(app.projection.rich.tables[0].rows.len(), 2);
         assert_eq!(
             table_edit::cell_at(&app.projection, app.selection)
                 .map(|(_, row, column)| (row, column)),
-            Some((2, 1))
+            Some((1, 1))
         );
         type_text(&mut app, "Next");
         assert_eq!(
-            &app.projection.text[app.projection.rich.tables[0].rows[2][1].clone()],
-            "Next"
+            &app.projection.text[app.projection.rich.tables[0].rows[1][1].clone()],
+            "New \nNext"
         );
         send(
             &mut app,
             Message::Edit(Action::Edit(Edit::Paste(Arc::new("\n".into())))),
         );
+        assert_eq!(app.projection.rich.tables[0].rows.len(), 2);
+        send(&mut app, Message::Table(crate::app::TableMessage::Exit));
         type_text(&mut app, "Outside");
-        assert_eq!(app.projection.rich.tables[0].rows.len(), 3);
+        assert_eq!(app.projection.rich.tables[0].rows.len(), 2);
         assert!(app.document.source().contains("\n\nOutside\nAfter"));
     }
 

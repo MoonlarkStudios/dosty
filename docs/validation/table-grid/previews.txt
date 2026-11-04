@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.48s
+     Running unittests src/lib.rs (target/debug/deps/dosty-b6624e0a52621333)
+
+running 1 test
+test app::application::theme_tests::table_grid_previews ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 297 filtered out; finished in 3.86s
+
+     Running unittests src/main.rs (target/debug/deps/dosty-da2bef467f59cd8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

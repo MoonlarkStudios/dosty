@@ -10,6 +10,17 @@ pub struct Selection {
     pub head: usize,
 }
 
+/// Local spreadsheet selection restored with the transaction's source history.
+/// The table start is a UTF-8 source offset; cell coordinates retain implicit
+/// empty cells that cannot be distinguished by source positions alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TableSelection {
+    pub source: usize,
+    pub anchor: (usize, usize),
+    pub head: (usize, usize),
+    pub active: (usize, usize),
+}
+
 impl Selection {
     pub fn caret(offset: usize) -> Self {
         Self {

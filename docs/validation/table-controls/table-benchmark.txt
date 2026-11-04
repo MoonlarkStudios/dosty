@@ -1,0 +1,23 @@
+   Compiling dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `release` profile [optimized] target(s) in 1m 03s
+     Running unittests src/lib.rs (target/release/deps/dosty-1ffcfc106c452b2a)
+
+running 1 test
+test app::application::table::tests::performance_table_controls ... table rows=1000 command=RowAfter samples=30 ms p50=1.531 p95=1.872 max=1.938
+table rows=1000 command=ColumnAfter samples=30 ms p50=36.831 p95=37.406 max=37.685
+table rows=1000 command=DeleteColumn samples=30 ms p50=37.942 p95=38.203 max=38.366
+table rows=1000 command=Align(Right) samples=30 ms p50=1.575 p95=1.737 max=1.834
+table rows=5000 command=RowAfter samples=30 ms p50=8.067 p95=8.894 max=8.894
+table rows=5000 command=ColumnAfter samples=30 ms p50=838.486 p95=844.333 max=869.331
+table rows=5000 command=DeleteColumn samples=30 ms p50=868.671 p95=893.018 max=906.257
+table rows=5000 command=Align(Right) samples=30 ms p50=8.051 p95=8.178 max=8.284
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 256 filtered out; finished in 58.22s
+
+     Running unittests src/main.rs (target/release/deps/dosty-4d5da996bcc98527)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,17 @@
+   Compiling dosty v0.1.0-alpha.1 (/Users/johnslaughter/Development/dosty)
+    Finished `release` profile [optimized] target(s) in 1m 09s
+     Running unittests src/lib.rs (target/release/deps/dosty-1ffcfc106c452b2a)
+
+running 1 test
+test app::application::table_grid::tests::clipboard::bulk_widget_paste_measurements ... bulk-widget-paste rows=1000 columns=3 samples=5 min_ms=6.494 median_ms=6.723 max_ms=7.466; real keyboard command through app update, widget focus, and layout; setup, correctness, and undo excluded
+bulk-widget-paste rows=5000 columns=3 samples=5 min_ms=76.104 median_ms=78.676 max_ms=82.725; real keyboard command through app update, widget focus, and layout; setup, correctness, and undo excluded
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 348 filtered out; finished in 0.55s
+
+     Running unittests src/main.rs (target/release/deps/dosty-4d5da996bcc98527)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

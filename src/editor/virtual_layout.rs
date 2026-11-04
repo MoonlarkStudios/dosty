@@ -489,6 +489,11 @@ fn estimate(unit: &LayoutUnit, input: LayoutInput<'_>) -> f32 {
                     flow(cell.clone(), body, width - padding * 2.0, row == 0) + padding * 2.0
                 })
                 .fold(body * line_height + padding * 2.0, f32::max)
+                + if row == 0 {
+                    styles::TABLE_TOP_SPACING * input.zoom
+                } else {
+                    0.0
+                }
         }
     }
 }
@@ -692,7 +697,8 @@ mod tests {
                 assert!(projection.update_blocks(
                     source,
                     document.block_changes.first().unwrap(),
-                    Some(*head)
+                    Some(*head),
+                    None
                 ));
             };
         for step in 0..56 {
@@ -721,7 +727,8 @@ mod tests {
                             || projection.update_blocks(
                                 &source,
                                 document.block_changes.first().unwrap(),
-                                Some(head)
+                                Some(head),
+                                None
                             )
                     );
                 }
@@ -789,6 +796,57 @@ mod tests {
                 );
             }
             assert!(window.known_heights.len() <= window.units.len() * 2);
+        }
+    }
+
+    #[test]
+    fn cell_space_disclosure_matches_fresh_geometry_in_a_virtual_window() {
+        let source = format!(
+            "{}| A | B |\n|---|---|\n|     word       | right |\n\n{}",
+            "Paragraph before.\n\n".repeat(160),
+            "Paragraph after.\n\n".repeat(160)
+        );
+        let mut projection = Projection::new(&source);
+        let cell = projection.rich.tables[0].source_rows[1][0].clone();
+        let theme = Preset::Paper.resolve();
+        let images = ImageStore::default();
+        let mut window = VirtualLayout::default();
+        for count in [0, 1, 3, 0, 2, 0] {
+            let head = cell.end + count;
+            let editing = (count > 0).then_some(cell.start..head);
+            projection.set_disclosure(projection.disclosure_with_editing_cell(Some(head), editing));
+            let input = LayoutInput {
+                projection: &projection,
+                theme: &theme,
+                images: &images,
+                zoom: 1.0,
+                width: 450.0,
+                base: None,
+            };
+            window.rebuild(input);
+            window.show_source(input, head, 500.0);
+            assert_eq!(window.units, layout_units(&projection));
+            let mut fresh = RichLayout::default();
+            fresh.rebuild_units(
+                input,
+                &window.units[window.resident.clone()],
+                window.top(window.resident.start),
+            );
+            rectangle(
+                window.source_caret(head, None),
+                fresh.source_caret(head, None),
+            );
+            assert_eq!(
+                window.geometry.source_selection_rects(Selection {
+                    anchor: cell.end,
+                    head
+                }),
+                fresh.source_selection_rects(Selection {
+                    anchor: cell.end,
+                    head
+                })
+            );
+            assert_eq!(projection.source, source);
         }
     }
 

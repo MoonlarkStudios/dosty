@@ -15,6 +15,7 @@ describe the remaining platform, accessibility, and durability work.
 | [Outline](outline.md) | Heading search, collapse state and section moves |
 | [Code editing](code-editing.md) | Fences, indentation, clipboard behavior and bounded highlighting |
 | [Task lists](task-lists.md) | Live checkbox interactions, keyboard toggling and source-preserving history |
+| [Table editing](table-editing.md) | Quiet tables, spreadsheet selections and clipboard, document navigation, contextual controls and source-preserving history |
 | [Strikethrough](strikethrough.md) | Live inline rendering, formatting, disclosure and measured strike geometry |
 | [Footnotes](footnotes.md) | Numbered references, checked note editing, previews and navigation |
 | [Appearance](design-system.md) | Semantic tokens, typography, presets and UI validation |
@@ -46,6 +47,14 @@ hardware, sample counts and exclusions live with each report.
 10. [Writing workflows and retention](writing-workflows.md#reproducible-performance)
 11. [Code highlighting](code-editing.md#measurements)
 12. [Outline operations](outline.md#release-measurements)
+13. [Table controls](table-editing.md#release-measurements-2026-10-30)
+14. [Large-table column transactions](table-column-performance.md)
+15. [Document table interactions](table-editing.md#document-table-interaction-validation-2026-10-30)
+16. [Spreadsheet table interactions](table-editing.md#spreadsheet-interaction-validation-2026-11-01)
+17. [Contextual table presentation](table-editing.md#table-presentation-validation-2026-11-02)
+18. [Multi-cell clipboard](table-editing.md#multi-cell-clipboard-validation-2026-11-03)
+19. [Native Google Sheets clipboard](table-editing.md#native-google-sheets-clipboard-validation-2026-11-03)
+20. [Native Excel Web clipboard](table-editing.md#native-excel-web-clipboard-validation-2026-11-03)
 
 [Native macOS validation](native-writing-validation.md) distinguishes observed
 clipboard/drop/input behavior from model tests and records outstanding platform

@@ -17,7 +17,10 @@ use iced::widget::text_editor::{Action, Binding, Content, Edit, KeyPress, Motion
 use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector, window};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::app::{FootnoteMessage, Message, WritingMessage};
+use crate::app::{
+    FootnoteMessage, Message, TableExtent, TableGridMessage, TableGridView, TableMessage,
+    WritingMessage,
+};
 use crate::document::collaboration::{Collaboration, CompositionTarget, StablePosition};
 use crate::document::projection::{HighlightLines, Projection};
 use crate::document::selection::Selection;
@@ -40,9 +43,88 @@ pub struct RichEditor<'a> {
     app_focused: bool,
     preserve_viewport: bool,
     key_binding: fn(KeyPress) -> Option<Binding<Message>>,
+    grid: Option<TableGridView>,
+    grid_resume: Option<TableGridView>,
+    cell_editor: Option<Element<'a, Message>>,
+}
+
+/// Locate the cell in the live widget so keyboard and toolbar menus share the
+/// pointer menu's measured, window-relative anchor without storing UI geometry.
+pub(crate) fn open_table_menu(
+    revision: Arc<()>,
+    table: usize,
+    row: usize,
+    column: usize,
+) -> iced::Task<Message> {
+    struct Locate {
+        revision: Arc<()>,
+        table: usize,
+        row: usize,
+        column: usize,
+        position: Option<Point>,
+    }
+    impl widget::Operation<Message> for Locate {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation<Message>)) {
+            operate(self);
+        }
+        fn custom(
+            &mut self,
+            _id: Option<&widget::Id>,
+            bounds: Rectangle,
+            state: &mut dyn std::any::Any,
+        ) {
+            if let Some(state) = state.downcast_mut::<State>() {
+                let cell = state
+                    .rich
+                    .resident()
+                    .cell_bounds(self.table, self.row, self.column);
+                self.position = Some(
+                    bounds.position()
+                        + Vector::new(
+                            cell.map_or(0.0, |cell| cell.x),
+                            cell.map_or(0.0, |cell| cell.y + cell.height - state.scroll)
+                                .clamp(0.0, bounds.height),
+                        ),
+                );
+            }
+        }
+        fn finish(&self) -> operation::Outcome<Message> {
+            self.position.map_or(operation::Outcome::None, |position| {
+                operation::Outcome::Some(Message::Table(TableMessage::OpenContext {
+                    revision: Arc::clone(&self.revision),
+                    table: self.table,
+                    row: self.row,
+                    column: self.column,
+                    position,
+                    extent: TableExtent::Cell,
+                }))
+            })
+        }
+    }
+    widget::operate(Locate {
+        revision,
+        table,
+        row,
+        column,
+        position: None,
+    })
 }
 
 impl<'a> RichEditor<'a> {
+    #[cfg(test)]
+    pub(crate) fn table_cell(
+        tree: &widget::Tree,
+        table: usize,
+        row: usize,
+        column: usize,
+    ) -> Option<Rectangle> {
+        let state = tree.state.downcast_ref::<State>();
+        state
+            .rich
+            .resident()
+            .cell_bounds(table, row, column)
+            .map(|rect| rect - Vector::new(0.0, state.scroll))
+    }
     #[cfg(test)]
     pub(crate) fn profile_stats(tree: &widget::Tree) -> (usize, usize) {
         let state = tree.state.downcast_ref::<State>();
@@ -92,6 +174,9 @@ impl<'a> RichEditor<'a> {
             app_focused: false,
             preserve_viewport: false,
             key_binding,
+            grid: None,
+            grid_resume: None,
+            cell_editor: None,
         }
     }
 
@@ -99,8 +184,21 @@ impl<'a> RichEditor<'a> {
         self.preserve_viewport = preserve;
         self
     }
+    pub(crate) fn table_grid(
+        mut self,
+        grid: Option<TableGridView>,
+        editor: Option<Element<'a, Message>>,
+    ) -> Self {
+        self.grid = grid;
+        self.cell_editor = editor;
+        self
+    }
     pub fn collaboration(mut self, collaboration: &'a Collaboration) -> Self {
         self.collaboration = Some(collaboration);
+        self
+    }
+    pub(crate) fn table_resume(mut self, grid: Option<TableGridView>) -> Self {
+        self.grid_resume = grid;
         self
     }
     pub fn base(mut self, base: Option<&'a Path>) -> Self {
@@ -266,6 +364,22 @@ impl<'a> RichEditor<'a> {
                             shell.capture_event();
                             return;
                         }
+                        if !selecting
+                            && let Some((table, row, column)) = state
+                                .rich
+                                .resident()
+                                .cell_at(Point::new(x, y + caret.height / 2.0))
+                        {
+                            shell.publish(Message::TableGrid(TableGridMessage::Select {
+                                revision: Arc::clone(&self.projection.source_id),
+                                table,
+                                row,
+                                column,
+                                extend: false,
+                                extent: TableExtent::Cell,
+                            }));
+                            return;
+                        }
                         state.set_visual_cursor(head, y);
                         Some(head)
                     }
@@ -327,6 +441,346 @@ impl<'a> RichEditor<'a> {
             Binding::Custom(message) => shell.publish(message),
         }
     }
+
+    fn keyboard_grid(&self) -> Option<TableGridView> {
+        self.grid.or(self.grid_resume).or_else(|| {
+            if !self.source_selection.is_caret() {
+                return None;
+            }
+            let (table, row, column) =
+                crate::document::table_edit::cell_at(self.projection, self.source_selection)?;
+            let table = self
+                .projection
+                .rich
+                .tables
+                .iter()
+                .position(|t| std::ptr::eq(t, table))?;
+            Some(TableGridView {
+                table,
+                anchor: (row, column),
+                head: (row, column),
+                active: (row, column),
+                editing: false,
+            })
+        })
+    }
+
+    fn activate_grid(&self, grid: TableGridView, shell: &mut Shell<'_, Message>) {
+        shell.publish(Message::TableGrid(TableGridMessage::Select {
+            revision: Arc::clone(&self.projection.source_id),
+            table: grid.table,
+            row: grid.active.0,
+            column: grid.active.1,
+            extend: false,
+            extent: TableExtent::Cell,
+        }));
+    }
+
+    fn leave_table_vertically(
+        &self,
+        state: &mut State,
+        bounds: Rectangle,
+        up: bool,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        let Some(grid) = self.keyboard_grid() else {
+            return false;
+        };
+        let table = &self.projection.rich.tables[grid.table];
+        if grid.active.0 != if up { 0 } else { table.rows.len() - 1 } {
+            return false;
+        }
+        // Prefer an existing outside destination. At the document edge, ask the
+        // App for a revision-checked paragraph insertion instead of leaving a
+        // caret that shares the last cell's source position.
+        let visible_outside = |index| match crate::document::table_edit::cell_at(
+            self.projection,
+            Selection::caret(index),
+        ) {
+            Some((candidate, _, _)) => !std::ptr::eq(candidate, table),
+            None => self.projection.text[self.projection.to_display(index)..]
+                .chars()
+                .next()
+                .is_some_and(|character| !character.is_whitespace()),
+        };
+        let outside = if up {
+            let prefix = &self.source[..table.source_range.start];
+            prefix
+                .char_indices()
+                .rev()
+                .find(|(index, c)| {
+                    !c.is_whitespace()
+                        && !self.projection.is_quote_marker(*index)
+                        && visible_outside(*index)
+                })
+                .map(|(index, _)| index)
+                .or_else(|| {
+                    if !prefix.chars().all(char::is_whitespace) {
+                        return None;
+                    }
+                    // Two existing line endings leave a blank separator even
+                    // after typing at the beginning of an otherwise empty page.
+                    let breaks = prefix
+                        .bytes()
+                        .enumerate()
+                        .filter(|&(i, byte)| {
+                            byte == b'\r'
+                                || byte == b'\n' && (i == 0 || prefix.as_bytes()[i - 1] != b'\r')
+                        })
+                        .take(2)
+                        .count();
+                    (breaks == 2).then_some(0)
+                })
+        } else {
+            let suffix = &self.source[table.source_range.end..];
+            suffix
+                .char_indices()
+                .find(|(index, c)| {
+                    !c.is_whitespace()
+                        && !self
+                            .projection
+                            .is_quote_marker(table.source_range.end + index)
+                        && visible_outside(table.source_range.end + index)
+                })
+                .map(|(index, _)| table.source_range.end + index)
+                .or_else(|| {
+                    (suffix.chars().all(char::is_whitespace) && suffix.contains(['\r', '\n']))
+                        .then_some(self.source.len())
+                })
+        };
+        let Some(outside) = outside else {
+            shell.publish(Message::TableGrid(TableGridMessage::ExitBoundary {
+                revision: Arc::clone(&self.projection.source_id),
+                table: grid.table,
+                row: grid.active.0,
+                column: grid.active.1,
+                up,
+            }));
+            state.preferred_x = None;
+            state.visual_cursor = None;
+            return true;
+        };
+        let blank_paragraph = if up {
+            self.source[..table.source_range.start]
+                .chars()
+                .all(char::is_whitespace)
+        } else {
+            self.source[table.source_range.end..]
+                .chars()
+                .all(char::is_whitespace)
+        };
+        if state
+            .rich
+            .resident()
+            .cell_bounds(grid.table, grid.active.0, grid.active.1)
+            .is_none()
+        {
+            state.scroll = state.rich.show_source(
+                self.layout_input(bounds.width),
+                table.source_rows[grid.active.0][grid.active.1].start,
+                bounds.height,
+            );
+        }
+        let Some(cell) =
+            state
+                .rich
+                .resident()
+                .cell_bounds(grid.table, grid.active.0, grid.active.1)
+        else {
+            return false;
+        };
+        let padding = (self.theme.typography.body_size * self.zoom * 0.65).min(cell.width / 4.0);
+        let x = state
+            .preferred_x
+            .unwrap_or(cell.x + padding)
+            .clamp(cell.x + padding, cell.x + cell.width - padding);
+        if !state.rich.contains_source(outside) {
+            state.scroll =
+                state
+                    .rich
+                    .show_source(self.layout_input(bounds.width), outside, bounds.height);
+        }
+        if let Some((target, _, _)) =
+            crate::document::table_edit::cell_at(self.projection, Selection::caret(outside))
+        {
+            let Some(index) = self
+                .projection
+                .rich
+                .tables
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, target))
+            else {
+                return false;
+            };
+            if index == grid.table {
+                return false;
+            }
+            let row = if up { target.rows.len() - 1 } else { 0 };
+            if state.rich.resident().cell_bounds(index, row, 0).is_none() {
+                state.scroll = state.rich.show_source(
+                    self.layout_input(bounds.width),
+                    target.source_rows[row][0].start,
+                    bounds.height,
+                );
+            }
+            let Some(target_cell) = state.rich.resident().cell_bounds(index, row, 0) else {
+                return false;
+            };
+            let Some((_, _, column)) = state
+                .rich
+                .resident()
+                .cell_at(Point::new(x, target_cell.center_y()))
+            else {
+                return false;
+            };
+            shell.publish(Message::TableGrid(TableGridMessage::Select {
+                revision: Arc::clone(&self.projection.source_id),
+                table: index,
+                row,
+                column,
+                extend: false,
+                extent: TableExtent::Cell,
+            }));
+            state.visual_cursor = None;
+        } else {
+            let Some((head, y)) = state.rich.resident().source_row_target(outside, x) else {
+                return false;
+            };
+            let head = if blank_paragraph {
+                outside
+            } else {
+                self.projection.normalize_caret(Selection::caret(head)).head
+            };
+            if crate::document::table_edit::cell_at(self.projection, Selection::caret(head))
+                .is_some()
+            {
+                return false;
+            }
+            state.set_visual_cursor(head, y);
+            shell.publish(Message::SelectSource(Selection::caret(head)));
+        }
+        state.preferred_x = Some(x);
+        true
+    }
+
+    fn grid_key(
+        &self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+        text: Option<&str>,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        use keyboard::key::Named;
+        let grid = self.keyboard_grid();
+        let adopt = |shell: &mut Shell<'_, Message>| {
+            if self.grid.is_none()
+                && let Some(grid) = grid
+            {
+                self.activate_grid(grid, shell);
+            }
+        };
+        let message = match key.as_ref() {
+            keyboard::Key::Named(
+                Named::ArrowUp | Named::ArrowDown | Named::ArrowLeft | Named::ArrowRight,
+            ) if !modifiers.alt() => {
+                let (rows, columns) = match key {
+                    keyboard::Key::Named(Named::ArrowUp) => (-1, 0),
+                    keyboard::Key::Named(Named::ArrowDown) => (1, 0),
+                    keyboard::Key::Named(Named::ArrowLeft) => (0, -1),
+                    _ => (0, 1),
+                };
+                if modifiers.command() || modifiers.control() {
+                    Some(TableGridMessage::Edge {
+                        rows,
+                        columns,
+                        extend: modifiers.shift(),
+                    })
+                } else {
+                    Some(TableGridMessage::Move {
+                        rows,
+                        columns,
+                        extend: modifiers.shift(),
+                    })
+                }
+            }
+            keyboard::Key::Named(Named::Enter) if modifiers.is_empty() => {
+                Some(TableGridMessage::Begin(None))
+            }
+            keyboard::Key::Named(Named::Enter) if modifiers.command() => {
+                Some(TableGridMessage::Commit(None))
+            }
+            keyboard::Key::Named(Named::Enter) if *modifiers == keyboard::Modifiers::SHIFT => {
+                Some(TableGridMessage::Commit(Some((-1, 0))))
+            }
+            keyboard::Key::Named(Named::Tab)
+                if modifiers.is_empty() || *modifiers == keyboard::Modifiers::SHIFT =>
+            {
+                Some(TableGridMessage::Tab(modifiers.shift()))
+            }
+            keyboard::Key::Named(Named::Delete | Named::Backspace) if modifiers.is_empty() => {
+                Some(TableGridMessage::Clear)
+            }
+            keyboard::Key::Named(Named::Escape) if self.grid.is_some() => {
+                Some(TableGridMessage::Cancel)
+            }
+            keyboard::Key::Named(Named::Home | Named::End) => Some(TableGridMessage::Boundary {
+                end: matches!(key, keyboard::Key::Named(Named::End)),
+                whole: modifiers.command() || modifiers.control(),
+                extend: modifiers.shift(),
+            }),
+            keyboard::Key::Named(Named::Space) if *modifiers == keyboard::Modifiers::SHIFT => {
+                Some(TableGridMessage::SelectExtent(TableExtent::Row))
+            }
+            keyboard::Key::Named(Named::Space) if *modifiers == keyboard::Modifiers::CTRL => {
+                Some(TableGridMessage::SelectExtent(TableExtent::Column))
+            }
+            keyboard::Key::Character(character)
+                if modifiers.command() && character.eq_ignore_ascii_case("a") =>
+            {
+                if let Some(grid) = grid {
+                    let table = &self.projection.rich.tables[grid.table];
+                    if grid.contains(0, 0)
+                        && grid.contains(table.rows.len() - 1, table.alignment.len() - 1)
+                    {
+                        shell.publish(Message::Edit(Action::SelectAll));
+                        return true;
+                    }
+                }
+                Some(TableGridMessage::SelectExtent(TableExtent::Table))
+            }
+            keyboard::Key::Character(character)
+                if modifiers.command()
+                    && (character.eq_ignore_ascii_case("c")
+                        || character.eq_ignore_ascii_case("x")) =>
+            {
+                adopt(shell);
+                // App messages from earlier keys in this event batch must
+                // update selection before the copied rectangle is captured.
+                shell.publish(Message::TableGrid(TableGridMessage::CopySelection {
+                    cut: character.eq_ignore_ascii_case("x"),
+                }));
+                return true;
+            }
+            keyboard::Key::Character(character)
+                if modifiers.command() && character.eq_ignore_ascii_case("v") =>
+            {
+                adopt(shell);
+                shell.publish(Message::TableGrid(TableGridMessage::PasteSelection));
+                return true;
+            }
+            _ if !modifiers.command() && !modifiers.control() => text
+                .filter(|s| !s.is_empty() && !s.chars().any(char::is_control))
+                .map(|s| TableGridMessage::Begin(Some(s.to_owned()))),
+            _ => None,
+        };
+        if let Some(message) = message {
+            adopt(shell);
+            shell.publish(Message::TableGrid(message));
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Default)]
@@ -339,6 +793,11 @@ struct State {
     last_click: Option<mouse::Click>,
     drag_anchor: Option<usize>,
     stable_drag: Option<StablePosition>,
+    pending_table_drag: Option<Arc<()>>,
+    grid_drag: Option<(usize, TableExtent, f32)>,
+    grid_drag_revision: Option<Arc<()>>,
+    hovered_handle: Option<(usize, usize, usize, TableExtent)>,
+    hovered_menu: bool,
     stable_viewport: Option<(StablePosition, f32)>,
     stable_wrap: Option<(StablePosition, bool)>,
     composition_target: Option<CompositionTarget>,
@@ -379,6 +838,16 @@ struct LayoutKey {
 }
 
 impl State {
+    fn table_menu_available(&self) -> bool {
+        self.modifiers.is_empty()
+            && self
+                .preedit
+                .as_ref()
+                .is_none_or(|preedit| preedit.content.is_empty())
+            && self.grid_drag.is_none()
+            && self.drag_anchor.is_none()
+            && self.scroll_drag.is_none()
+    }
     fn caret(&self, source: usize) -> Rectangle {
         if let Some((_, upstream)) = self.visual_cursor.filter(|(head, _)| *head == source) {
             self.rich.source_caret_on_side(source, upstream)
@@ -408,6 +877,8 @@ impl State {
         self.preedit = None;
         self.composition_target = None;
         self.pending_task = None;
+        self.grid_drag = None;
+        self.grid_drag_revision = None;
     }
     fn clamp_scroll(&mut self) {
         self.scroll = self
@@ -430,6 +901,39 @@ impl State {
         self.clamp_scroll();
     }
     fn drag(&mut self, projection: &Projection, shell: &mut Shell<'_, Message>) {
+        if let (Some((table, extent, zoom)), Some(position)) = (self.grid_drag, self.drag_position)
+        {
+            let point = Point::new(
+                position.x,
+                position.y.clamp(0.0, self.viewport_height) + self.scroll,
+            );
+            let target = table_hit(&self.rich, point, zoom, Some(table))
+                .filter(|hit| hit.0 == table)
+                .or_else(|| {
+                    self.rich
+                        .resident()
+                        .cells()
+                        .filter(|cell| cell.0 == table)
+                        .min_by(|a, b| {
+                            let distance = |r: Rectangle| {
+                                (r.center_x() - point.x).abs() + (r.center_y() - point.y).abs()
+                            };
+                            distance(a.3).total_cmp(&distance(b.3))
+                        })
+                        .map(|(t, r, c, _)| (t, r, c, extent))
+                });
+            if let Some((table, row, column, _)) = target {
+                shell.publish(Message::TableGrid(TableGridMessage::Select {
+                    revision: Arc::clone(&projection.source_id),
+                    table,
+                    row,
+                    column,
+                    extend: true,
+                    extent,
+                }));
+            }
+            return;
+        }
         if let (Some(anchor), Some(position)) = (self.drag_anchor, self.drag_position) {
             let point = Point::new(
                 position.x,
@@ -459,6 +963,19 @@ impl operation::Focusable for State {
 }
 
 impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
+    fn children(&self) -> Vec<widget::Tree> {
+        self.cell_editor
+            .iter()
+            .map(|child| widget::Tree::new(child.as_widget()))
+            .collect()
+    }
+    fn diff(&self, tree: &mut widget::Tree) {
+        if let Some(child) = &self.cell_editor {
+            tree.diff_children(std::slice::from_ref(child));
+        } else {
+            tree.children.clear();
+        }
+    }
     fn tag(&self) -> widget::tree::Tag {
         widget::tree::Tag::of::<State>()
     }
@@ -472,7 +989,7 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
     fn layout(
         &mut self,
         tree: &mut widget::Tree,
-        _renderer: &Renderer,
+        renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
         let state = tree.state.downcast_mut::<State>();
@@ -507,6 +1024,15 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             .layout_key
             .as_ref()
             .is_some_and(|key| !Arc::ptr_eq(&key.source, &self.projection.source_id));
+        if state
+            .grid_drag_revision
+            .as_ref()
+            .is_some_and(|revision| !Arc::ptr_eq(revision, &self.projection.source_id))
+        {
+            state.grid_drag = None;
+            state.grid_drag_revision = None;
+            state.drag_position = None;
+        }
         let content_changed = state.layout_key.as_ref().is_none_or(|key| {
             !Arc::ptr_eq(&key.source, &self.projection.source_id)
                 || key.tokens != self.theme.tokens
@@ -626,7 +1152,63 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                 .visual_cursor
                 .map(|(offset, side)| (document.position(offset, Assoc::After), side));
         }
-        layout::Node::new(bounds)
+        if let Some(child) = &mut self.cell_editor {
+            // A concurrently removed table must not hide a retained draft. Its
+            // checked target will reject commit, while copy and Escape remain
+            // available in a temporary editor at the top of the viewport.
+            let rect = self
+                .grid
+                .and_then(|grid| {
+                    state
+                        .rich
+                        .resident()
+                        .cell_bounds(grid.table, grid.active.0, grid.active.1)
+                })
+                .unwrap_or(Rectangle::new(
+                    Point::new(0.0, state.scroll + 8.0),
+                    Size::new((bounds.width - 12.0).max(1.0), 64.0),
+                ));
+            let padding = (self.theme.typography.body_size * self.zoom * 0.65).min(12.0) * 2.0;
+            let mut node = child.as_widget_mut().layout(
+                &mut tree.children[0],
+                renderer,
+                &layout::Limits::new(
+                    Size::new(rect.width, (rect.height - padding).max(0.0)),
+                    Size::new(rect.width, bounds.height.max(rect.height)),
+                ),
+            );
+            if node.size().height > rect.height + 0.5 {
+                let bottom = rect.y + node.size().height;
+                let height = self
+                    .grid
+                    .and_then(|grid| {
+                        state
+                            .rich
+                            .resident()
+                            .cells()
+                            .filter(|(table, _, column, r)| {
+                                *table == grid.table
+                                    && *column == grid.active.1
+                                    && r.y + r.height >= bottom
+                            })
+                            .map(|(_, _, _, r)| r.y + r.height - rect.y)
+                            .min_by(f32::total_cmp)
+                    })
+                    .unwrap_or(node.size().height);
+                node = child.as_widget_mut().layout(
+                    &mut tree.children[0],
+                    renderer,
+                    &layout::Limits::new(
+                        Size::new(rect.width, (height - padding).max(0.0)),
+                        Size::new(rect.width, bounds.height.max(height)),
+                    ),
+                );
+            }
+            node.move_to_mut(Point::new(rect.x, rect.y - state.scroll));
+            layout::Node::with_children(bounds, vec![node])
+        } else {
+            layout::Node::new(bounds)
+        }
     }
 
     fn operate(
@@ -641,6 +1223,16 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             layout.bounds(),
             tree.state.downcast_mut::<State>(),
         );
+        operation.custom(None, layout.bounds(), tree.state.downcast_mut::<State>());
+        if let (Some(child), Some(child_layout)) = (&mut self.cell_editor, layout.children().next())
+        {
+            child.as_widget_mut().operate(
+                &mut tree.children[0],
+                child_layout,
+                _renderer,
+                operation,
+            );
+        }
     }
 
     fn update(
@@ -649,7 +1241,7 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
-        _renderer: &Renderer,
+        renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
@@ -657,15 +1249,203 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         let state = tree.state.downcast_mut::<State>();
         let previous_scroll = state.scroll;
         let bounds = layout.bounds();
+        if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
+            let available = state.table_menu_available();
+            state.modifiers = *modifiers;
+            if available != state.table_menu_available() && state.hovered_handle.is_some() {
+                shell.request_redraw();
+            }
+        }
+        if matches!(
+            event,
+            Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft)
+        ) {
+            let hovered = if matches!(event, Event::Mouse(mouse::Event::CursorLeft)) {
+                None
+            } else {
+                cursor
+                    .position()
+                    .map(|point| point - (bounds.position() - Point::ORIGIN))
+                    .filter(|point| point.y >= 0.0 && point.y <= bounds.height)
+                    .and_then(|point| {
+                        table_hit(
+                            &state.rich,
+                            point + Vector::new(0.0, state.scroll),
+                            self.zoom,
+                            self.grid.map(|grid| grid.table),
+                        )
+                    })
+                    .filter(|hit| matches!(hit.3, TableExtent::Row | TableExtent::Column))
+            };
+            let menu_hovered = hovered.is_some()
+                && cursor
+                    .position()
+                    .map(|point| point - (bounds.position() - Point::ORIGIN))
+                    .is_some_and(|point| {
+                        table_menu_hit(
+                            &state.rich,
+                            point + Vector::new(0.0, state.scroll),
+                            self.zoom,
+                            self.grid.map(|grid| grid.table),
+                        )
+                        .is_some()
+                    });
+            if state.hovered_handle != hovered || state.hovered_menu != menu_hovered {
+                state.hovered_handle = hovered;
+                state.hovered_menu = menu_hovered;
+                shell.request_redraw();
+            }
+        }
+        if let (Some(child), Some(child_layout)) = (&mut self.cell_editor, layout.children().next())
+        {
+            let outside_click = matches!(
+                event,
+                Event::Mouse(mouse::Event::ButtonPressed(
+                    mouse::Button::Left | mouse::Button::Right
+                ))
+            ) && (!cursor.is_over(child_layout.bounds())
+                || state.table_menu_available()
+                    && cursor
+                        .position()
+                        .map(|point| point - (bounds.position() - Point::ORIGIN))
+                        .filter(|point| point.y >= 0.0 && point.y <= bounds.height)
+                        .is_some_and(|point| {
+                            table_menu_hit(
+                                &state.rich,
+                                point + Vector::new(0.0, state.scroll),
+                                self.zoom,
+                                self.grid.map(|grid| grid.table),
+                            )
+                            .is_some()
+                        })
+                || matches!(
+                    event,
+                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                ));
+            let wheel = matches!(event, Event::Mouse(mouse::Event::WheelScrolled { .. }));
+            if !outside_click && !wheel {
+                if matches!(event, Event::Keyboard(keyboard::Event::KeyPressed { .. }))
+                    && state
+                        .preedit
+                        .as_ref()
+                        .is_some_and(|p| !p.content.is_empty())
+                {
+                    shell.capture_event();
+                    return;
+                }
+                if let Event::InputMethod(event) = event {
+                    match event {
+                        input_method::Event::Preedit(content, selection) => {
+                            state.preedit = Some(input_method::Preedit {
+                                content: content.clone(),
+                                selection: selection.clone(),
+                                text_size: None,
+                            })
+                        }
+                        input_method::Event::Closed | input_method::Event::Commit(_) => {
+                            state.preedit = None
+                        }
+                        _ => {}
+                    }
+                }
+                child.as_widget_mut().update(
+                    &mut tree.children[0],
+                    event,
+                    child_layout,
+                    cursor,
+                    renderer,
+                    clipboard,
+                    shell,
+                    _viewport,
+                );
+                return;
+            }
+        }
+        if state
+            .pending_table_drag
+            .as_ref()
+            .is_some_and(|revision| !Arc::ptr_eq(revision, &self.projection.source_id))
+        {
+            state.pending_table_drag = None;
+            state.drag_anchor = Some(self.source_selection.anchor);
+            state.stable_drag = self
+                .collaboration
+                .map(|document| document.position(self.source_selection.anchor, Assoc::After));
+        }
         if matches!(event, Event::Window(window::Event::RedrawRequested(_)))
+            && self.cell_editor.is_none()
             && state.focused != self.app_focused
         {
             shell.publish(Message::EditorFocused(state.focused));
         }
         match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                if state
+                    .preedit
+                    .as_ref()
+                    .is_none_or(|preedit| preedit.content.is_empty()) =>
+            {
+                if let Some(position) = cursor
+                    .position()
+                    .map(|point| point - (bounds.position() - Point::ORIGIN))
+                    .filter(|point| point.y >= 0.0 && point.y <= bounds.height)
+                    && let Some((table, row, column, extent)) = table_hit(
+                        &state.rich,
+                        position + Vector::new(0.0, state.scroll),
+                        self.zoom,
+                        self.grid.map(|grid| grid.table),
+                    )
+                {
+                    shell.publish(Message::Table(TableMessage::OpenContext {
+                        revision: Arc::clone(&self.projection.source_id),
+                        table,
+                        row,
+                        column,
+                        position: position + (bounds.position() - Point::ORIGIN),
+                        extent,
+                    }));
+                    shell.capture_event();
+                }
+            }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                if let Some(position) = cursor.position_in(bounds) {
+                let position = cursor
+                    .position()
+                    .map(|point| point - (bounds.position() - Point::ORIGIN))
+                    .filter(|point| point.y >= 0.0 && point.y <= bounds.height);
+                if let Some(position) = position.filter(|point| {
+                    Rectangle::with_size(bounds.size()).contains(*point)
+                        || table_hit(
+                            &state.rich,
+                            *point + Vector::new(0.0, state.scroll),
+                            self.zoom,
+                            self.grid.map(|grid| grid.table),
+                        )
+                        .is_some()
+                }) {
                     let point = position + Vector::new(0.0, state.scroll);
+                    if state.table_menu_available()
+                        && let Some((table, row, column, extent, menu)) = table_menu_hit(
+                            &state.rich,
+                            point,
+                            self.zoom,
+                            self.grid.map(|grid| grid.table),
+                        )
+                    {
+                        state.grid_drag = None;
+                        state.grid_drag_revision = None;
+                        shell.publish(Message::Table(TableMessage::OpenContext {
+                            revision: Arc::clone(&self.projection.source_id),
+                            table,
+                            row,
+                            column,
+                            extent,
+                            position: Point::new(menu.x + menu.width, menu.y + menu.height)
+                                + (bounds.position() - Point::ORIGIN)
+                                - Vector::new(0.0, state.scroll),
+                        }));
+                        shell.capture_event();
+                        return;
+                    }
                     if state.modifiers.command()
                         && !state.modifiers.shift()
                         && let Some(reference) = {
@@ -750,6 +1530,43 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         return;
                     }
                     let click = mouse::Click::new(position, mouse::Button::Left, state.last_click);
+                    if let Some((table, row, column, extent)) = table_hit(
+                        &state.rich,
+                        point,
+                        self.zoom,
+                        self.grid.map(|grid| grid.table),
+                    ) && !state.modifiers.command()
+                    {
+                        shell.publish(Message::TableGrid(TableGridMessage::Select {
+                            revision: Arc::clone(&self.projection.source_id),
+                            table,
+                            row,
+                            column,
+                            extend: state.modifiers.shift(),
+                            extent,
+                        }));
+                        if click.kind() == mouse::click::Kind::Double && extent == TableExtent::Cell
+                        {
+                            shell.publish(Message::TableGrid(TableGridMessage::Begin(None)));
+                        }
+                        state.focused = true;
+                        state.window_focused = true;
+                        state.last_click = Some(click);
+                        state.grid_drag = (click.kind() == mouse::click::Kind::Single)
+                            .then_some((table, extent, self.zoom));
+                        state.grid_drag_revision = state
+                            .grid_drag
+                            .map(|_| Arc::clone(&self.projection.source_id));
+                        state.drag_anchor = None;
+                        state.stable_drag = None;
+                        state.drag_position = Some(position);
+                        state.preferred_x = None;
+                        state.visual_cursor = None;
+                        state.reset_blink();
+                        shell.capture_event();
+                        shell.request_redraw();
+                        return;
+                    }
                     let (mut head, y) = state
                         .rich
                         .resident()
@@ -803,7 +1620,31 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         }
                         _ => self.projection.normalize_caret(Selection { anchor, head }),
                     };
-                    shell.publish(Message::SelectSource(source_selection));
+                    if click.kind() == mouse::click::Kind::Single
+                        && !state.modifiers.shift()
+                        && let Some((table, row, column)) = state.rich.resident().cell_at(point)
+                    {
+                        if crate::document::table_edit::materialize_cell(
+                            self.source,
+                            row,
+                            column,
+                            &self.projection.rich.tables[table],
+                        )
+                        .is_some()
+                        {
+                            state.pending_table_drag = Some(Arc::clone(&self.projection.source_id));
+                        }
+                        shell.publish(Message::Table(TableMessage::FocusCell {
+                            revision: Arc::clone(&self.projection.source_id),
+                            table,
+                            row,
+                            column,
+                            selection: source_selection,
+                            open: false,
+                        }));
+                    } else {
+                        shell.publish(Message::SelectSource(source_selection));
+                    }
                     state.focused = true;
                     state.window_focused = true;
                     state.last_click = Some(click);
@@ -846,7 +1687,9 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     shell.request_redraw();
                 }
             }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.drag_anchor.is_some() => {
+            Event::Mouse(mouse::Event::CursorMoved { .. })
+                if state.drag_anchor.is_some() || state.grid_drag.is_some() =>
+            {
                 state.drag_position = cursor
                     .position()
                     .map(|point| point - (bounds.position() - Point::ORIGIN));
@@ -855,6 +1698,9 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                 shell.request_redraw();
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.pending_table_drag = None;
+                state.grid_drag = None;
+                state.grid_drag_revision = None;
                 if let Some(press) = state.pending_task.take() {
                     if !press.cancelled
                         && press.scroll == state.scroll
@@ -921,10 +1767,72 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         is_hovered: cursor.is_over(bounds),
                     },
                 };
-                let in_table =
-                    crate::document::table_edit::cell_at(self.projection, self.source_selection)
-                        .is_some();
-                if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab)) && in_table {
+                let in_table = crate::document::table_edit::cell_at(
+                    self.projection,
+                    Selection::caret(self.source_selection.head),
+                )
+                .is_some();
+                if in_table
+                    && state
+                        .preedit
+                        .as_ref()
+                        .is_some_and(|preedit| !preedit.content.is_empty())
+                {
+                    shell.capture_event();
+                    return;
+                }
+                if (self.grid.is_some() || in_table && self.source_selection.is_caret())
+                    && modifiers.is_empty()
+                    && matches!(
+                        key,
+                        keyboard::Key::Named(
+                            keyboard::key::Named::ArrowUp | keyboard::key::Named::ArrowDown
+                        )
+                    )
+                    && self.leave_table_vertically(
+                        state,
+                        bounds,
+                        matches!(key, keyboard::Key::Named(keyboard::key::Named::ArrowUp)),
+                        shell,
+                    )
+                {
+                    state.reset_blink();
+                    shell.capture_event();
+                    shell.request_redraw();
+                    return;
+                }
+                if (self.grid.is_some() || in_table && self.source_selection.is_caret())
+                    && self.grid_key(key, modifiers, text.as_deref(), shell)
+                {
+                    state.preferred_x = None;
+                    state.visual_cursor = None;
+                    state.reset_blink();
+                    shell.capture_event();
+                    shell.request_redraw();
+                    return;
+                }
+                if in_table
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter))
+                    && modifiers.command()
+                {
+                    shell.publish(Message::Edit(Action::Edit(Edit::Enter)));
+                    shell.capture_event();
+                } else if in_table
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
+                    && *modifiers == keyboard::Modifiers::CTRL
+                {
+                    shell.publish(Message::Table(TableMessage::InsertTab));
+                    shell.capture_event();
+                } else if in_table
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::F10))
+                    && *modifiers == keyboard::Modifiers::SHIFT
+                {
+                    shell.publish(Message::Table(TableMessage::OpenMenu));
+                    shell.capture_event();
+                } else if matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
+                    && in_table
+                    && (modifiers.is_empty() || *modifiers == keyboard::Modifiers::SHIFT)
+                {
                     state.preferred_x = None;
                     state.visual_cursor = None;
                     shell.publish(Message::TableTab(modifiers.shift()));
@@ -967,7 +1875,14 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         state.preferred_x = None;
                         state.preedit =
                             state.preedit.as_ref().map(|_| input_method::Preedit::new());
-                        if let Some(target) = state.composition_target.take().or_else(|| {
+                        if let Some(grid) = self.grid.or(self.grid_resume) {
+                            if self.grid.is_none() {
+                                self.activate_grid(grid, shell);
+                            }
+                            shell.publish(Message::TableGrid(TableGridMessage::Begin(Some(
+                                text.clone(),
+                            ))));
+                        } else if let Some(target) = state.composition_target.take().or_else(|| {
                             self.collaboration
                                 .map(|document| document.composition_target(self.source_selection))
                         }) {
@@ -1003,7 +1918,7 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             {
                 state.now = Some(*now);
                 if let Some(position) = state.drag_position
-                    && state.drag_anchor.is_some()
+                    && (state.drag_anchor.is_some() || state.grid_drag.is_some())
                 {
                     let overflow = if position.y < 0.0 {
                         position.y
@@ -1090,15 +2005,28 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         },
                     ),
                     Decoration::Strikethrough(_) => continue,
-                    Decoration::Header => (tokens.surface, iced::Border::default()),
-                    Decoration::Border => (
-                        iced::Color::TRANSPARENT,
-                        iced::Border {
-                            color: tokens.border,
-                            width: 0.5,
-                            ..iced::Border::default()
-                        },
-                    ),
+                    Decoration::TableRow { header } => {
+                        if *header {
+                            renderer.fill_quad(
+                                renderer::Quad {
+                                    bounds: rect,
+                                    ..renderer::Quad::default()
+                                },
+                                crate::theme::styles::table_header(tokens),
+                            );
+                        }
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: Rectangle::new(
+                                    Point::new(rect.x, rect.y + rect.height - 1.0),
+                                    Size::new(rect.width, 1.0),
+                                ),
+                                ..renderer::Quad::default()
+                            },
+                            crate::theme::styles::table_divider(tokens, *header),
+                        );
+                        continue;
+                    }
                 };
                 renderer.fill_quad(
                     renderer::Quad {
@@ -1133,7 +2061,8 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     tokens.accent_soft.scale_alpha(0.5),
                 );
             }
-            if state.focused {
+            draw_table_grid(renderer, state, self.grid, tokens, translation);
+            if state.focused && self.grid.is_none() {
                 for rect in state
                     .rich
                     .resident()
@@ -1365,7 +2294,7 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     clip,
                 );
             }
-            if self.display_selection().is_caret() && state.caret_visible() {
+            if self.grid.is_none() && self.display_selection().is_caret() && state.caret_visible() {
                 renderer.fill_quad(
                     renderer::Quad {
                         bounds: state.caret(self.source_selection.head) + translation,
@@ -1392,6 +2321,37 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                 );
             }
         });
+        // Only the handle layer may reach into the page margin. The document
+        // and draft remain clipped to the editor's original content bounds.
+        let handle_bounds = Rectangle::new(
+            Point::new(bounds.x - 28.0, bounds.y),
+            Size::new(bounds.width + 28.0, bounds.height),
+        );
+        if let Some(handle_clip) = handle_bounds.intersection(viewport) {
+            renderer.with_layer(handle_clip, |renderer| {
+                draw_table_handles(
+                    renderer,
+                    state,
+                    self,
+                    translation,
+                    handle_clip,
+                    cursor.position().map(|point| point - translation),
+                )
+            });
+        }
+        if let (Some(child), Some(child_layout)) = (&self.cell_editor, layout.children().next()) {
+            renderer.with_layer(clip, |renderer| {
+                child.as_widget().draw(
+                    &tree.children[0],
+                    renderer,
+                    _theme,
+                    _style,
+                    child_layout,
+                    cursor,
+                    &clip,
+                )
+            });
+        }
     }
 
     fn mouse_interaction(
@@ -1403,6 +2363,52 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         _renderer: &Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<State>();
+        if state.table_menu_available()
+            && cursor
+                .position()
+                .map(|point| point - (layout.bounds().position() - Point::ORIGIN))
+                .filter(|point| point.y >= 0.0 && point.y <= layout.bounds().height)
+                .is_some_and(|position| {
+                    table_menu_hit(
+                        &state.rich,
+                        position + Vector::new(0.0, state.scroll),
+                        self.zoom,
+                        self.grid.map(|grid| grid.table),
+                    )
+                    .is_some()
+                })
+        {
+            return mouse::Interaction::Pointer;
+        }
+        if let (Some(child), Some(child_layout)) = (&self.cell_editor, layout.children().next())
+            && cursor.is_over(child_layout.bounds())
+        {
+            return child.as_widget().mouse_interaction(
+                &tree.children[0],
+                child_layout,
+                cursor,
+                _viewport,
+                _renderer,
+            );
+        }
+        if cursor
+            .position()
+            .map(|point| point - (layout.bounds().position() - Point::ORIGIN))
+            .filter(|point| point.y >= 0.0 && point.y <= layout.bounds().height)
+            .is_some_and(|position| {
+                table_hit(
+                    &state.rich,
+                    position + Vector::new(0.0, state.scroll),
+                    self.zoom,
+                    self.grid.map(|grid| grid.table),
+                )
+                .is_some_and(|hit| {
+                    hit.3 != TableExtent::Cell || self.grid.is_some_and(|grid| grid.table == hit.0)
+                })
+            })
+        {
+            return mouse::Interaction::Crosshair;
+        }
         if cursor.position_in(layout.bounds()).is_some_and(|position| {
             let point = position + Vector::new(0.0, state.scroll);
             code_copy_at(state, point, self.zoom).is_some()
@@ -1420,6 +2426,319 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             mouse::Interaction::None
         }
     }
+}
+
+// Handles are overlays: entering a table never changes cell or text geometry.
+fn row_handle(bounds: Rectangle) -> Rectangle {
+    Rectangle::new(
+        Point::new(bounds.x - 28.0, bounds.y),
+        Size::new(26.0, bounds.height),
+    )
+}
+
+fn column_handle(bounds: Rectangle, zoom: f32) -> Rectangle {
+    let half = crate::theme::styles::TABLE_TOP_SPACING * zoom;
+    Rectangle::new(
+        Point::new(bounds.x, bounds.y - half),
+        Size::new(bounds.width, half * 2.0),
+    )
+}
+
+fn row_badge(bounds: Rectangle, zoom: f32) -> Rectangle {
+    let height = (22.0 * zoom).min(bounds.height);
+    Rectangle::new(
+        Point::new(bounds.x - 28.0, bounds.center_y() - height / 2.0),
+        Size::new(26.0, height),
+    )
+}
+
+// Menu targets occupy existing handle space. The row arrow sits below its
+// number; column arrows sit at the trailing edge, leaving labels stationary.
+fn table_menu_bounds(bounds: Rectangle, extent: TableExtent, zoom: f32) -> Rectangle {
+    if extent == TableExtent::Row {
+        let badge = row_badge(bounds, zoom);
+        let height = (bounds.y + bounds.height - badge.y - badge.height).min(14.0 * zoom);
+        Rectangle::new(
+            Point::new(badge.x, badge.y + badge.height),
+            Size::new(badge.width, height),
+        )
+    } else {
+        let header = column_handle(bounds, zoom);
+        let width = (20.0 * zoom).min(header.width * 0.4);
+        Rectangle::new(
+            Point::new(header.x + header.width - width, header.y),
+            Size::new(width, header.height),
+        )
+    }
+}
+
+fn table_menu_hit(
+    rich: &VirtualLayout,
+    point: Point,
+    zoom: f32,
+    active: Option<usize>,
+) -> Option<(usize, usize, usize, TableExtent, Rectangle)> {
+    let (table, row, column, extent) = table_hit(rich, point, zoom, active)?;
+    if !matches!(extent, TableExtent::Row | TableExtent::Column) {
+        return None;
+    }
+    let cell = rich.resident().cell_bounds(table, row, column)?;
+    let bounds = table_menu_bounds(cell, extent, zoom);
+    (bounds.width >= 6.0 && bounds.height >= 6.0 && bounds.contains(point))
+        .then_some((table, row, column, extent, bounds))
+}
+
+fn table_hit(
+    rich: &VirtualLayout,
+    point: Point,
+    zoom: f32,
+    active: Option<usize>,
+) -> Option<(usize, usize, usize, TableExtent)> {
+    for (table, row, column, bounds) in rich
+        .resident()
+        .cells()
+        .filter(|cell| Some(cell.0) == active)
+    {
+        if column == 0 && row_handle(bounds).contains(point) {
+            return Some((table, row, 0, TableExtent::Row));
+        }
+        if row == 0 {
+            let header = column_handle(bounds, zoom);
+            if header.contains(point) {
+                return Some((table, 0, column, TableExtent::Column));
+            }
+            let corner = Rectangle::new(
+                Point::new(bounds.x - 28.0, header.y),
+                Size::new(26.0, header.height),
+            );
+            if column == 0 && corner.contains(point) {
+                return Some((table, 0, 0, TableExtent::Table));
+            }
+        }
+    }
+    rich.resident()
+        .cell_at(point)
+        .map(|(table, row, column)| (table, row, column, TableExtent::Cell))
+}
+
+fn draw_table_grid(
+    renderer: &mut Renderer,
+    state: &State,
+    grid: Option<TableGridView>,
+    tokens: Tokens,
+    translation: Vector,
+) {
+    use iced::advanced::Renderer as _;
+    let Some(grid) = grid else {
+        return;
+    };
+    let quad =
+        |renderer: &mut Renderer, rect: Rectangle, color: iced::Color, border: iced::Border| {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: rect + translation,
+                    border,
+                    ..renderer::Quad::default()
+                },
+                color,
+            );
+        };
+    for (_, row, column, rect) in state
+        .rich
+        .resident()
+        .cells()
+        .filter(|cell| cell.0 == grid.table)
+    {
+        quad(
+            renderer,
+            rect,
+            iced::Color::TRANSPARENT,
+            iced::Border {
+                color: tokens.border,
+                width: 0.5,
+                ..iced::Border::default()
+            },
+        );
+        if grid.contains(row, column) {
+            if (row, column) != grid.active {
+                quad(
+                    renderer,
+                    rect,
+                    tokens.selection.scale_alpha(0.6),
+                    iced::Border::default(),
+                );
+            }
+            let width = 1.5;
+            for (edge, show) in [
+                (
+                    Rectangle::new(rect.position(), Size::new(rect.width, width)),
+                    row == grid.anchor.0.min(grid.head.0),
+                ),
+                (
+                    Rectangle::new(
+                        Point::new(rect.x, rect.y + rect.height - width),
+                        Size::new(rect.width, width),
+                    ),
+                    row == grid.anchor.0.max(grid.head.0),
+                ),
+                (
+                    Rectangle::new(rect.position(), Size::new(width, rect.height)),
+                    column == grid.anchor.1.min(grid.head.1),
+                ),
+                (
+                    Rectangle::new(
+                        Point::new(rect.x + rect.width - width, rect.y),
+                        Size::new(width, rect.height),
+                    ),
+                    column == grid.anchor.1.max(grid.head.1),
+                ),
+            ] {
+                if show {
+                    quad(renderer, edge, tokens.accent, iced::Border::default());
+                }
+            }
+            if (row, column) == grid.active {
+                quad(
+                    renderer,
+                    rect,
+                    iced::Color::TRANSPARENT,
+                    iced::Border {
+                        color: tokens.accent,
+                        width: 2.0,
+                        ..iced::Border::default()
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn draw_table_handles(
+    renderer: &mut Renderer,
+    state: &State,
+    editor: &RichEditor<'_>,
+    translation: Vector,
+    clip: Rectangle,
+    pointer: Option<Point>,
+) {
+    use iced::advanced::Renderer as _;
+    let Some(grid) = editor.grid else {
+        return;
+    };
+    let tokens = editor.theme.tokens;
+    let zoom = editor.zoom;
+    let hover = pointer
+        .filter(|point| (clip - translation).contains(*point))
+        .filter(|_| state.table_menu_available())
+        .and_then(|point| table_hit(&state.rich, point, zoom, Some(grid.table)));
+    let label = |renderer: &mut Renderer, rect: Rectangle, content: String, selected: bool| {
+        let rect = rect + translation;
+        if !rect.intersects(&clip) {
+            return;
+        }
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: rect,
+                border: iced::Border {
+                    color: tokens.border,
+                    width: 0.5,
+                    radius: 3.0.into(),
+                },
+                ..renderer::Quad::default()
+            },
+            if selected {
+                tokens.accent_soft
+            } else {
+                tokens.surface
+            },
+        );
+        renderer.fill_text(
+            text::Text {
+                content,
+                bounds: rect.size(),
+                size: (11.0 * zoom.min(1.0)).into(),
+                font: iced::Font::DEFAULT,
+                line_height: text::LineHeight::Relative(1.2),
+                align_x: text::Alignment::Center,
+                align_y: iced::alignment::Vertical::Center,
+                shaping: text::Shaping::Advanced,
+                wrapping: text::Wrapping::None,
+            },
+            rect.center(),
+            if selected {
+                tokens.accent
+            } else {
+                tokens.muted
+            },
+            clip,
+        );
+    };
+    for (_, row, column, rect) in state
+        .rich
+        .resident()
+        .cells()
+        .filter(|cell| cell.0 == grid.table)
+    {
+        if column == 0 {
+            let badge = row_badge(rect, zoom);
+            label(
+                renderer,
+                badge,
+                (row + 1).to_string(),
+                (grid.anchor.0.min(grid.head.0)..=grid.anchor.0.max(grid.head.0)).contains(&row),
+            );
+        }
+        if row == 0 {
+            let header = column_handle(rect, zoom);
+            label(
+                renderer,
+                header,
+                column_name(column),
+                (grid.anchor.1.min(grid.head.1)..=grid.anchor.1.max(grid.head.1)).contains(&column),
+            );
+            if column == 0 {
+                label(
+                    renderer,
+                    Rectangle::new(
+                        Point::new(rect.x - 28.0, header.y),
+                        Size::new(26.0, header.height),
+                    ),
+                    "◩".into(),
+                    false,
+                );
+            }
+        }
+        let extent = if hover == Some((grid.table, row, column, TableExtent::Row)) && column == 0 {
+            Some(TableExtent::Row)
+        } else if hover == Some((grid.table, row, column, TableExtent::Column)) && row == 0 {
+            Some(TableExtent::Column)
+        } else {
+            None
+        };
+        if let Some(extent) = extent {
+            let menu = table_menu_bounds(rect, extent, zoom);
+            if menu.height >= 6.0 && menu.width >= 6.0 {
+                label(
+                    renderer,
+                    menu,
+                    "▾".into(),
+                    pointer.is_some_and(|point| menu.contains(point)),
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn column_name(mut column: usize) -> String {
+    let mut letters = Vec::new();
+    loop {
+        letters.push((b'A' + (column % 26) as u8) as char);
+        if column < 26 {
+            break;
+        }
+        column = column / 26 - 1;
+    }
+    letters.into_iter().rev().collect()
 }
 
 /// The same measured row stops used to paint selections bound the checkbox.
@@ -1475,6 +2794,48 @@ impl<'a> From<RichEditor<'a>> for Element<'a, Message> {
 mod tests {
     use super::*;
     use crate::editor::native_buffer;
+
+    #[test]
+    fn table_handles_only_hit_the_active_table_without_reserving_content_space() {
+        let source = "Before\n\n| A | B |\n|---|---|\n| one | two |\n\nBetween\n\n| C | D |\n|---|---|\n| three | four |\n\nAfter";
+        let projection = Projection::new(source);
+        let theme = crate::theme::Preset::Paper.resolve();
+        let images = ImageStore::default();
+        for zoom in [0.8, 1.0, 1.5] {
+            let input = LayoutInput {
+                projection: &projection,
+                theme: &theme,
+                zoom,
+                width: 640.0,
+                base: None,
+                images: &images,
+            };
+            let mut rich = VirtualLayout::default();
+            rich.rebuild(input);
+            rich.show_viewport(input, 0.0, 1600.0);
+            for table in 0..2 {
+                let first = rich.resident().cell_bounds(table, 0, 0).unwrap();
+                assert_eq!(first.x, 0.0);
+                let row = rich.resident().cell_bounds(table, 1, 0).unwrap();
+                let row_point = row_handle(row).center();
+                assert_eq!(table_hit(&rich, row_point, zoom, None), None);
+                assert_eq!(table_hit(&rich, row_point, zoom, Some(1 - table)), None);
+                assert_eq!(
+                    table_hit(&rich, row_point, zoom, Some(table)),
+                    Some((table, 1, 0, TableExtent::Row))
+                );
+                let column = column_handle(first, zoom).center();
+                assert_eq!(
+                    table_hit(&rich, column, zoom, None),
+                    Some((table, 0, 0, TableExtent::Cell))
+                );
+                assert_eq!(
+                    table_hit(&rich, column, zoom, Some(table)),
+                    Some((table, 0, 0, TableExtent::Column))
+                );
+            }
+        }
+    }
     use crate::theme::Preset;
 
     #[test]
@@ -2061,6 +3422,7 @@ mod tests {
                 }) {
                     selection = next;
                 }
+                drop(editor);
                 projection.set_disclosure(projection.disclosure_at(Some(selection.head)));
                 content = native_buffer::with_text(&projection.text);
                 content.move_to(
@@ -2098,6 +3460,7 @@ mod tests {
         );
         let mut tree = widget::Tree::new(&editor as &dyn Widget<Message, Theme, Renderer>);
         let limits = layout::Limits::new(Size::ZERO, Size::new(180.0, 500.0));
+        drop(editor);
         let relayout =
             |tree: &mut widget::Tree, projection: &Projection, selection: Selection, focused| {
                 let mut content = native_buffer::with_text(&projection.text);
@@ -2229,6 +3592,7 @@ mod tests {
             Binding::from_key_press,
         );
         let mut tree = widget::Tree::new(&initial as &dyn Widget<Message, Theme, Renderer>);
+        drop(initial);
         let relayout = |tree: &mut widget::Tree,
                         content: &Content,
                         projection: &Projection,
@@ -2276,6 +3640,7 @@ mod tests {
         )
         .selection(selection);
         editor.refresh_viewport(state, Size::new(240.0, 500.0));
+        drop(editor);
         let (anchor, y) = state.rich.resident().viewport_anchor(state.scroll).unwrap();
         let screen_y = y - state.scroll;
         projection.set_disclosure(projection.disclosure_at(None));

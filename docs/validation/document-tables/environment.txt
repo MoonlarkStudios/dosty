@@ -1,0 +1,13 @@
+Date: 2026-10-30; local validation, dirty workspace, no native windows opened
+git rev-parse HEAD: 4769d8c2d8acfa818834235aa4bae343c3922c9b
+git branch --show-current: codex/table-controls
+mise exec -- rustc --version: rustc 1.95.0 (59807616e 2026-04-14)
+sw_vers -productVersion: 26.7.1
+sysctl -n machdep.cpu.brand_string: unavailable under sandbox
+sysctl -n hw.memsize: unavailable under sandbox
+Architecture: arm64
+Source digest (sorted path + NUL + bytes + NUL): 49c0fcfe18fbd4244a8022d0ba29b66067d92263ee6463e1b33fdd9e7c89eef7
+30 samples per action; serial release runs; thin LTO, one codegen unit; uncontrolled other desktop activity.
+Table typing profiles real widget events/layout/software rasterization at 720x800; excludes OS delivery and GPU/display presentation.
+Command profiles exclude layout/raster; mixed-document profiles include software rasterization.
+Initial /usr/bin/time -l wrapper completed the column benchmark but failed reading sandbox kern.clockrate; the successful unwrapped rerun supplies the reported column results. The interrupted wrapper log is retained.

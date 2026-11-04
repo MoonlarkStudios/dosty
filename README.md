@@ -9,8 +9,18 @@
 </picture>
 
 A quiet, native Markdown editor built with Rust and Iced. Write with headings,
-emphasis, strikethrough, tables, images, task checkboxes, footnotes, and themes,
-or switch to the Markdown source at any time.
+emphasis, strikethrough, editable tables, images, task checkboxes, footnotes, and
+themes, or switch to the Markdown source at any time.
+
+Live tables render with quiet headers and row rules, revealing spreadsheet
+controls when selected. Hover a row or column label for its menu button, or
+right-click a cell or label for contextual actions. Cell/range selection,
+keyboard navigation, and cancellable in-cell
+editing stay on the page. Vertical arrow navigation continues into surrounding
+text and creates a paragraph when needed at a document edge. Copy and paste
+rectangular values with spreadsheet applications, including quoted multiline
+cells; paste can fill a selection or grow the table in one undo step.
+See [table editing](docs/table-editing.md).
 
 Dosty is in early development. See the [current limitations](docs/evaluation.md).
 Previously named Koan and Daytrip; [existing settings and drafts remain compatible](docs/identity-migration.md).

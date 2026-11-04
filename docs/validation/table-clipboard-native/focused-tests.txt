@@ -1,0 +1,56 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
+     Running unittests src/lib.rs (target/debug/deps/dosty-b6624e0a52621333)
+
+running 43 tests
+test app::application::table_grid::tests::clipboard::batched_copy_move_and_paste_read_the_new_clipboard_at_the_new_cell ... ok
+test app::application::table_grid::tests::clipboard::batched_select_all_and_copy_or_cut_use_the_new_table_selection ... ok
+test app::application::table_grid::tests::clipboard::bulk_widget_paste_measurements ... ignored, release-only table clipboard measurements
+test app::application::table_grid::tests::clipboard::delayed_cut_rejects_stale_source_revisions_and_changed_selections ... ok
+test app::application::table_grid::tests::clipboard::failed_native_cut_delivery_preserves_the_source_selection_and_history ... ok
+test app::application::table_grid::tests::clipboard::native_paste_and_cut_deliveries_reject_stale_revisions_and_selections ... ok
+test app::application::table_grid::tests::clipboard::native_paste_delivery_preserves_captured_sheets_values_and_standard_export ... ok
+test app::application::table_grid::tests::clipboard::native_sheets_decoded_values_preserve_quotes_across_adjacent_cells ... ok
+test app::application::table_grid::tests::clipboard::native_sheets_single_column_delivery_keeps_the_final_empty_row ... ok
+test app::application::table_grid::tests::clipboard::no_op_range_paste_preserves_reverse_selection_formatting_and_history ... ok
+test app::application::table_grid::tests::clipboard::real_widget_copy_and_paste_round_trip_visible_quoted_values_and_empty_edges ... ok
+test app::application::table_grid::tests::clipboard::real_widget_cut_only_clears_after_a_verified_clipboard_write ... ok
+test app::application::table_grid::tests::clipboard::real_widget_paste_grows_both_axes_without_wrapping_and_is_one_source_undo ... ok
+test app::application::table_grid::tests::clipboard::real_widget_paste_history_survives_a_later_cell_edit_and_its_undo ... ok
+test app::application::table_grid::tests::clipboard::real_widget_paste_preserves_literal_values_source_endings_and_container_prefixes ... ok
+test app::application::table_grid::tests::clipboard::real_widget_paste_undo_and_redo_restore_the_single_cell_and_rectangle ... ok
+test app::application::table_grid::tests::clipboard::real_widget_pending_draft_paste_stays_literal_and_uses_local_undo ... ok
+test app::application::table_grid::tests::clipboard::real_widget_range_paste_fills_tiles_and_rejects_incompatible_shapes_atomically ... ok
+test app::application::table_grid::tests::clipboard::real_widget_reverse_range_paste_history_retains_direction_and_tabbed_active_cell ... ok
+test app::application::theme_tests::table_clipboard_previews ... ignored, render a pasted spreadsheet range and its quiet reading presentation
+test app::application::writing::tests::delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_content ... ok
+test document::table_clipboard::tests::native_sheets_keeps_terminal_empty_rows_without_changing_standard_tsv ... ok
+test document::table_clipboard::tests::native_sheets_text_keeps_literal_quotes_and_structural_delimiters ... ok
+test document::table_clipboard::tests::one_terminal_separator_is_ignored_while_empty_records_and_columns_survive ... ok
+test document::table_clipboard::tests::ordinary_quotes_and_incomplete_quoted_fields_remain_literal ... ok
+test document::table_clipboard::tests::ragged_rows_are_rectangular_without_trimming_values ... ok
+test document::table_clipboard::tests::rectangular_values_and_final_empty_rows_round_trip ... ok
+test document::table_clipboard::tests::resource_limits_bound_text_and_the_padded_rectangle ... ok
+test document::table_clipboard::tests::rich_clipboard_escapes_values_and_preserves_text_types_and_blank_cells ... ok
+test document::table_clipboard::tests::rich_clipboard_limits_include_escaping_and_the_padded_rectangle ... ok
+test document::table_clipboard::tests::spreadsheet_quotes_retain_cell_boundaries_unicode_and_embedded_endings ... ok
+test document::table_clipboard_html::tests::entities_unicode_literal_punctuation_and_cell_breaks_remain_values ... ok
+test document::table_clipboard_html::tests::explicit_cells_resolve_the_native_quote_fragment_ambiguity ... ok
+test document::table_clipboard_html::tests::nested_merged_malformed_hidden_or_ambiguous_structures_are_rejected ... ok
+test document::table_clipboard_html::tests::numeric_and_formula_metadata_preserves_displayed_values ... ok
+test document::table_clipboard_html::tests::resource_limits_cover_input_depth_cells_and_ragged_padding ... ok
+test document::table_clipboard_html::tests::wrappers_comments_raw_style_and_case_do_not_change_table_boundaries ... ok
+test document::table_edit::grid_paste::tests::literal_clipboard_values_keep_unicode_tabs_breaks_quotes_and_markdown_literal ... ok
+test io::table_clipboard::tests::lazy_owner_survives_operations_and_failed_initialization_can_retry ... ok
+test io::table_clipboard::tests::metadata_requires_matching_text_around_the_html_snapshot ... ok
+test io::table_clipboard::tests::producer_markers_require_opening_tags_and_attributes_not_cell_contents ... ok
+test io::table_clipboard::tests::sheets_snapshots_use_html_cell_boundaries_and_reject_changed_or_unsafe_metadata ... ok
+test io::table_clipboard::tests::text_equivalence_preserves_records_whitespace_and_literal_carriage_returns ... ok
+
+test result: ok. 41 passed; 0 failed; 2 ignored; 0 measured; 328 filtered out; finished in 1.50s
+
+     Running unittests src/main.rs (target/debug/deps/dosty-da2bef467f59cd8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

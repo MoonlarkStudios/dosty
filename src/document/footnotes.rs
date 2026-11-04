@@ -630,7 +630,12 @@ mod tests {
         assert_eq!(projection.footnotes().references[0].number, None);
         assert_ne!(projection.footnotes().next_label(), "note-1");
         document.replace(0..0, "Earlier text.\n\n").unwrap();
-        assert!(!projection.update_block_batch(document.source(), &document.block_changes, None));
+        assert!(!projection.update_block_batch(
+            document.source(),
+            &document.block_changes,
+            None,
+            None
+        ));
         projection = Projection::new(document.source());
         assert_projection(&projection, &Projection::new(document.source()));
         document

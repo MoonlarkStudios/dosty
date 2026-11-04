@@ -6,5 +6,6 @@ pub(crate) mod export;
 pub(crate) mod image_store;
 pub(crate) mod recovery;
 pub(crate) mod storage;
+pub(crate) mod table_clipboard;
 
 pub(crate) mod writing_sample;

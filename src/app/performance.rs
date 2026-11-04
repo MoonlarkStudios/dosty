@@ -2,11 +2,13 @@
 //! Software rasterization is included; OS delivery and GPU presentation are not.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::advanced::{
     Layout, Renderer as _, Shell, Widget, clipboard, input_method, layout, mouse, renderer, widget,
 };
+use iced::futures::{FutureExt, StreamExt};
 use iced::keyboard::{self, Key, key};
 use iced::widget::text_editor::Binding;
 use iced::{Event, Point, Rectangle, Renderer, Size};
@@ -94,12 +96,16 @@ impl Harness {
         )
         .selection(app.selection)
         .focused(true)
+        .table_grid(app.grid_view(), app.cell_editor())
+        .table_resume(app.grid_resume())
     }
     fn frame(&mut self, sample: &mut Sample) {
         let size = Size::new(720.0, 800.0);
         let clip = Rectangle::with_size(size);
         let start = Instant::now();
         let mut editor = Self::editor(&self.app);
+        self.tree
+            .diff(&editor as &dyn Widget<Message, iced::Theme, Renderer>);
         let node = editor.layout(
             &mut self.tree,
             &self.renderer,
@@ -137,6 +143,8 @@ impl Harness {
         let start = Instant::now();
         let mut messages = Vec::new();
         let mut editor = Self::editor(&self.app);
+        self.tree
+            .diff(&editor as &dyn Widget<Message, iced::Theme, Renderer>);
         let size = Size::new(720.0, 800.0);
         let node = editor.layout(
             &mut self.tree,
@@ -154,9 +162,12 @@ impl Harness {
             &Rectangle::with_size(size),
         );
         sample.input = start.elapsed();
+        drop(editor);
         let start = Instant::now();
         for message in messages {
-            drop(self.app.update(message));
+            self.app.document.costs = Default::default();
+            let task = self.app.update_message(message);
+            self.effects(task);
             sample.crdt += self.app.document.costs.crdt;
             sample.source += self.app.document.costs.source;
         }
@@ -166,7 +177,9 @@ impl Harness {
     }
     fn message(&mut self, message: Message) -> Sample {
         let start = Instant::now();
-        drop(self.app.update(message));
+        self.app.document.costs = Default::default();
+        let task = self.app.update_message(message);
+        self.effects(task);
         let mut sample = Sample {
             update: start.elapsed(),
             crdt: self.app.document.costs.crdt,
@@ -175,6 +188,28 @@ impl Harness {
         };
         self.frame(&mut sample);
         sample
+    }
+    fn effects(&mut self, task: iced::Task<Message>) {
+        if let Some(mut stream) = iced_runtime::task::into_stream(task) {
+            while let Some(Some(action)) = stream.next().now_or_never() {
+                if let iced_runtime::Action::Widget(mut operation) = action {
+                    let mut editor = Self::editor(&self.app);
+                    self.tree
+                        .diff(&editor as &dyn Widget<Message, iced::Theme, Renderer>);
+                    let node = editor.layout(
+                        &mut self.tree,
+                        &self.renderer,
+                        &layout::Limits::new(Size::ZERO, Size::new(720.0, 800.0)),
+                    );
+                    editor.operate(
+                        &mut self.tree,
+                        Layout::new(&node),
+                        &self.renderer,
+                        operation.as_mut(),
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -218,6 +253,299 @@ fn typing_event() -> Event {
         text: Some("x".into()),
         repeat: false,
     })
+}
+
+#[test]
+fn live_table_space_and_tab_use_real_keyboard_events_without_crossing_on_spaces() {
+    fn key_event(key: Key, text: Option<&str>, shift: bool) -> Event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            modified_key: key.clone(),
+            key,
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: if shift {
+                keyboard::Modifiers::SHIFT
+            } else {
+                keyboard::Modifiers::empty()
+            },
+            text: text.map(Into::into),
+            repeat: false,
+        })
+    }
+    let source = "Before\n\n| A | B |\n|---|---|\n|  | right |\n\nAfter";
+    let mut harness = Harness::new(source.into());
+    let point = harness.app.projection.rich.tables[0].source_rows[1][0].start;
+    harness.message(Message::SelectSource(Selection::caret(point)));
+    {
+        let mut editor = Harness::editor(&harness.app);
+        let node = editor.layout(
+            &mut harness.tree,
+            &harness.renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(720.0, 800.0)),
+        );
+        editor.operate(
+            &mut harness.tree,
+            Layout::new(&node),
+            &harness.renderer,
+            &mut widget::operation::focusable::focus::<()>(widget::Id::from(super::EDITOR)),
+        );
+    }
+    let sentence = "  one two café 🧑‍💻  ";
+    let mut entered = String::new();
+    for character in sentence.chars() {
+        let text = character.to_string();
+        let key = if character == ' ' {
+            Key::Named(key::Named::Space)
+        } else {
+            Key::Character(text.clone().into())
+        };
+        harness.event(key_event(key, Some(&text), false), Point::ORIGIN);
+        entered.push(character);
+        assert_eq!(
+            harness.app.grid.draft.as_ref().unwrap().buffer.snapshot(),
+            entered
+        );
+        assert_eq!(harness.app.document.source(), source);
+        assert_eq!(
+            harness.app.editor.selection(),
+            harness
+                .app
+                .projection
+                .display_selection(harness.app.selection)
+        );
+        assert_eq!(
+            crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
+                .map(|(_, row, column)| (row, column)),
+            Some((1, 0))
+        );
+    }
+    let mut expected = source.to_owned();
+    expected.insert_str(point, "&#32;&#32;one two café 🧑‍💻&#32;&#32;");
+    harness.event(
+        key_event(Key::Named(key::Named::Tab), None, false),
+        Point::ORIGIN,
+    );
+    assert_eq!(harness.app.document.source(), expected);
+    assert_eq!(
+        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
+            .map(|(_, row, column)| (row, column)),
+        Some((1, 1))
+    );
+    harness.event(
+        key_event(Key::Named(key::Named::Tab), None, true),
+        Point::ORIGIN,
+    );
+    assert_eq!(
+        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
+            .map(|(_, row, column)| (row, column)),
+        Some((1, 0))
+    );
+    assert_eq!(
+        harness.app.document.source(),
+        expected,
+        "Tab navigation must not insert text or delimiters."
+    );
+    for _ in 0..2 {
+        harness.event(
+            key_event(Key::Named(key::Named::Tab), None, false),
+            Point::ORIGIN,
+        );
+    }
+    assert_eq!(harness.app.projection.rich.tables[0].rows.len(), 3);
+    assert_eq!(
+        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
+            .map(|(_, row, column)| (row, column)),
+        Some((2, 0))
+    );
+    harness.event(
+        key_event(Key::Named(key::Named::Space), Some(" "), false),
+        Point::ORIGIN,
+    );
+    assert_eq!(
+        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
+            .map(|(_, row, column)| (row, column)),
+        Some((2, 0))
+    );
+    harness.message(Message::Undo);
+    assert_eq!(harness.app.projection.rich.tables[0].rows.len(), 3);
+    harness.message(Message::Undo);
+    assert_eq!(
+        harness.app.document.source(),
+        expected,
+        "The final-cell Tab adds one undoable row."
+    );
+}
+
+#[test]
+fn spreadsheet_table_draft_keeps_line_breaks_and_ime_pending_until_commit() {
+    fn press(key: key::Named, modifiers: keyboard::Modifiers) -> Event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: Key::Named(key),
+            modified_key: Key::Named(key),
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    }
+    let source = "Before\n\n| A | B |\n|---|---|\n| alpha | beta |\n\nAfter";
+    let mut harness = Harness::new(source.into());
+    harness.message(Message::TableGrid(super::table_grid::Message::Select {
+        revision: Arc::clone(&harness.app.projection.source_id),
+        table: 0,
+        row: 1,
+        column: 0,
+        extend: false,
+        extent: super::table_grid::Extent::Cell,
+    }));
+    harness.event(
+        press(key::Named::Enter, keyboard::Modifiers::empty()),
+        Point::ORIGIN,
+    );
+    harness.event(
+        press(key::Named::Enter, keyboard::Modifiers::COMMAND),
+        Point::ORIGIN,
+    );
+    harness.event(
+        Event::InputMethod(input_method::Event::Opened),
+        Point::ORIGIN,
+    );
+    harness.event(
+        Event::InputMethod(input_method::Event::Preedit("にほん".into(), Some(0..9))),
+        Point::ORIGIN,
+    );
+    for key in [key::Named::Space, key::Named::Enter, key::Named::Tab] {
+        harness.event(press(key, keyboard::Modifiers::empty()), Point::ORIGIN);
+        assert_eq!(harness.app.document.source(), source);
+    }
+    harness.event(
+        Event::InputMethod(input_method::Event::Commit("日本語".into())),
+        Point::ORIGIN,
+    );
+    assert_eq!(
+        harness.app.grid.draft.as_ref().unwrap().buffer.snapshot(),
+        "alpha\n日本語"
+    );
+    assert_eq!(harness.app.document.source(), source);
+    harness.event(
+        press(key::Named::Tab, keyboard::Modifiers::empty()),
+        Point::ORIGIN,
+    );
+    let cell = &harness.app.projection.rich.tables[0].rows[1][0];
+    assert_eq!(&harness.app.projection.text[cell.clone()], "alpha\n日本語");
+    assert_eq!(harness.app.grid_view().unwrap().active, (1, 1));
+    harness.message(Message::Undo);
+    assert_eq!(harness.app.document.source(), source);
+    assert!(!harness.app.document.can_undo());
+}
+
+#[test]
+#[ignore = "profile real Space, text, and Tab events in large document tables"]
+fn performance_document_table_typing() {
+    load_profile_fonts();
+    let count = std::env::var("DOSTY_TABLE_SAMPLES")
+        .map_or(30, |value| value.parse::<usize>().unwrap().max(1));
+    for rows in [1_000, 5_000] {
+        let source = format!(
+            "Before\n\n| Name | Detail | Count |\n|:---|:---:|---:|\n{}\nAfter",
+            "| café | **bold** | 12 |\n".repeat(rows)
+        );
+        let mut harness = Harness::new(source);
+        let begin = |harness: &mut Harness| {
+            harness.message(Message::TableGrid(super::table_grid::Message::Select {
+                revision: Arc::clone(&harness.app.projection.source_id),
+                table: 0,
+                row: 1,
+                column: 0,
+                extend: false,
+                extent: super::table_grid::Extent::Cell,
+            }));
+            harness.message(Message::TableGrid(super::table_grid::Message::Begin(None)));
+        };
+        begin(&mut harness);
+        let mut spaces = Vec::new();
+        let mut text = Vec::new();
+        let mut tabs = Vec::new();
+        for _ in 0..count {
+            let Event::Keyboard(keyboard::Event::KeyPressed {
+                physical_key,
+                location,
+                ..
+            }) = typing_event()
+            else {
+                unreachable!()
+            };
+            let event = |key: Key, content: Option<&str>| {
+                Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: key.clone(),
+                    modified_key: key,
+                    physical_key,
+                    location,
+                    modifiers: keyboard::Modifiers::empty(),
+                    text: content.map(Into::into),
+                    repeat: false,
+                })
+            };
+            spaces.push(harness.event(
+                event(Key::Named(key::Named::Space), Some(" ")),
+                Point::ORIGIN,
+            ));
+            text.push(harness.event(typing_event(), Point::ORIGIN));
+            tabs.push(harness.event(event(Key::Named(key::Named::Tab), None), Point::ORIGIN));
+            assert_eq!(
+                crate::document::table_edit::cell_at(
+                    &harness.app.projection,
+                    harness.app.selection
+                )
+                .map(|(_, row, column)| (row, column)),
+                Some((1, 1))
+            );
+            begin(&mut harness);
+        }
+        report(&format!("document-table rows={rows} Space"), &spaces);
+        report(&format!("document-table rows={rows} text"), &text);
+        report(&format!("document-table rows={rows} Tab"), &tabs);
+        harness.message(Message::TableGrid(super::table_grid::Message::Cancel));
+        let select_middle = |harness: &mut Harness| {
+            harness.message(Message::TableGrid(super::table_grid::Message::Select {
+                revision: Arc::clone(&harness.app.projection.source_id),
+                table: 0,
+                row: rows / 2,
+                column: 0,
+                extend: false,
+                extent: super::table_grid::Extent::Cell,
+            }));
+        };
+        let mut arrows = Vec::new();
+        let mut ranges = Vec::new();
+        for _ in 0..count {
+            select_middle(&mut harness);
+            let key = Key::Named(key::Named::ArrowRight);
+            arrows.push(harness.event(
+                Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: key.clone(),
+                    modified_key: key,
+                    physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+                    location: keyboard::Location::Standard,
+                    modifiers: keyboard::Modifiers::empty(),
+                    text: None,
+                    repeat: false,
+                }),
+                Point::ORIGIN,
+            ));
+            select_middle(&mut harness);
+            ranges.push(
+                harness.message(Message::TableGrid(super::table_grid::Message::Move {
+                    rows: 30,
+                    columns: 2,
+                    extend: true,
+                })),
+            );
+        }
+        report(&format!("table-grid rows={rows} Arrow"), &arrows);
+        report(&format!("table-grid rows={rows} range-31x3"), &ranges);
+    }
 }
 
 /// Current test-process RSS, distinct from the command's process-tree peak.
@@ -776,7 +1104,8 @@ fn performance_source_projection_updates() {
                     assert!(projection.update_blocks(
                         document.source(),
                         document.block_changes.first().expect("isolated paragraph"),
-                        Some(head)
+                        Some(head),
+                        None
                     ));
                 }
                 projection_time += start.elapsed();

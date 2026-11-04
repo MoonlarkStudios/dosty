@@ -26,11 +26,13 @@ impl Projection {
         source: &str,
         changes: &[BlockChange],
         caret: Option<usize>,
+        cell: Option<Range<usize>>,
     ) -> bool {
         if changes.len() == 1 {
-            return self.update_blocks(source, &changes[0], caret);
+            return self.update_blocks(source, &changes[0], caret, cell);
         }
-        self.block_batch(source, changes, caret).is_some()
+        self.block_batch(source, changes, caret, cell.as_ref())
+            .is_some()
     }
 
     fn block_batch(
@@ -38,6 +40,7 @@ impl Projection {
         source: &str,
         changes: &[BlockChange],
         caret: Option<usize>,
+        cell: Option<&Range<usize>>,
     ) -> Option<()> {
         if changes.is_empty()
             || changes.len() > MAX_INCREMENTAL_WINDOWS
@@ -56,11 +59,13 @@ impl Projection {
             {
                 return None;
             }
-            let local = Self::with_context(
+            let local = Self::with_editing_cell(
                 source.get(new.clone())?,
                 caret
-                    .filter(|&head| new.contains(&head))
+                    .filter(|&head| new.start <= head && head <= new.end)
                     .map(|head| head - new.start),
+                cell.filter(|range| new.start <= range.start && range.end <= new.end)
+                    .map(|range| range.start - new.start..range.end - new.start),
             );
             if local.parsed.global_dependencies {
                 return None;
@@ -142,11 +147,10 @@ impl Projection {
             i.checked_sub(1)
                 .map_or(offset, |i| offset - changes[i].old.end + changes[i].new.end)
         };
-        let disclosure = if let Some((i, change)) = changes
-            .iter()
-            .enumerate()
-            .find(|(_, change)| caret.is_some_and(|head| change.new.contains(&head)))
-        {
+        let disclosure = if let Some((i, change)) =
+            changes.iter().enumerate().find(|(_, change)| {
+                caret.is_some_and(|head| change.new.start <= head && head <= change.new.end)
+            }) {
             Disclosure(
                 windows[i]
                     .local
@@ -155,17 +159,28 @@ impl Projection {
                     .iter()
                     .map(|r| r.start + change.new.start..r.end + change.new.start)
                     .collect(),
+                windows[i]
+                    .local
+                    .disclosure
+                    .1
+                    .as_ref()
+                    .map(|range| range.start + change.new.start..range.end + change.new.start),
             )
         } else {
-            let mut disclosure = self.disclosure_at(caret.map(map_old));
-            for range in &mut disclosure.0 {
+            let mut disclosure = self.disclosure_with_editing_cell(
+                caret.map(map_old),
+                cell.map(|range| map_old(range.start)..map_old(range.end)),
+            );
+            for range in disclosure.0.iter_mut().chain(disclosure.1.iter_mut()) {
                 *range = map_new(range.start)..map_new(range.end);
             }
             disclosure
         };
-        let outside = |ranges: &[Range<usize>], old: bool| {
-            ranges
+        let outside = |disclosure: &Disclosure, old: bool| {
+            disclosure
+                .0
                 .iter()
+                .chain(disclosure.1.iter())
                 .filter(|r| {
                     changes.iter().all(|c| {
                         let window = if old { &c.old } else { &c.new };
@@ -181,7 +196,7 @@ impl Projection {
                 })
                 .collect::<Vec<_>>()
         };
-        if outside(&self.disclosure.0, true) != outside(&disclosure.0, false) {
+        if outside(&self.disclosure, true) != outside(&disclosure, false) {
             return None;
         }
 
