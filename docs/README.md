@@ -10,6 +10,7 @@ describe the remaining platform, accessibility, and durability work.
 | Document | Scope |
 | --- | --- |
 | [Architecture](architecture.md) | Source boundaries, editing invariants, layout, themes and storage |
+| [Architecture review](architecture-review.md) | 2026-11-04 encapsulation review, Rust guidance, decisions and extraction constraints |
 | [Writing workflows](writing-workflows.md) | Links, images, credits, assets, recovery and HTML export |
 | [Collaboration](collaboration.md) | CRDT transactions, selections, offline replicas, history and persistence |
 | [Outline](outline.md) | Heading search, collapse state and section moves |

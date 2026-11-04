@@ -479,7 +479,7 @@ mod tests {
         let mut document = Document::new(source.into());
         let projection = Projection::new(source);
         let index = document
-            .blocks
+            .blocks()
             .iter()
             .position(|block| document.source()[block.range.clone()].starts_with("Distant"))
             .unwrap();
@@ -497,7 +497,7 @@ mod tests {
         document.replace(0..0, "Earlier[^old].\n\n").unwrap();
         let projection = Projection::new(document.source());
         let fresh = Document::new(document.source().into());
-        for index in 0..document.blocks.len() {
+        for index in 0..document.blocks().len() {
             assert_eq!(
                 format!(
                     "{:?}",
@@ -510,7 +510,7 @@ mod tests {
             );
         }
         let index = document
-            .blocks
+            .blocks()
             .iter()
             .position(|block| document.source()[block.range.clone()].starts_with("Distant"))
             .unwrap();
@@ -521,7 +521,7 @@ mod tests {
         assert_ne!(before, after);
         let shown = projection
             .footnotes()
-            .read_block(document.source(), document.blocks[index].range.clone());
+            .read_block(document.source(), document.blocks()[index].range.clone());
         assert!(shown.contains("[\\[1\\]](dosty-footnote:"), "{shown}");
     }
 
@@ -560,7 +560,7 @@ mod tests {
             assert!(body.contains("    code"));
             let document = Document::new(source.clone());
             let index = document
-                .blocks
+                .blocks()
                 .iter()
                 .position(|block| block.range.start == definition.range.start)
                 .unwrap();
@@ -632,7 +632,7 @@ mod tests {
         document.replace(0..0, "Earlier text.\n\n").unwrap();
         assert!(!projection.update_block_batch(
             document.source(),
-            &document.block_changes,
+            document.block_changes(),
             None,
             None
         ));
@@ -676,7 +676,7 @@ mod tests {
                 assert_eq!(projection.footnotes().references.len(), count);
                 assert_eq!(projection.footnotes().definitions.len(), count);
                 let start = Instant::now();
-                let rendered = (0..document.blocks.len())
+                let rendered = (0..document.blocks().len())
                     .map(|index| {
                         document
                             .rendered_with_footnotes(index, projection.footnotes())
@@ -686,7 +686,7 @@ mod tests {
                 cold.push(start.elapsed().as_secs_f64() * 1000.0);
                 assert!(rendered >= count * 2);
                 let start = Instant::now();
-                let reused = (0..document.blocks.len())
+                let reused = (0..document.blocks().len())
                     .map(|index| {
                         document
                             .rendered_with_footnotes(index, projection.footnotes())

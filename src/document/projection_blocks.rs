@@ -517,7 +517,7 @@ mod tests {
         assert!(Arc::ptr_eq(&id, &projection.source_id));
         assert!(projection.update_blocks(
             document.source(),
-            document.block_changes.first().unwrap(),
+            document.block_changes().first().unwrap(),
             Some(point + 8),
             None
         ));
@@ -581,7 +581,7 @@ mod tests {
                         let mut document = Document::new(source.clone());
                         let mut next = Projection::with_context(&source, Some(point));
                         document.replace(point..point, inserted).unwrap();
-                        let Some(change) = document.block_changes.first() else {
+                        let Some(change) = document.block_changes().first() else {
                             continue;
                         };
                         let head = Some(point + inserted.len());
@@ -622,7 +622,7 @@ mod tests {
             let end = document.source().rfind("\n\nTail").unwrap();
             document.replace(start..end, replacement).unwrap();
             let head = Some(start + replacement.len());
-            if document.block_changes.first().is_some_and(|change| {
+            if document.block_changes().first().is_some_and(|change| {
                 projection.update_blocks(document.source(), change, head, None)
             }) {
                 accepted += 1;
@@ -648,7 +648,7 @@ mod tests {
         let mut old = Projection::with_context(source, Some(4));
         let point = source.find("words").unwrap();
         document.replace(point..point, "日本").unwrap();
-        let change = document.block_changes.first().unwrap();
+        let change = document.block_changes().first().unwrap();
         assert!(!old.update_blocks(document.source(), change, Some(point), None));
         let mut stale = Projection::new(&format!("Other {source}"));
         assert!(!stale.update_blocks(document.source(), change, None, None));
@@ -664,7 +664,7 @@ mod tests {
             let old_map = Arc::clone(&projection.mapping);
             let old_lines = Arc::clone(&projection.line_starts);
             let old_highlights = Arc::clone(&projection.highlights);
-            let target = document.collaboration.position(head, yrs::Assoc::After);
+            let target = document.collaboration().position(head, yrs::Assoc::After);
             let edits: Vec<_> = [
                 ("First", "New 🦀"),
                 ("Alpha", "Alpha日"),
@@ -685,12 +685,12 @@ mod tests {
             document
                 .transact(&edits, EditOrigin::Agent, None, true)
                 .unwrap();
-            assert_eq!(document.block_changes.len(), 5);
-            let next_head = document.collaboration.resolve(&target);
+            assert_eq!(document.block_changes().len(), 5);
+            let next_head = document.collaboration().resolve(&target);
             assert!(
                 projection.update_block_batch(
                     document.source(),
-                    &document.block_changes,
+                    document.block_changes(),
                     next_head,
                     None
                 ),
@@ -730,7 +730,7 @@ mod tests {
             ),
         ] {
             let mut projection = Projection::with_context(source, Some(3));
-            assert!(!projection.update_block_batch(&next, &document.block_changes, caret, None));
+            assert!(!projection.update_block_batch(&next, document.block_changes(), caret, None));
             assert_full(&projection, source, Some(3));
         }
     }

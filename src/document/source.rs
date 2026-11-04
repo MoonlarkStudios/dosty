@@ -1,8 +1,5 @@
 //! CRDT-authoritative Markdown with an incrementally maintained parsing cache.
 
-use crate::document::collaboration::{
-    AgentProposal, Collaboration, CollaborationError, EditOrigin, ReplicaState, SourceEdit,
-};
 use std::cell::OnceCell;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -11,11 +8,14 @@ use iced::widget::markdown;
 use pulldown_cmark::{Event, Parser, Tag};
 
 use crate::document::block_parser::{self, BlockChange, MARKDOWN_OPTIONS};
+use crate::document::collaboration::{
+    AgentProposal, Collaboration, CollaborationError, EditOrigin, ReplicaState, SourceEdit,
+};
 use crate::document::footnotes::Footnotes;
 use crate::document::selection::{Selection, TableSelection};
 
 #[derive(Debug)]
-pub struct Block {
+pub(crate) struct Block {
     pub range: Range<usize>,
     rendered: OnceCell<Vec<markdown::Item>>,
     pub heading: Option<(usize, String)>,
@@ -32,17 +32,17 @@ pub(crate) struct ModelCosts {
 }
 
 #[derive(Debug)]
-pub struct Document {
+pub(crate) struct Document {
     source: String,
     #[cfg(test)]
     pub(crate) costs: ModelCosts,
-    pub blocks: Vec<Block>,
-    pub words: usize,
-    pub characters: usize,
-    pub revision: u64,
-    pub(crate) collaboration: Collaboration,
+    blocks: Vec<Block>,
+    words: usize,
+    characters: usize,
+    revision: u64,
+    collaboration: Collaboration,
     global_dependencies: bool,
-    pub(crate) block_changes: Vec<BlockChange>,
+    block_changes: Vec<BlockChange>,
 }
 
 impl Document {
@@ -65,6 +65,29 @@ impl Document {
 
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// Read-only CRDT access for stable positions, snapshots, and history status.
+    /// Mutations must pass through this document so its source and caches agree.
+    pub(crate) fn collaboration(&self) -> &Collaboration {
+        &self.collaboration
+    }
+
+    pub(crate) fn blocks(&self) -> &[Block] {
+        &self.blocks
+    }
+
+    pub(crate) fn words(&self) -> usize {
+        self.words
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Certified changes in the predecessor source's UTF-8 coordinates.
+    pub(crate) fn block_changes(&self) -> &[BlockChange] {
+        &self.block_changes
     }
 
     pub fn block_source(&self, index: usize) -> &str {

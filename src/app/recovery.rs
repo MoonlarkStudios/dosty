@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::{App, Message as AppMessage, Overlay, Pending};
-use crate::document::{Document, selection::Selection};
+use crate::document::Document;
+use crate::document::selection::Selection;
 use crate::io::{recovery, storage};
 use crate::theme::styles;
 
@@ -153,13 +154,13 @@ impl App {
                 );
             }
             Message::Tick => {
-                let generation = self.document.collaboration.generation();
+                let generation = self.document.collaboration().generation();
                 if self.dirty
                     && !self.loading
                     && self.recovery.checkpoint_due(generation, Instant::now())
                 {
                     let snapshot = recovery::Snapshot {
-                        state: self.document.collaboration.state(),
+                        state: self.document.collaboration().state(),
                         path: self.path.clone(),
                         name: self.display_name.clone(),
                         baseline: self.saved_source.clone(),
@@ -370,7 +371,7 @@ mod tests {
             Some(path.clone()),
             "note.md".into(),
         );
-        let state = app.document.collaboration.state();
+        let state = app.document.collaboration().state();
         app.saved_version = Some(collaboration_store::version(&state));
         collaboration_store::save_document(
             path.clone(),
@@ -393,7 +394,7 @@ mod tests {
             ))))),
         );
         let snapshot = recovery::Snapshot {
-            state: app.document.collaboration.state(),
+            state: app.document.collaboration().state(),
             path: app.path.clone(),
             name: app.display_name.clone(),
             baseline: app.saved_source.clone(),
@@ -402,7 +403,7 @@ mod tests {
             head: 2,
         };
         let expected = app.document.source().to_owned();
-        let writer = app.document.collaboration.replica_id();
+        let writer = app.document.collaboration().replica_id();
         let id = Uuid::new_v4();
         recovery::write(dir.path(), id, &snapshot).unwrap();
         std::fs::write(&path, "External work must survive.").unwrap();
@@ -410,16 +411,16 @@ mod tests {
         assert_eq!(app.document.source(), expected);
         assert_eq!(
             app.document.source(),
-            app.document.collaboration.materialize()
+            app.document.collaboration().materialize()
         );
         assert_eq!(app.editor.snapshot(), app.projection.text);
         assert!(app.selection.anchor > app.selection.head);
-        assert_ne!(app.document.collaboration.replica_id(), writer);
+        assert_ne!(app.document.collaboration().replica_id(), writer);
         assert!(app.dirty);
         let result = collaboration_store::save_document(
             path.clone(),
             app.document.source().into(),
-            app.document.collaboration.state(),
+            app.document.collaboration().state(),
             Some(app.saved_source.clone()),
             app.saved_version.clone(),
         )

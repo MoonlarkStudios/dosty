@@ -178,7 +178,7 @@ mod tests {
         let id = Uuid::new_v4();
         let doc = Document::new("# Draft\r\n\r\n海 👩‍👩‍👧‍👦 e\u{301}\n".into());
         let snapshot = Snapshot {
-            state: doc.collaboration.state(),
+            state: doc.collaboration().state(),
             path: Some(dir.path().join("note.md")),
             name: "note.md".into(),
             baseline: "on disk".into(),
@@ -192,8 +192,8 @@ mod tests {
         let reopened = Document::from_state(&restored.state).unwrap();
         assert_eq!(reopened.source(), doc.source());
         assert_ne!(
-            reopened.collaboration.replica_id(),
-            doc.collaboration.replica_id()
+            reopened.collaboration().replica_id(),
+            doc.collaboration().replica_id()
         );
         assert_eq!(restored.baseline, "on disk");
         assert_eq!(restored.anchor, 12);

@@ -9,7 +9,6 @@ use std::time::Duration;
 use iced::advanced::image::Handle;
 use iced::{Size, Task};
 
-use crate::app::Message;
 use crate::document::rich_document::Image;
 
 const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
@@ -24,6 +23,12 @@ pub struct LoadedImage {
     pub handle: Handle,
     pub size: Size<u32>,
     bytes: usize,
+}
+
+/// A background load result; the application chooses how to route it.
+pub(crate) struct Completion {
+    pub(crate) key: String,
+    pub(crate) result: Result<LoadedImage, String>,
 }
 
 pub enum Asset {
@@ -84,7 +89,7 @@ impl ImageStore {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    pub fn request(&mut self, images: &[Image], base: Option<&Path>) -> Task<Message> {
+    pub(crate) fn request(&mut self, images: &[Image], base: Option<&Path>) -> Task<Completion> {
         let active = images
             .iter()
             .map(|image| {
@@ -123,11 +128,9 @@ impl ImageStore {
             self.assets.insert(key.clone(), Asset::Loading);
             let url = image.url.clone();
             let base = base.map(Path::to_path_buf);
-            tasks.push(Task::perform(load(url, base), move |result| {
-                Message::ImageLoaded {
-                    key: key.clone(),
-                    result,
-                }
+            tasks.push(Task::perform(load(url, base), move |result| Completion {
+                key: key.clone(),
+                result,
             }));
         }
         Task::batch(tasks)

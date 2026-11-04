@@ -4,6 +4,43 @@ Dosty is one Cargo package, named `dosty`, with a thin `main.rs` calling `dosty:
 
 `App` owns application state and follows Iced's `update → state → view` model. File operations run in background tasks and return typed messages. The active resolved theme is stored in `App` and shared by styles, text highlights, and canvas icons.
 
+## Crates, dependencies, and encapsulation
+
+Cargo builds two application targets from this package: the `dosty` library and
+the executable that calls its `run()` export. Vendored dependency packages are
+upstream patches, outside the application module boundaries. Keep the application
+in one package until a real consumer or measured build benefit justifies another.
+
+| Group | Dependencies within the application |
+| --- | --- |
+| `document` | Other document modules; no application, editor, IO, or theme modules |
+| `theme` | Other theme modules |
+| `io` | Document data and limits; no application messages |
+| `editor` | Document, theme, image cache, and application interaction messages |
+| `app` | Coordinates all groups, background results, and user workflows |
+
+The document layer still uses Iced types for native selection conversion, code
+actions, and lazy Read-view parsing. It is not an independent UI-free library.
+Editor widgets also emit application messages directly. Those dependencies serve
+this application; extracting a reusable model or widget crate would first require
+a concrete consumer and a deliberate adapter boundary.
+
+`Document` keeps its CRDT, blocks, statistics, source revision, and certified
+change windows private. Callers borrow blocks/change windows as slices and the
+collaboration state through a shared reference. Source mutations, imports,
+accepted proposals, and undo/redo enter document methods that update the source
+and derived caches together. There is no mutable collaboration or block accessor.
+
+Application workflow modules are children of `application` so they can work with
+its private state. The `app` root re-exports their interaction messages for
+widgets; workflow state and recovery scheduling stay behind that boundary.
+Image loading returns an IO completion value; `App` maps it to its own message.
+
+The [2026-11-04 architecture review](architecture-review.md) records the review
+scope, guide interpretation, changes, and remaining refactoring considerations.
+
+## Module map
+
 | Module | Responsibility |
 | --- | --- |
 | `app/startup.rs` | Native startup, fonts, Iced event-loop configuration |

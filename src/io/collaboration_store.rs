@@ -349,7 +349,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("note.md");
         let document = Document::new("Existing draft 日本 🦀\r\n".into());
-        let state = document.collaboration.state();
+        let state = document.collaboration().state();
         fs::write(&path, document.source()).unwrap();
         fs::write(
             directory.path().join(".note.md.daytrip"),
@@ -402,10 +402,10 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("note.md");
             let mut document = Document::new("Old 🦀\r\n".into());
-            let old = document.collaboration.state();
+            let old = document.collaboration().state();
             save(&path, document.source(), &old, None, None).unwrap();
             document.replace(0..3, "New 日本").unwrap();
-            let new = document.collaboration.state();
+            let new = document.collaboration().state();
             let paths = Paths::new(&path).unwrap();
             stage(&paths, document.source(), &new);
             if phase > 0 {
@@ -420,10 +420,10 @@ mod tests {
             assert!(!paths.journal.exists());
             let reopened = Document::from_state(&load(&path).unwrap().1.unwrap()).unwrap();
             assert_ne!(
-                reopened.collaboration.replica_id(),
-                document.collaboration.replica_id()
+                reopened.collaboration().replica_id(),
+                document.collaboration().replica_id()
             );
-            assert_eq!(reopened.collaboration.id(), document.collaboration.id());
+            assert_eq!(reopened.collaboration().id(), document.collaboration().id());
             assert_eq!(reopened.source(), document.source());
         }
     }
@@ -432,11 +432,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("note.md");
         let mut document = Document::new("original".into());
-        let original = document.collaboration.state();
+        let original = document.collaboration().state();
         save(&path, document.source(), &original, None, None).unwrap();
         let baseline = version(&original);
         document.replace(0..8, "updated").unwrap();
-        let updated = document.collaboration.state();
+        let updated = document.collaboration().state();
         fs::write(&path, "external").unwrap();
         assert!(matches!(load(&path), Err(FileError::MetadataConflict)));
         assert!(matches!(
@@ -460,7 +460,7 @@ mod tests {
             ),
             Err(FileError::MetadataConflict)
         ));
-        let foreign = Document::new("original".into()).collaboration.state();
+        let foreign = Document::new("original".into()).collaboration().state();
         assert!(matches!(
             save(
                 &path,
@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn checkpoint_checksum_size_and_symlink_guards_preserve_files() {
         let document = Document::new("# 日本\r\n\ntext\rmore\n".into());
-        let state = document.collaboration.state();
+        let state = document.collaboration().state();
         let encoded = encode(&state).unwrap();
         for end in [0, 7, 63, encoded.len() - 1] {
             assert!(decode(&encoded[..end]).is_err());
@@ -523,18 +523,18 @@ mod tests {
     fn pending_updates_and_causal_only_saves_survive_reopen() {
         use yrs::{ReadTxn, Transact};
         let mut a = Document::new("base".into());
-        let mut b = Document::from_state(&a.collaboration.state()).unwrap();
-        let clock = b.collaboration.doc_for_test().transact().state_vector();
+        let mut b = Document::from_state(&a.collaboration().state()).unwrap();
+        let clock = b.collaboration().doc_for_test().transact().state_vector();
         b.replace(4..4, " first").unwrap();
-        let first = b.collaboration.diff_for_test(&clock);
-        let clock = b.collaboration.doc_for_test().transact().state_vector();
+        let first = b.collaboration().diff_for_test(&clock);
+        let clock = b.collaboration().doc_for_test().transact().state_vector();
         b.replace(10..10, " second").unwrap();
-        let second = b.collaboration.diff_for_test(&clock);
+        let second = b.collaboration().diff_for_test(&clock);
         a.receive(&second).unwrap();
         assert_eq!(a.source(), "base");
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("note.md");
-        save(&path, a.source(), &a.collaboration.state(), None, None).unwrap();
+        save(&path, a.source(), &a.collaboration().state(), None, None).unwrap();
         let mut reopened = Document::from_state(&load(&path).unwrap().1.unwrap()).unwrap();
         reopened.receive(&first).unwrap();
         assert_eq!(reopened.source(), b.source());
@@ -550,7 +550,7 @@ mod writer_tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("note.md");
         let document = Document::new("initial".into());
-        let state = document.collaboration.state();
+        let state = document.collaboration().state();
         save(&path, document.source(), &state, None, None).unwrap();
         let version = version(&state);
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -559,7 +559,7 @@ mod writer_tests {
             .map(|text| {
                 let mut replica = Document::from_state(&state).unwrap();
                 replica.replace(0..7, text).unwrap();
-                let state = replica.collaboration.state();
+                let state = replica.collaboration().state();
                 let path = path.clone();
                 let version = version.clone();
                 let barrier = barrier.clone();
@@ -604,7 +604,7 @@ mod missing_checkpoint_tests {
         save(
             &path,
             document.source(),
-            &document.collaboration.state(),
+            &document.collaboration().state(),
             None,
             None,
         )

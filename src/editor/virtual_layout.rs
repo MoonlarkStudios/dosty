@@ -696,7 +696,7 @@ mod tests {
                 *head += inserted.len();
                 assert!(projection.update_blocks(
                     source,
-                    document.block_changes.first().unwrap(),
+                    document.block_changes().first().unwrap(),
                     Some(*head),
                     None
                 ));
@@ -726,7 +726,7 @@ mod tests {
                         projection.update_words(&source, Some(head))
                             || projection.update_blocks(
                                 &source,
-                                document.block_changes.first().unwrap(),
+                                document.block_changes().first().unwrap(),
                                 Some(head),
                                 None
                             )

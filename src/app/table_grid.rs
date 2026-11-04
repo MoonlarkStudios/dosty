@@ -211,13 +211,13 @@ impl App {
             return None;
         }
         let grid = self.grid.grid.as_ref()?;
-        let position = self.document.collaboration.resolve(&grid.table)?;
+        let position = self.document.collaboration().resolve(&grid.table)?;
         let table_index = self.projection.rich.tables.iter().position(|table| {
             table.source_range.start <= position && position <= table.source_range.end
         })?;
         let table = &self.projection.rich.tables[table_index];
         let resolve = |cell: &Cell| {
-            let point = self.document.collaboration.resolve(&cell.position)?;
+            let point = self.document.collaboration().resolve(&cell.position)?;
             if Arc::ptr_eq(&grid.revision, &self.projection.source_id) {
                 return table
                     .source_rows
@@ -288,7 +288,7 @@ impl App {
         tab_column: Option<usize>,
     ) {
         let table = &self.projection.rich.tables[table_index];
-        let collaboration = &self.document.collaboration;
+        let collaboration = self.document.collaboration();
         let cell = |(row, column): (usize, usize)| Cell {
             position: collaboration.position(table.source_rows[row][column].start, Assoc::After),
             row,
@@ -718,7 +718,7 @@ impl App {
                 };
                 self.grid.draft = Some(Draft {
                     target: Target::new(
-                        &self.document.collaboration,
+                        self.document.collaboration(),
                         self.document.source(),
                         source_range,
                     ),
@@ -1329,7 +1329,7 @@ impl App {
         };
         let range = match draft
             .target
-            .resolve(&self.document.collaboration, self.document.source())
+            .resolve(self.document.collaboration(), self.document.source())
         {
             Ok(range) => range,
             Err(_) => {
