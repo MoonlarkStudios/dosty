@@ -50,9 +50,8 @@ remove only the footnote container indentation for presentation. Enclosing quote
 and list structure stays intact in Read. The dialog preview is limited to the
 first 64 KiB at a UTF-8 boundary; this limit does not truncate source or edits.
 
-Footnotes now use pulldown-cmark's current four-space continuation syntax, replacing
-the previously enabled legacy footnote mode. Adjacent definitions are separate
-notes, indented paragraphs/lists/code belong to their definition, and undefined
+Footnotes use pulldown-cmark's four-space continuation syntax. Adjacent definitions
+are separate notes, indented paragraphs/lists/code belong to their definition, and undefined
 references stay literal. Opening a legacy document preserves its exact source;
 its footnote interpretation can change under these documented syntax rules.
 
@@ -68,47 +67,6 @@ surface. Live retains the correct indented-code metadata and rendering. Fenced
 code blocks are the reliable rich-code path in Read and preview. This existing
 renderer limitation is separate from footnote continuation handling.
 
-## Validation
-
-The shared [footnote fixture](../tests/fixtures/footnotes.md) exercises repeated
-and missing references, Unicode, tables and multiline definitions. Private model
-and application regressions compare disclosure and accepted incremental updates
-with fresh projections, every UTF-8 source/display boundary, global Read cache
-invalidation, escaped labels and literal/code lookalikes, modern continuation
-syntax, navigation through replica edits, conflicts, and exact undo/redo.
-
-Run `mise run check`, `mise run check-repo`, and `mise run release`. The software
-renderer and synthetic input tests do not establish native IME, screen-reader or
-platform readiness; the [release gaps](evaluation.md#remaining-release-work)
-remain applicable.
-
-The 2026-10-29 feature-branch validation passed formatting, strict Clippy,
-209 ordinary regressions (18 optional tests ignored), repository checks, the
-optimized application build, and the dependency audit with the four existing
-reviewed maintenance exceptions. `unicase` 2.10.0 is now a direct dependency to
-match the parser's label comparison; it was already present at that version in
-the lockfile.
-
-Software previews were generated for all three presets in Live, Read, and the
-details dialog at 1180×820 and for details at 760×520. Representative evidence:
-[Paper Live](validation/footnotes/paper-live.png),
-[Paper Read](validation/footnotes/paper-read.png),
-[Paper details](validation/footnotes/paper-details.png),
-[Paper narrow details](validation/footnotes/paper-details-narrow.png),
-[Midnight details](validation/footnotes/midnight-details.png), and
-[Sage Live](validation/footnotes/sage-live.png).
-The narrow dialog scrolls to reach its lower controls. No native windows or user
-documents were opened or changed by this validation.
-
-Reproduce the previews and the optional serial feature benchmark with:
-
-```sh
-mise exec -- cargo test --locked footnote_ui_previews -- --ignored --nocapture --test-threads=1
-mise exec -- cargo test --locked --release performance_footnotes_parse_and_read -- --ignored --nocapture --test-threads=1
-```
-
-The benchmark measures model/projection construction and cold/warm Read item
-caching at 1,000 and 5,000 notes over 30 samples. It excludes layout, rendering,
-native input, IO, and GPU/display presentation. Its timings are observations,
-never ordinary regression assertions. Combined release interaction profiles are
-collected separately from this feature-specific harness.
+See the [shared fixture](../tests/fixtures/footnotes.md),
+[visual evidence](validation/README.md#software-previews), and
+[current release limits](evaluation.md).

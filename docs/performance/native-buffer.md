@@ -1,5 +1,8 @@
 # Native buffer initialization
 
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
 Measured on 2026-10-22 with mise's Rust 1.95.0, Cargo.lock's Iced 0.14 / cosmic-text 0.15, release optimization, macOS 26.7.1 / arm64, and the bundled Newsreader fonts. The baseline is commit `a0b3714`, which already includes [viewport virtualization](virtualization.md).
 
 The subsequent [incremental block parsing report](incremental-parsing.md) addresses parsing during edits on top of this implementation.
@@ -49,8 +52,6 @@ The profile additionally sends real widget input-method events at depth: Opened 
 
 ## Validation and limits
 
-Differential tests compare deferred content with Iced's original constructor: exact text, line endings, line count, cursor, copied selection, Unicode/RTL motions, word selection, paste, Enter, delete and backspace across batch boundaries. Empty documents, trailing endings and a large single line are covered. An application regression replaces a reverse selection spanning headings, tables and images across several batches, toggles Source mode and checks undo/redo source and endpoints. Existing rich-widget tests now use the real deferred constructor, including clipboard, drag selection, disclosure scroll anchors, wrap affinity and transient IME preedit.
-
 `mise run check`, `mise run bench`, the full 10k/50k profile, and `mise run release` pass. Timings are observations; ordinary tests assert behavior, not machine-dependent deadlines.
 
 Text storage is still document-wide and native text snapshots still allocate per line. This is deferred initialization, not a hard native shaping-cache budget. Native shapes can accumulate on visited lines. The stock Source widget can still shape extensively when Iced changes metrics before setting finite bounds; the cold table measures opening in Live mode. Large selection deletion and multiline paste still use cosmic-text's existing algorithms. Structural parsing, outline UI, and very long physical lines remain scaling limits.
@@ -76,8 +77,8 @@ DOSTY_PROFILE_BLOCKS=50000 DOSTY_PROFILE_COLD_ONLY=1 /usr/bin/time -l target/rel
 
 For the baseline, archive `a0b3714` into a temporary directory. Build its library tests using mise from the trusted repository, passing `--manifest-path` to that archive and the same `CARGO_TARGET_DIR` to reuse dependencies. Run each baseline measurement before rebuilding the current version; both versions may emit the same test executable filename. Cold-load and component diagnostics were already present in that commit. The current full interaction harness adds composition/history assertions after the existing interaction series.
 
-- Fresh cold runs: [before 10k](performance/native-buffer/before-cold-10k.txt), [after 10k](performance/native-buffer/after-cold-10k.txt), [before 50k](performance/native-buffer/before-cold-50k.txt), [after 50k](performance/native-buffer/after-cold-50k.txt).
-- [Native/model breakdown before](performance/native-buffer/before-components.txt) and [after](performance/native-buffer/after-components.txt).
-- [Complete interactions, composition and history](performance/native-buffer/after-interactions.txt).
-- Exploratory cold runs: [10k](performance/native-buffer/exploratory-cold-10k.txt), [50k](performance/native-buffer/exploratory-cold-50k.txt).
-- [Release model/layout benchmarks](performance/native-buffer/model-layout.txt).
+- Fresh cold runs: [before 10k](native-buffer/before-cold-10k.txt), [after 10k](native-buffer/after-cold-10k.txt), [before 50k](native-buffer/before-cold-50k.txt), [after 50k](native-buffer/after-cold-50k.txt).
+- [Native/model breakdown before](native-buffer/before-components.txt) and [after](native-buffer/after-components.txt).
+- [Complete interactions, composition and history](native-buffer/after-interactions.txt).
+- Exploratory cold runs: [10k](native-buffer/exploratory-cold-10k.txt), [50k](native-buffer/exploratory-cold-50k.txt).
+- [Release model/layout benchmarks](native-buffer/model-layout.txt).

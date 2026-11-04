@@ -1,5 +1,8 @@
 # Incremental block parsing
 
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
 Measured on 2026-10-22 with mise's Rust 1.95.0, locked Iced 0.14 / pulldown-cmark 0.12, release optimization, macOS 26.7.1 / arm64, and bundled Newsreader fonts. The baseline is `b490dd2`, after [deferred native initialization](native-buffer.md).
 
 The subsequent [native snapshot report](native-snapshots.md) addresses whole-buffer copying after native edits.
@@ -58,11 +61,7 @@ At 50k this avoids more than 99.99% of boundary-parser input for this case. Runt
 
 ## Validation and remaining work
 
-`mise run check` passes formatting, Clippy with warnings denied and 89 regression tests; six profiling/benchmark tests are ignored by default. All four release benchmarks and the complete 10k/50k profile pass, as does `mise run release`.
-
 The shared fixture/mutation matrix checks insertion, deletion and replacement at Unicode boundaries in LF/CRLF documents, including headings, closing hashes, Setext, tables, images, lists, blockquotes, fences, HTML, references, footnotes, definition lists, math, metadata and BOMs. Model ranges, heading data, statistics and dependency flags match a fresh parse. Tables with and without leading pipes, including zero-width decorations at EOF, are covered. Accepted block projections match full text, highlights, rich data, parsed reusable metadata, disclosure, line starts and every UTF-8 source/display mapping in both affinities. Repeated splits/replacements and undo/redo exercise changing topology and fallback transitions.
-
-Application coverage verifies Unicode composition payloads, shared unaffected styles, native cursor restoration, reverse selection and history through local edits. The virtual-layout differential now includes Unicode changes, paragraph splitting and table formatting, comparing its unit index and exact resident caret geometry with fresh layout. Existing cross-block selection/dragging, clipboard, disclosure anchors, wrap affinity and transient IME tests remain intact. The full profile sends real widget input-method events and verifies that preedit stays transient and commit inserts once.
 
 This remains a conservative incremental parser, not a general incremental CommonMark engine. Global references/footnotes, container neighborhoods, cross-block replacement and uncertain edits can still reparse the document. Native buffer snapshots, metadata cloning/rebasing, contiguous source changes, disclosure projection and outline construction still have linear costs. Local Unicode/syntax updates at 50k still exceed a 16 ms frame budget in this software path. Native OS input, actual CJK composition, GPU presentation, accessibility, file I/O and image decoding are outside this harness. Existing user windows and unsaved documents were preserved.
 
@@ -77,9 +76,9 @@ DOSTY_PROFILE_BLOCKS=50000 DOSTY_PROFILE_SAMPLES=30 mise run profile
 
 For process metrics without compilation, first build with `mise exec -- cargo test --locked --release --lib --no-run`, then run the emitted executable under `/usr/bin/time -l` with `large_document_interactions --ignored --nocapture --test-threads=1`. To reproduce the baseline, archive `b490dd2` into a temporary directory, build using mise from the trusted repository with `--manifest-path` pointing there and a shared `CARGO_TARGET_DIR`, and run its executable before rebuilding the current version. Both builds can emit the same executable filename. The interaction harness and fixtures are unchanged; the source-only benchmark is new.
 
-- [Isolated baseline](performance/incremental-parsing/before-interactions.txt).
-- [Final interaction profile](performance/incremental-parsing/after-interactions.txt).
-- [Prior after run](performance/incremental-parsing/second-interactions.txt): before the final EOF metadata ownership regression; 50k syntax median 26.73 ms.
-- [Intermediate layout invalidation](performance/incremental-parsing/intermediate-interactions.txt).
-- [Exploratory baseline, excluded](performance/incremental-parsing/exploratory-before-interactions.txt).
-- [Release model/layout benchmarks and parser byte counters](performance/incremental-parsing/model-layout.txt).
+- [Isolated baseline](incremental-parsing/before-interactions.txt).
+- [Final interaction profile](incremental-parsing/after-interactions.txt).
+- [Prior after run](incremental-parsing/second-interactions.txt): before the final EOF metadata ownership regression; 50k syntax median 26.73 ms.
+- [Intermediate layout invalidation](incremental-parsing/intermediate-interactions.txt).
+- [Exploratory baseline, excluded](incremental-parsing/exploratory-before-interactions.txt).
+- [Release model/layout benchmarks and parser byte counters](incremental-parsing/model-layout.txt).

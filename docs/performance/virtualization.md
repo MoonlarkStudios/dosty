@@ -1,6 +1,9 @@
 # Viewport virtualization
 
-Measured on 2026-10-22 with mise's Rust 1.95.0, Iced 0.14, release optimization, macOS/Apple silicon, and the bundled Newsreader fonts. The baseline is commit `de2e075`; its source organization has the same behavior as the [previous performance baseline](performance.md).
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
+Measured on 2026-10-22 with mise's Rust 1.95.0, Iced 0.14, release optimization, macOS/Apple silicon, and the bundled Newsreader fonts. The baseline is commit `de2e075`; its source organization has the same behavior as the [previous performance baseline](../performance.md).
 
 The subsequent [native-buffer report](native-buffer.md) measures deferred native shaping on top of this implementation.
 
@@ -52,10 +55,6 @@ Whole-document updates remain the main typing cost. The previous baseline's 50k 
 
 ## Validation and remaining limits
 
-`mise run check` passes formatting, Clippy with warnings denied, and 80 regression tests (five profiling tests remain ignored by default). The three release model/layout benchmarks and the full 10k/50k profile pass.
-
-New tests compare resident caret, hit testing, selection geometry, and page movement with full layout after distant eviction. They check height sums/inverse queries, 50k-block residency bounds, a 2000-row table, index topology and exact geometry through edits/disclosure, reverse native selection/history through distant Setext disclosure, source scroll anchors during disclosure and resizing, drag anchors across evictions, and wrap affinity when navigating back to an evicted caret or jumping into a new disclosure context, and viewport reset on document replacement. Existing clipboard, undo, rich-block, IME commit, file-safety, and theme regressions remain intact.
-
 The native Iced `Content` is still a full-document buffer; its current initialization shapes the full text and dominates remaining memory/load cost. Document parsing/projection and structural index rebuilds remain proportional to document size. A single very long physical paragraph or table row is still one shaping unit. Native input-to-photon latency, real IME behavior, accessibility, GPU memory, and platform behavior require separate native testing.
 
 ## Reproduce and evidence
@@ -71,9 +70,9 @@ DOSTY_PROFILE_BLOCKS=50000 DOSTY_PROFILE_COLD_ONLY=1 mise run profile
 
 For peak memory independent of compilation, build the release library test with `mise exec -- cargo test --locked --release --lib --no-run`, then run the resulting executable directly under `/usr/bin/time -l` with `large_document_interactions --ignored --nocapture --test-threads=1` and the cold-only environment above. Run each size in its own process. To reproduce the baseline, archive `de2e075` into a temporary directory and copy the current `src/app/performance.rs` harness into it before building with the same toolchain and lockfile.
 
-- Fresh cold runs: [before 10k](performance/virtualization/before-cold-10k.txt), [after 10k](performance/virtualization/after-cold-10k.txt), [before 50k](performance/virtualization/before-cold-50k.txt), [after 50k](performance/virtualization/after-cold-50k.txt).
-- [Extended baseline interactions](performance/virtualization/before-interactions.txt): complete 10k series and 50k cold frame; intentionally interrupted during distant navigation (SIGINT footer).
-- [Intermediate implementation](performance/virtualization/intermediate-interactions.txt): exposes the initial index-rebuild cost.
-- [First index-rebased series](performance/virtualization/second-interactions.txt): records the earlier 46 ms typing observation.
-- [Final interactions](performance/virtualization/after-interactions.txt): 30 samples per interaction at both sizes; 10 distant jumps each.
-- [Model/layout benchmarks](performance/virtualization/model-layout.txt).
+- Fresh cold runs: [before 10k](virtualization/before-cold-10k.txt), [after 10k](virtualization/after-cold-10k.txt), [before 50k](virtualization/before-cold-50k.txt), [after 50k](virtualization/after-cold-50k.txt).
+- [Extended baseline interactions](virtualization/before-interactions.txt): complete 10k series and 50k cold frame; intentionally interrupted during distant navigation (SIGINT footer).
+- [Intermediate implementation](virtualization/intermediate-interactions.txt): exposes the initial index-rebuild cost.
+- [First index-rebased series](virtualization/second-interactions.txt): records the earlier 46 ms typing observation.
+- [Final interactions](virtualization/after-interactions.txt): 30 samples per interaction at both sizes; 10 distant jumps each.
+- [Model/layout benchmarks](virtualization/model-layout.txt).

@@ -1,21 +1,11 @@
 # macOS clipboard, drop, and input-method validation
 
-The later [native Excel Web](table-editing.md#native-excel-web-clipboard-validation-2026-11-03)
-and [Google Sheets clipboard passes](table-editing.md#native-google-sheets-clipboard-validation-2026-11-03)
+The later [native Excel Web](table-clipboard.md#native-excel-web-clipboard-validation-2026-11-03)
+and [Google Sheets clipboard passes](table-clipboard.md#native-google-sheets-clipboard-validation-2026-11-03)
 record table value transfers on 2026-11-03. The image, drop, and input-method
 evidence below describes the earlier sessions.
 
 Validated on 2026-10-23 with macOS 26.7.1 (25G241), Apple silicon, mise Rust 1.95.0 and Iced 0.14. The starting commit was `e73e4c0`; the native PNG drop follow-up used `901cc60`. Both sessions used separate `DAYTRIP_CONFIG_DIR` directories and temporary copies of **The quiet hour**. Existing documents were not closed or reloaded. The initial scratch process was terminated only after saving; the follow-up document was left saved and open.
-
-## Fixed composition lifetime
-
-Clearing preedit does not necessarily close the input method. Previously, canceling composition, moving the selection, and starting another composition could reuse the canceled target and replace the wrong text. A regression reproduced this before the fix.
-
-Live and Source editors now capture a fresh stable target at the start of each nonempty preedit run. A subsequent local keyboard/pointer action also retires a cleared target. An empty preedit alone retains the pending target because macOS can clear marked text immediately before Commit. This preserves the original stable replacement through intervening remote edits. Opening/closing the input method and changing document sessions still reset composition state. Preedit remains transient; each commit uses the existing single CRDT transaction and undo group.
-
-This distinction was checked against the locked Winit macOS implementation: `unmark_text` clears preedit without disabling IME, while `insert_text` queues empty preedit followed by Commit. The tests retain both sequences.
-
-The Source wrapper tracks whether preedit is nonempty because the standard Iced widget owns its private presentation state. No native widget is replaced, and the CRDT, selection affinity, and undo algorithms are unchanged.
 
 ## What was exercised
 
@@ -32,10 +22,6 @@ The Source wrapper tracks whether preedit is nonempty because the standard Iced 
 | Unsaved-document guards | New-document prompt and Escape cancellation passed with a temporary typed character; the document stayed open and Undo removed only that character | Image drop → first Save cancellation and document drop → Cancel preserve source, reverse selection, dirty state and Undo |
 | CJK candidate windows | **Unverified**: only U.S. input was installed; user requested no keyboard setting changes | Real Iced preedit/clear/commit events with 日本語, 中文 and 한국어; source/cache equivalence and Undo/Redo |
 
-Initial native testing stopped when the user confirmed other desktop work was active, and resumed only after the user said the desktop was available. Keyboard settings were left unchanged throughout. The composition fix was validated through the actual Live/Source widgets and application model, **not** through a post-fix native CJK candidate-window session. Glyph appearance and candidate-window placement for installed CJK input methods still need that session; text paste is not evidence of candidate-window correctness.
-
-`iced_runtime` is a development-only direct dependency, already present transitively, so the drop test can poll the application's real import Task and deliver its result. It does not run file choosers, change the OS clipboard, write user preferences, or expose production internals. Missing-image tasks are excluded from this particular test; ordinary application tests still cover image loading.
-
 ## Native PNG drop follow-up
 
 The follow-up ran the `901cc60` release executable in a separate, ad-hoc-signed **Daytrip Drop Validation** app with bundle identifier `app.daytrip.editor.drop-validation`, its own configuration, and a temporary `Drop workflow.md`. Only the new test windows were arranged. The other Finder windows and existing writing sessions were preserved.
@@ -49,13 +35,13 @@ The automation successfully moved a disposable PNG into a disposable folder with
 - In both selection directions, Cmd+Shift+Up/Down selected across headings, prose, the table, and both images. Cut displayed an empty editor; Undo and Save restored those same 2,221 source bytes.
 - After typing one temporary character, Cmd+N showed the unsaved-document guard. Escape kept the same document and character. Undo removed only that character, and Save again matched the full post-drop source exactly.
 
-No application change was needed for this native PNG path. The final source SHA-256 was `f52410609ecb067d360d0775ba746ffb852dcdd01530a98e54cd1957852a1b98`. [Structured evidence](validation/native-writing/native-drop.json) records the executable/input/source hashes and comparisons. The follow-up `mise run check` passed all 156 ordinary tests; its [check output](validation/native-writing/native-drop-check.txt) is retained. The saved test document was left open with the user's caption and credit intact.
+No application change was needed for this native PNG path. The final source SHA-256 was `f52410609ecb067d360d0775ba746ffb852dcdd01530a98e54cd1957852a1b98`. [Structured evidence](native-writing/native-drop.json) records the executable/input/source hashes and comparisons.
 
 The native gesture exercised PNG insertion at a caret. JPEG/GIF/WebP gestures, a drop over an already active reverse selection, image-drop first-save cancellation, and Markdown-file-drop cancellation remain covered by the model/IO paths or the platform recipe below; they were not separately claimed as native gestures. Keyboard settings and CJK sources were not changed.
 
 ## Repeat the remaining platform checks
 
-Use a temporary configuration and a saved copy of the bundled sample. Keep existing windows open. A drop currently inserts/replaces at the source selection, as documented in [writing workflows](writing-workflows.md); pointer-based drop placement is not introduced here.
+Use a temporary configuration and a saved copy of the bundled sample. Keep existing windows open. A drop inserts/replaces at the source selection; see [writing workflows](../writing-workflows.md).
 
 1. Repeat the verified PNG workflow with JPEG/GIF/WebP from Finder. Verify one figure, durable local asset, Cmd+Z/Cmd+Shift+Z, and continued keyboard selection across adjacent blocks. Repeat a drop while a reverse selection is already active.
 2. Drop an image into an unsaved document, cancel first Save, and verify selection, source and Undo. Drop a Markdown file over unsaved writing, cancel the document-change guard, and verify the same invariants.
@@ -75,9 +61,7 @@ DAYTRIP_PROFILE_BLOCKS=50000 DAYTRIP_PROFILE_SAMPLES=30 mise run profile
 
 The profiles exercise keyboard input, disclosure, selection/dragging, scrolling, IME, Undo/Redo and derived-state oracles through software rendering. They exclude OS delivery, candidate windows and GPU presentation. Other desktop work was active, so these are regression runs, not a controlled performance comparison. No speedup or input-to-photon claim is made.
 
-Final validation passed: **156 ordinary tests**, formatting, Clippy with warnings denied for application targets, release build, and both interaction profiles. The initial sandboxed check could not bind the HTTP image test's localhost listener; the complete check passed with localhost access. Existing vendored Yrs warnings remain outside this change.
-
-The [macOS bundle build and signature verification](validation/native-writing/bundle.txt) also passed. Replacing the executable uses the existing atomic bundle script; no existing window was restarted. The post-fix PNG UI session ran only after the user made the desktop available.
+The [macOS bundle build and signature verification](native-writing/bundle.txt) also passed. Replacing the executable uses the existing atomic bundle script; no existing window was restarted. The post-fix PNG UI session ran only after the user made the desktop available.
 
 | Profile observation | 10k blocks | 50k blocks |
 | --- | ---: | ---: |
@@ -88,4 +72,4 @@ The [macOS bundle build and signature verification](validation/native-writing/bu
 | Scrolling, ms p50 / p95 | 1.521 / 1.719 | 1.587 / 1.849 |
 | IME commit, ms (one sample) | 3.002 | 7.208 |
 
-The fixtures remain 910,450 / 4,574,450 source bytes with a 720×800 software viewport and 30 warm samples. Full phase breakdowns, tails and history interactions are in the raw logs: [check](validation/native-writing/check.txt), [release](validation/native-writing/release.txt), [10k](validation/native-writing/profile-10k.txt), [50k](validation/native-writing/profile-50k.txt), [environment and source hashes](validation/native-writing/environment.json). Existing document-storage growth and large-import limitations remain as recorded in [writing workflows](writing-workflows.md).
+The fixtures remain 910,450 / 4,574,450 source bytes with a 720×800 software viewport and 30 warm samples. Full phase breakdowns, tails and history interactions are in the raw logs: [check](native-writing/check.txt), [release](native-writing/release.txt), [10k](native-writing/profile-10k.txt), [50k](native-writing/profile-50k.txt), [environment and source hashes](native-writing/environment.json). Existing document-storage growth and large-import limitations remain as recorded in [writing workflows](../writing-workflows.md).

@@ -1,8 +1,11 @@
 # CRDT integration measurements
 
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
 The subsequent [UTF-16 traversal optimization](utf16-performance.md) supersedes the residual traversal costs below; this report preserves the foundation baseline.
 
-Measured on 2026-10-22–23 on an Apple M2 Max, 32 GiB RAM, macOS 26.7.1, mise Rust 1.95.0, Iced 0.14, release/thin LTO/codegen-units=1. Baseline: clean `main` at **`fecbc48`**. After: the CRDT foundation change containing this report; [source checksums](performance/crdt/source-sha256.txt) identify the measured source exactly. Full [environment details](performance/crdt/environment.txt) are retained.
+Measured on 2026-10-22–23 on an Apple M2 Max, 32 GiB RAM, macOS 26.7.1, mise Rust 1.95.0, Iced 0.14, release/thin LTO/codegen-units=1. Baseline: clean `main` at **`fecbc48`**. After: the CRDT foundation change containing this report; [source checksums](crdt/source-sha256.txt) identify the measured source exactly. Full [environment details](crdt/environment.txt) are retained.
 
 The integration adds measurable text-engine and stable-position costs. It preserves the earlier source/projection optimizations and bounded resident rich layout. It does not make typing faster than the source-only baseline.
 
@@ -59,7 +62,7 @@ Phase percentiles are independent; do not add them to reconstruct a total percen
 
 Yrs 0.28 recounts UTF-16 lengths while traversing text items, including retained spans in text deltas. Its permanent positions also require UTF-16 clocks. The local Ropey coordinate bridge is incremental, but it cannot eliminate those upstream traversals. This is the main residual document-size-dependent cost: about 5.4 ms per 50k middle-typing transaction here. Stable first-visible-row capture adds scrolling work, bringing the 50k scroll median to 4.0 ms.
 
-An initial integration measured **31.1 ms** for 50k middle typing. Generation-scoped position caching, selective undo-selection metadata, removing duplicate viewport capture, and clearing unrelated visual wrap positions reduced that to **10.0 ms**. [Initial](performance/crdt/initial-integration.txt) and [intermediate](performance/crdt/position-cache.txt) diagnostic runs are retained; those iterations were uncommitted and are not substitutes for the final source comparison.
+An initial integration measured **31.1 ms** for 50k middle typing. Generation-scoped position caching, selective undo-selection metadata, removing duplicate viewport capture, and clearing unrelated visual wrap positions reduced that to **10.0 ms**. [Initial](crdt/initial-integration.txt) and [intermediate](crdt/position-cache.txt) diagnostic runs are retained; those iterations were uncommitted and are not substitutes for the final source comparison.
 
 The source/projection component benchmark separates CRDT from the previous source phase. At 50k, 100 word edits took **542.74 ms CRDT**, **10.38 ms source cache**, and **235.66 ms projection**. Unicode/syntax edits took **544.07 / 10.75 / 213.07 ms**. Equal-length replacements took **681.34 / 1.28 / 104.95 ms**. These are component totals for 100 edits, excluding native widgets/rendering, and should not be described as interaction latency. Existing source/projection splice optimizations remain active.
 
@@ -114,9 +117,7 @@ RUST_TEST_THREADS=1 mise run bench
 mise run profile
 ```
 
-- [Fresh baseline](performance/crdt/before.txt), [final direct interaction measurement](performance/crdt/after.txt).
-- [Seven serial release benchmarks](performance/crdt/bench.txt), [remote/application churn and memory](performance/crdt/remote-and-churn.txt).
-- [Independent mise profile task validation](performance/crdt/mise-profile.txt); its second run is retained separately from the direct comparison.
-- [Required check](performance/crdt/check.txt), [release build](performance/crdt/release.txt), [release test build](performance/crdt/test-build.txt).
-
-All 127 ordinary tests, seven release benchmarks, and both profile paths passed. No machine-dependent timing assertions were added. Actual OS CJK IME delivery in Live/Source, accessibility, GPU presentation, and Windows/Linux filesystem/lock/durability behavior still require manual platform validation. Existing native windows and unsaved documents were preserved throughout this work.
+- [Fresh baseline](crdt/before.txt), [final direct interaction measurement](crdt/after.txt).
+- [Seven serial release benchmarks](crdt/bench.txt), [remote/application churn and memory](crdt/remote-and-churn.txt).
+- [Independent mise profile task validation](crdt/mise-profile.txt); its second run is retained separately from the direct comparison.
+- [Required check](crdt/check.txt), [release build](crdt/release.txt), [release test build](crdt/test-build.txt).

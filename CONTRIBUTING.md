@@ -45,7 +45,7 @@ manual versioning, native packages and the GitHub workflow, which creates drafts
 only. Packaging changes build on pull requests; creating a release requires an
 existing matching tag whose commit has reached `main`.
 
-Repository checks use task-scoped tool versions pinned in `mise.toml`; mise installs them on first use. They do not add application dependencies. Repository and release scripts require Python 3.11 or newer. Link checks are offline and cover repository documentation, including heading anchors; Markdown regression fixtures and runtime sample paths are not documentation links. Advisory checks need network access and leave informational warnings visible. See [dependency health](docs/dependency-health.md) for the current review.
+Repository checks use task-scoped tool versions pinned in `mise.toml`; mise installs them on first use. They do not add application dependencies. Link checks are offline and cover repository documentation, including heading anchors; Markdown regression fixtures and runtime sample paths are not documentation links. Advisory checks need network access and leave informational warnings visible. See [dependency health](docs/dependency-health.md) for audit and patch maintenance.
 
 ## Source layout and API
 
@@ -63,7 +63,7 @@ tests/
 docs/           Architecture, evaluation, and measured performance evidence
 ```
 
-See [architecture](docs/architecture.md) for the module map and current boundaries. These groups describe responsibilities; application messages may cross them. Split files when a coherent responsibility warrants it. Introduce traits, generic interfaces, or additional crates only for a concrete need. A workspace can follow a demonstrated dependency or build-time benefit.
+See [architecture](docs/architecture.md) for current ownership and boundaries. These groups describe responsibilities; application messages may cross them. Split files when a coherent responsibility warrants it. Introduce traits, generic interfaces, or additional crates only for a concrete need. A workspace can follow a demonstrated dependency or build-time benefit.
 
 Keep implementation modules private or crate-visible. The public library entry point is currently `run()`. Add public APIs for real consumers; test private behavior with unit tests beside its implementation. Use `tests/` for integration tests only when they exercise an intentional public API.
 
@@ -128,7 +128,7 @@ implementing them. Bug reports should include a minimal synthetic reproduction;
 use private reporting for security issues. Follow the
 [community conduct guidelines](CODE_OF_CONDUCT.md).
 
-Fork [the repository](https://github.com/MoonlarkStudios/daytrip-editor), create a
+Fork [the repository](https://github.com/MoonlarkStudios/dosty), create a
 focused branch, and open a pull request against `main`. Run the applicable checks
 above and fill out the PR template. Use the commit-message format below for the PR
 title: squash merging uses that title as the public commit subject.
@@ -195,19 +195,11 @@ Keep the [documentation index](docs/README.md), README, bundled guide and archit
 
 CI runs the locked Rust checks and release build on macOS, Linux and Windows, plus repository hygiene, full-history secret scanning and dependency auditing on Linux. GitHub Actions use full commit IDs, read-only or disabled token permissions, no persisted checkout credentials and bounded job durations. Follow [GitHub's workflow security guidance](https://docs.github.com/en/actions/reference/security/secure-use) when changing them. Dependabot proposes weekly compatible Cargo and action updates; review changes and validation before merging. Yrs, cryoglyph and Iced highlighter upgrades follow the explicit vendor rebase policy.
 
-New commits cancel superseded PR build runs. Running `main` builds finish so they
-can publish caches; GitHub retains only the latest pending run for that branch.
-Title and description edits run a separate title check with no checkout or token
-permissions, leaving the build matrix alone. Keep that check required alongside
-the four existing checks when changing branch protection.
+The checked-in [CI workflows](.github/workflows) define platform jobs, cache
+ownership, cancellation, and tool installation. Keep them as the executable
+source of truth for those details.
 
-Only `main` writes the Cargo and mise caches. The repository job has a separate
-mise cache namespace and saves after its tasks finish, retaining installed tools
-such as cargo-audit and cargo-shear. Tool-version changes in `mise.toml` invalidate
-that cache; audits still refresh advisory data on every run. A new cache namespace
-is populated by a `main` run after merge, then restored by PRs.
-
-The public repository enables private vulnerability reporting, secret scanning/push protection and Dependabot alerts/security updates. Preserve these hosting settings alongside the branch protections above; checked-in files alone cannot activate them. Review commit author identities and retained logs before publishing; do not rewrite published history or remove evidence casually. Publish the intended branch explicitly rather than pushing every local ref.
+Preserve private vulnerability reporting, secret scanning/push protection, and Dependabot alerts/security updates alongside branch protections; checked-in files alone cannot activate hosting settings. Review commit identities and retained logs before publishing. Do not rewrite published history or remove evidence casually. Publish only the intended branch.
 
 ## Licensing
 

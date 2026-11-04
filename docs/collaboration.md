@@ -1,32 +1,28 @@
-# Collaborative Markdown foundation
+# Collaboration and persistence
 
 Dosty uses **Yrs 0.28.0**, pinned in Cargo, for one root `TextRef` named `markdown`. `Document` owns its `Collaboration`, source cache, and parsed blocks. Every editor source mutation commits to Yrs first. The String, UTF-16 coordinate index, projection, native content, and layout are derived state. Focus, disclosure, wrapping, selection geometry, and scrolling are local.
 
-This delivery supports one human with accepted agent proposals and independent offline replicas. Networking, authentication, presence, and a branch-review interface are separate work.
+The application supports a human writer, accepted agent proposals, and independent offline replicas. Network synchronization, authentication, presence, and a branch-review interface are unsupported.
 
-## Library choice and indexing
-
-[Yrs](https://docs.rs/yrs/0.28.0/yrs/) supplies shared text, permanent positions, selective undo, and compatible encoded state. [Automerge](https://automerge.org/docs/reference/documents/) has useful historical-document and branching facilities, but this delivery needs text editing and origin-scoped undo rather than a historical review interface. There is one backend.
+## Coordinates and indexing
 
 Yrs text is explicitly configured for **UTF-16 code units**. Public editor ranges remain **UTF-8 byte offsets**. A derived Ropey index converts between them incrementally; it preserves exact text, including CRLF, LF, CR, combining characters, joined emoji, and RTL. Changes splitting a Unicode scalar are rejected. Human grapheme movement remains Iced's responsibility.
 
-Using byte-indexed editing alone is insufficient for Yrs 0.28 permanent positions: its internal IDs use UTF-16 clocks. We therefore use one explicit coordinate bridge for editing, deltas, and positions. The pinned Yrs dependency patch reuses its existing cached UTF-16 item lengths during traversal and item merging; it changes no coordinates or encoded state. See [dependency provenance and removal policy](../vendor/README.md). A bounded, generation-scoped position cache avoids repeating those traversals for layout and selection. Resolved deleted positions are cached separately from newly captured positions, so a collapsed old target cannot become a new target accidentally. Measured costs and remaining traversal limits are recorded in [the UTF-16 performance report](utf16-performance.md).
+Yrs permanent positions use UTF-16 clocks, so editing, deltas, and stable targets
+share one explicit byte/UTF-16 bridge. The [vendor policy](../vendor/README.md)
+describes the pinned traversal patch and its compatibility requirements.
 
 ## Transactions and ownership
 
-`Document::transact` takes sorted, disjoint source edits. **All offsets refer to the transaction's original source.** Multiple edits become UTF-16 retain/delete/insert deltas applied with one advancing Yrs cursor inside one transaction. This avoids repeated positional searches while retaining unchanged text identities. Single edits keep their direct positional path. Admission staging and the active document use the same mutation helper. Adjacent nonempty ranges are allowed; insertions touching another edit's boundary and duplicate insertion points are rejected as ambiguous. Validate the whole batch and resulting size before mutation. See [large-table batch measurements](table-column-performance.md).
+`Document::transact` takes sorted, disjoint source edits. **All offsets refer to the transaction's original source.** Batches preserve granular edits and unchanged text identities within one transaction. Adjacent nonempty ranges are allowed; insertions touching another edit's boundary and duplicate insertion points are rejected as ambiguous. Validate the whole batch and resulting size before mutation. See [large-table batch measurements](performance/table-column-performance.md).
 
 Typing, paste, deletion, formatting, Markdown repair, tables, image removal, find/replace, and programmatic edits use this path. Replace-all submits individual matches rather than replacing the whole source. Rich repair is already included in the originating source edit. Receivers apply committed operations directly and never run the local rich-edit repair path.
 
-The text observer produces UTF-16 deltas, which are translated against the predecessor index and then applied from the end to both caches. No per-keystroke source extraction or document diff creates replicated operations. Single certified block updates retain the existing incremental parser/projection paths. Batches covering at most 32 certified independent block windows parse each affected block once (including multiple edits in one block). Projection preflights all windows and disclosure before publishing one immutable mapping successor and sparse native/layout regions. Uncertain boundaries, global dependencies, or more than 32 windows use the full scanner once and general projection path; CRDT operations remain granular. Equal-length batches invalidate changed blocks too.
-
-Offline admission validates the full original wire envelope, then uses Yrs `diff_updates_v1` against the active integrated state vector. This retains delete sets and unknown/pending structs while excluding known insertions. It stages the filtered update in an isolated compatible Doc and applies the same operations to the existing active Doc only after all checks pass. Full persisted state still includes pending operations. An empty filtered update avoids staging; delete-only updates still enter validation. Retained admission accounting uses the measured candidate encoded size. See [offline imports](offline-imports.md) for limits and measurements.
-
-Native synchronization uses proven projection regions where available. Conservative full projections use sparse physical-line differences; very large native replacements use deferred loading to avoid cosmic-text's quadratic line deletion. The rich widget survives these changes. Existing immutable mapping/highlight snapshots remain available to old layout until it finishes anchoring.
+Offline admission validates the full original wire envelope, then uses Yrs `diff_updates_v1` against the active integrated state vector. This retains delete sets and unknown/pending structs while excluding known insertions. It stages the filtered update in an isolated compatible Doc and applies the same operations to the existing active Doc only after all checks pass. Full persisted state still includes pending operations. An empty filtered update avoids staging; delete-only updates still enter validation. Retained admission accounting uses the measured candidate encoded size. See [offline imports](performance/offline-imports.md) for limits and measurements.
 
 `Document::revision` and the collaboration owner's generation are local cache counters. Neither is a document identity or causal version. A versioned agent snapshot carries a digest of its complete encoded state, including deletions and pending updates. The two clocks in a Yrs historical snapshot are not a replacement for that state.
 
-Incoming updates are schema-checked, then staged in an isolated compatible Yrs store because Yrs transactions cannot roll back. Only emitted text deltas update the materialized source; staging does not extract source text. Full encoded state is copied for admission, so offline import has document-size-dependent cost. Large local transactions also stage admission to measure retained state accurately. Local typing uses incremental admission accounting.
+Incoming updates are schema-checked, then staged in an isolated compatible Yrs store because Yrs transactions cannot roll back. Only emitted text deltas update the materialized source; staging does not extract source text. Admission has document-size-dependent cost; large local transactions also stage retained-size checks.
 
 Yrs handles duplicate/out-of-order delivery. Identical admitted state does not advance local generations. There is no automatic outbound update observer: importing an update cannot echo it through another mutation path. Offline export is an explicit action.
 
@@ -40,11 +36,9 @@ The widget captures an anchor before source changes, resolves it against committ
 
 There are separate Yrs undo managers for **human** and **accepted-agent** origins. Remote imports and loading are excluded. The application controls 650 ms grouping with a monotonic clock; navigation and explicit commands break a group. A proposal is one agent group and records its author locally. Human undo/redo affects human operations even after agent or remote edits. Agent undo/redo affects accepted proposals while preserving the human's current stable selection. An imported independent branch is remote work; undo it on its originating replica and import the resulting update.
 
-Fixed-offset inverse patches have been removed. History selection metadata uses stable positions. Yrs 0.28 can lose an intra-item offset when following a completely restored item; an outside-anchored, hashed restoration region repairs selection endpoints only when that text is actually restored. If intervening edits changed the region, use ordinary deleted-target affinity. This metadata never authorizes or reverses text.
-
 IME preedit is transient widget state. The first nonempty preedit captures a stable replacement target and content hash; a direct commit captures the current target. A commit resolves that target and creates exactly one source transaction with its own undo group. Incoming changes before the target rebase it. If its replacement text changed or was deleted, retain preedit and collapse the eventual replacement to the resolved head, preserving incoming text. Closing composition or changing documents clears its target. The native Source widget delegates focus, preedit drawing, and input handling to Iced. A small wrapper replaces its commit message with the same stable-target transaction used by the rich editor; it does not add another paste. Reopening resets the wrapper and native composition state even when the CRDT document identity is unchanged.
 
-Undo stacks, grouping, author metadata, and presentation state are **session-local**. They are not automatically encoded in Yrs updates or restored after reopening. This matches Dosty's existing session history behavior. Synchronization information and deleted payloads remain in persisted CRDT state.
+Undo stacks, grouping, author metadata, and presentation state are **session-local**. They are not automatically encoded in Yrs updates or restored after reopening. Synchronization information and deleted payloads remain in persisted CRDT state.
 
 ## Human–agent workflow
 
@@ -106,10 +100,7 @@ To import intentionally edited external Markdown as a **new document**, preserve
 
 Wire preflight bounds allocations before invoking Yrs decoding, including pending operations. UTF-16 deltas splitting a scalar are rejected before live mutation. Never selectively drop operations to fit a limit.
 
-Yrs garbage collection is disabled. Canonical checkpoint encoding merges representation where Yrs permits, retains pending updates, and keeps the information needed for offline synchronization. Deleted text remains in checkpoints. No automatic history pruning, tombstone removal, causal reset, or lossy compaction occurs. Admission and undo-size accounting are conservative: near retained-state/text limits an operation can be refused even if a more expensive proof might admit it. Preserve/export the state and Markdown; starting a new history is an explicit import under a new identity, not transparent compaction. Network-safe compaction and durable historical review are future work.
+Yrs garbage collection is disabled. Canonical checkpoint encoding merges representation where Yrs permits, retains pending updates, and keeps the information needed for offline synchronization. Deleted text remains in checkpoints. No automatic history pruning, tombstone removal, causal reset, or lossy compaction occurs. Admission and undo-size accounting are conservative: near retained-state/text limits an operation can be refused even if a more expensive proof might admit it. Preserve/export the state and Markdown; starting a new history is an explicit import under a new identity, not transparent compaction. Network-safe compaction and durable historical review are unsupported.
 
-## Validation
-
-The regression suite exercises the real application/native buffer/widget as well as the document model: shared-state three-replica convergence, concurrent replacements, delayed/duplicate/out-of-order delivery, pending-state reopen, deterministic randomized edits, byte/UTF-16 conversion, direction/affinity, local disclosure, origin history, active composition, proposal conflicts, batch render invalidation, cooperative file locks, interrupted publication, symlinks/permissions, and malformed/oversized input. Full materialization and fresh parsing/mapping comparisons are test oracles outside timed interaction paths.
-
-Run `mise run check`, `mise run release`, `mise run bench`, and `mise run profile`; the additional ignored `large_document_collaboration` test measures remote batch interactions. See the [offline import measurements](offline-imports.md) and [later writing-workflow comparisons](writing-workflows.md#offline-imports-retained-state-and-memory). Actual OS CJK IME delivery, GPU presentation, accessibility, and Windows/Linux filesystem durability still need manual platform validation.
+See [performance methodology](performance.md), [retained measurements](performance/README.md),
+and [release limits](evaluation.md) for profiling and platform scope.

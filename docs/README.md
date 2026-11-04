@@ -1,61 +1,33 @@
 # Documentation
 
-Start with the [project README](../README.md) to build and use Dosty, and
-[CONTRIBUTING.md](../CONTRIBUTING.md) to change it. The application is a working
-technology evaluation; [release gaps](evaluation.md#remaining-release-work)
-describe the remaining platform, accessibility, and durability work.
+Start with the [README](../README.md) to build and run Dosty, the
+[bundled guide](../assets/guide.md) for writing, and
+[CONTRIBUTING](../CONTRIBUTING.md) for development practices.
 
 ## Current behavior and design
 
-| Document | Scope |
+| Document | Reader need |
 | --- | --- |
-| [Architecture](architecture.md) | Source boundaries, editing invariants, layout, themes and storage |
-| [Writing workflows](writing-workflows.md) | Links, images, credits, assets, recovery and HTML export |
-| [Collaboration](collaboration.md) | CRDT transactions, selections, offline replicas, history and persistence |
-| [Outline](outline.md) | Heading search, collapse state and section moves |
-| [Code editing](code-editing.md) | Fences, indentation, clipboard behavior and bounded highlighting |
-| [Task lists](task-lists.md) | Live checkbox interactions, keyboard toggling and source-preserving history |
-| [Table editing](table-editing.md) | Quiet tables, spreadsheet selections and clipboard, document navigation, contextual controls and source-preserving history |
-| [Strikethrough](strikethrough.md) | Live inline rendering, formatting, disclosure and measured strike geometry |
-| [Footnotes](footnotes.md) | Numbered references, checked note editing, previews and navigation |
-| [Appearance](design-system.md) | Semantic tokens, typography, presets and UI validation |
-| [Brand kit](../branding/dosty/README.md) | Asset sources, generated exports and platform icons |
-| [Yrs pending-update repair](yrs-pending-updates.md) | Sparse-clock retry bug, regression and repeated upstream tests |
-| [Identity migration](identity-migration.md) | Dosty identity, Koan/Daytrip data compatibility and earlier migration |
-| [Dependency health](dependency-health.md) | Dependency repairs, enforced maintenance exceptions and validation |
-| [Releases](releases.md) | Manual versions, native packages, draft workflow and platform validation |
+| [Architecture](architecture.md) | Ownership, data flow, module boundaries, and editing invariants |
+| [Writing workflows](writing-workflows.md) | Links, images, quotations, assets, Save As, recovery, and HTML export |
+| [Collaboration](collaboration.md) | Source coordinates, transactions, offline replicas, proposals, history, and persistence |
+| [Outline](outline.md) | Heading navigation, local collapse state, and section moves |
+| [Code editing](code-editing.md) | Code entry, copying, rendering, and highlighting limits |
+| [Task lists](task-lists.md) | Checkbox and keyboard behavior |
+| [Table editing](table-editing.md) | Cell selection, drafts, clipboard, structural commands, and history |
+| [Strikethrough](strikethrough.md) | Formatting and source disclosure |
+| [Footnotes](footnotes.md) | Syntax, note details, numbering, and navigation |
+| [Appearance](design-system.md) | Themes, semantic colors, typography, and layout |
+| [Performance](performance.md) | Current scaling limits and profiling methodology |
+| [Release readiness](evaluation.md) | Unsupported behavior and platform validation limits |
+| [Identity and compatibility](identity-migration.md) | Configuration paths, legacy aliases, and retained file formats |
+| [Dependency health](dependency-health.md) | Audit policy and vendored patch maintenance |
+| [Releases](releases.md) | Versioning, packaging, draft verification, and publication |
+| [Brand kit](../branding/dosty/README.md) | Masters, palette, licenses, and reproducible asset export |
 
-Update behavior descriptions alongside code. Keep dated validation sections tied
-to the implementation they measured; old test counts are historical observations.
+## Evidence
 
-## Measurement history
-
-These reports explain successive implementations and preserve their raw evidence.
-They are not interchangeable current benchmarks. [History references](history.md)
-map commit IDs retained in raw logs to the public history. Reproduction commands, fixtures,
-hardware, sample counts and exclusions live with each report.
-
-1. [Original large-document baseline](performance.md)
-2. [Viewport virtualization](virtualization.md)
-3. [Deferred native-buffer initialization](native-buffer.md)
-4. [Incremental block parsing](incremental-parsing.md)
-5. [Native text snapshots](native-snapshots.md)
-6. [Source and projection updates](source-projection-updates.md)
-7. [CRDT integration](crdt-performance.md)
-8. [Cached UTF-16 traversal](utf16-performance.md)
-9. [Incremental offline imports](offline-imports.md)
-10. [Writing workflows and retention](writing-workflows.md#reproducible-performance)
-11. [Code highlighting](code-editing.md#measurements)
-12. [Outline operations](outline.md#release-measurements)
-13. [Table controls](table-editing.md#release-measurements-2026-10-30)
-14. [Large-table column transactions](table-column-performance.md)
-15. [Document table interactions](table-editing.md#document-table-interaction-validation-2026-10-30)
-16. [Spreadsheet table interactions](table-editing.md#spreadsheet-interaction-validation-2026-11-01)
-17. [Contextual table presentation](table-editing.md#table-presentation-validation-2026-11-02)
-18. [Multi-cell clipboard](table-editing.md#multi-cell-clipboard-validation-2026-11-03)
-19. [Native Google Sheets clipboard](table-editing.md#native-google-sheets-clipboard-validation-2026-11-03)
-20. [Native Excel Web clipboard](table-editing.md#native-excel-web-clipboard-validation-2026-11-03)
-
-[Native macOS validation](native-writing-validation.md) distinguishes observed
-clipboard/drop/input behavior from model tests and records outstanding platform
-checks. Raw logs, source hashes and screenshots remain beside their reports.
+[Performance measurements](performance/README.md) and
+[native/visual validation](validation/README.md) retain reproducible evidence for
+specific revisions and environments. They are separate from current behavior
+documentation. Review summaries and routine passing checks belong in PRs and CI.

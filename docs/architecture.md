@@ -1,294 +1,109 @@
 # Architecture
 
-Dosty is one Cargo package, named `dosty`, with a thin `main.rs` calling `dosty::run()`. The library root declares responsibility-based modules and exports only that application entry point. Implementation modules stay crate-private.
+Dosty is one Cargo package with a library and a thin executable calling
+`dosty::run()`. That entry point is the library's only public export.
+Implementation modules are private or crate-visible.
 
-`App` owns application state and follows Iced's `update → state → view` model. File operations run in background tasks and return typed messages. The active resolved theme is stored in `App` and shared by styles, text highlights, and canvas icons.
+## Responsibilities and dependencies
 
-## Crates, dependencies, and encapsulation
-
-Cargo builds two application targets from this package: the `dosty` library and
-the executable that calls its `run()` export. Vendored dependency packages are
-upstream patches, outside the application module boundaries.
-
-| Group | Dependencies within the application |
-| --- | --- |
-| `document` | Other document modules; no application, editor, IO, or theme modules |
-| `theme` | Other theme modules |
-| `io` | Document data and limits; no application messages |
-| `editor` | Document, theme, image cache, and application interaction messages |
-| `app` | Coordinates all groups, background results, and user workflows |
+| Group | Owns | Dependencies within the application |
+| --- | --- | --- |
+| [app](../src/app) | State, messages, commands, views, and native startup | Coordinates all groups |
+| [document](../src/document) | Authoritative Markdown, transactions, source selections, projection, and edit plans | Other document modules |
+| [editor](../src/editor) | Native buffer, rich layout, input, navigation, and viewport | Document, theme, image cache, and application messages |
+| [theme](../src/theme) | Theme definitions, resolved semantic tokens, and widget styles | Other theme modules |
+| [io](../src/io) | Persistence, recovery, assets, image loading, export, and native clipboard | Document data and limits |
 
 The document layer uses Iced types for native selection conversion, code actions,
-and lazy Read-view parsing. Editor widgets emit application messages directly.
-The current model and widget modules are specific to this application.
+and lazy Read parsing. Editor widgets emit application interaction messages.
+These modules are specific to this application. IO returns completion values;
+`App` routes them into its message loop.
 
-`Document` keeps its CRDT, blocks, statistics, source revision, and certified
-change windows private. Callers borrow blocks/change windows as slices and the
-collaboration state through a shared reference. Source mutations, imports,
-accepted proposals, and undo/redo enter document methods that update the source
-and derived caches together. There is no mutable collaboration or block accessor.
-
-Application workflow modules are children of `application` so they can work with
-its private state. The `app` root re-exports their interaction messages for
-widgets; workflow state and recovery scheduling stay behind that boundary.
-Image loading returns an IO completion value; `App` maps it to its own message.
-
-## Module map
-
-| Module | Responsibility |
-| --- | --- |
-| `app/startup.rs` | Native startup, fonts, Iced event-loop configuration |
-| `app/application.rs` | Application state, messages, commands, native buffer, file guards, views |
-| `app/icon.rs` | Canvas icons consuming the resolved tokens |
-| `app/brand.rs` | Native paths from the generated Dosty identity |
-| `app/writing.rs` | Link/image/quotation details and deferred clipboard/import commands |
-| `app/footnotes.rs` | Checked footnote details, bounded previews and stable return navigation |
-| `app/table.rs` | Anchored context menus, Source table dialog, stable checked targets and human transactions |
-| `app/table_grid.rs` | Stable rectangular selections, spreadsheet navigation, clipboard intents and pending cell drafts |
-| `app/recovery.rs` | Idle recovery checkpoints, copy selection and write retirement |
-| `app/outline.rs` | Session-local outline disclosure, heading search, and section commands |
-| `app/performance.rs` | Private ignored large-document event/layout/software-render profiles |
-| `document/source.rs` | CRDT transaction boundary, incremental source cache and cached blocks |
-| `document/collaboration.rs` | Yrs ownership, coordinate bridge, stable intent, scoped undo and proposals |
-| `document/collaboration_wire.rs` | Bounded admission of plain-text Yjs update V1 |
-| `document/block_parser.rs` | Top-level ranges, independent block candidates, conservative reparse windows |
-| `document/selection.rs` | UTF-8 byte selections and line/column conversion |
-| `document/footnotes.rs` | Source footnote metadata, numbering and Read presentation transforms |
-| `document/outline.rs` | Heading hierarchy, section boundaries, and validated source move plans |
-| `document/projection.rs` | Markdown-to-display projection, source mapping, caret affinity, edit translation |
-| `document/projection_update.rs` | Conservative incremental projection of word edits |
-| `document/projection_blocks.rs` | Local block projection, retained metadata, styles and mapping splices |
-| `document/projection_batch.rs` | Atomic multi-window projection preflight and one successor mapping |
-| `document/projection_disclosure.rs` | Line-scoped disclosure highlighting with shared unchanged styles |
-| `document/rich_document.rs` | Heading, table, and image metadata collected during projection parsing |
-| `document/table_edit.rs` | Cell-aware source edits and table operation exports |
-| `document/table_controls.rs` | Source-preserving row/column and alignment command plans |
-| `document/table_clipboard.rs` | Bounded TSV profiles and escaped typed-value HTML export |
-| `document/table_clipboard_html.rs` | Bounded inert Sheets/Excel Web HTML cell reading, typed strings and displayed values |
-| `document/table_paste.rs` | Atomic rectangular paste, literal values and local table growth |
-| `document/code_edit.rs` | Source-coordinate code indentation, newline handling, and fence-safe entry |
-| `document/writing.rs` | Portable Markdown links, figures and quotation edits |
-| `editor/rich_layout.rs` | Cached shaped paragraphs and shared geometry for drawing, caret, hit testing, navigation |
-| `editor/code_highlight.rs` | Bounded, incremental grammar snapshots and theme-aware syntax runs |
-| `editor/virtual_layout.rs` | Lightweight height index, viewport materialization, geometry eviction, source jumps |
-| `editor/native_buffer.rs` | Standard Iced buffer ownership, deferred loading, physical line index and reusable text snapshot |
-| `editor/rich_editor.rs` | One live widget: focus, clipboard, mouse/keyboard selection, scrolling, IME |
-| `editor/source_editor.rs` | Native Source widget delegation with stable IME commit targets |
-| `editor/outline_row.rs` | Outline drag handles and measured drop indicators |
-| `editor/markdown_view.rs` | Full Markdown layout in optional Read view |
-| `editor/viewport.rs` | Measured block navigation in Read view |
-| `theme/definition.rs` | Strict theme schema, validation, semantic tokens, resolved Iced theme |
-| `theme/styles.rs` | Central widget styles and typography |
-| `io/image_store.rs` | Asynchronous bounded image IO, decoding, and document-scoped cache |
-| `io/storage.rs` | Bounded reads, atomic writes, preferences and HTML export |
-| `io/assets.rs` | Immutable image import and bounded Save As asset copying |
-| `io/export.rs` | Standalone HTML with embedded local images |
-| `io/recovery.rs` | Atomic recovery checkpoints and saved-file baselines |
-| `io/table_clipboard.rs` | Retained native clipboard ownership, producer metadata and guarded rich writes |
-| `io/writing_sample.rs` | Independent editable copies of the bundled sample |
-| `io/collaboration_store.rs` | Checkpoints, recovery journal, file locks and offline interchange |
-
-Tests live beside private implementations. Shared Markdown inputs belong in `tests/fixtures/`; integration tests belong in `tests/` when they exercise a deliberate public API. Profiling remains a private application test so it can exercise the real event path without exporting editor internals.
-
-Code blocks retain source/display ranges, their language, and shared parser-normalized clipboard content. Fence boundaries come from CommonMark text events. Code controls stay outside the text buffer; code and surrounding prose retain one focus, selection, and undo history. Measured code paragraphs use monospace typography, soft wrapping, and full-height blank lines. Inline code backgrounds use the same shaped span bounds as caret geometry. The [code editing report](code-editing.md) describes editing behavior and validation.
-
-The optional Read representation is initialized lazily per parsed block. Unchanged blocks keep their cached Markdown widgets; editing a block invalidates its Read representation without running that renderer's syntax highlighter during Live editing. Live syntax highlighting retains grammar snapshots, rewinds around an edit, and parses through resident lines as needed. Bounded caches and input limits keep unusually large or long-line blocks editable with semantic monochrome text.
+`App` owns the open document and presentation state. Its workflow children share
+private application state; the `app` root re-exports the messages widgets need.
+`Document` keeps its CRDT, source, parsed blocks, statistics, revision, and change
+windows private. Callers receive shared references or slices. Only document
+methods mutate authoritative state and update its derived caches.
 
 ## Continuous editing
 
-The live editor is one Iced `text_editor::Content` covering the whole document. `RichEditor` is a custom Iced widget over that buffer, rather than a collection of per-block editors. Native actions handle text mutations and logical motions. Geometry-dependent movement, selection drawing, pointer hit testing, scrolling, and input-method positioning share `RichLayout`'s measured paragraphs. There is one focus and selection across the page.
+The editing path is source → projection → native buffer and measured layout.
+User actions map back to source edits and enter `Document`'s transaction path.
+Markdown remains authoritative; the projection, Read representation, native
+content, and layout are derived state.
 
-While a table cell draft is open, the transient native child editor takes focus
-and the document source selection remains parked at the active cell. Committing
-returns focus to the document widget and applies one source transaction.
+Live editing uses one document-wide native buffer and one source selection.
+`RichEditor` supplies rich geometry, hit testing, selection drawing, scrolling,
+and input-method positioning over that buffer. `RichLayout` supplies the same
+measured geometry to drawing, caret placement, and navigation. Drawing does not
+parse Markdown. The optional Read renderer is separate and initialized lazily.
 
-The authoritative Markdown remains in `Document`. Validated multi-edit transactions use one advancing UTF-16 Yrs delta cursor, preserving granular source operations and unchanged identities; single edits keep direct positional mutation. Both staged admission and the active CRDT use the same helper. See [batch transaction performance](table-column-performance.md).
+Source/display mappings use UTF-8 byte offsets. Hidden syntax occupies no space;
+images are atomic objects, and tables retain structural mappings. Both selection
+endpoints and their direction survive mode switches and edits across rich blocks.
 
-A `Projection` contains the visible text, compact source/display pieces, paired delimiter ranges, immutable highlight runs, a retained source String, and a separate source revision identity. While focused, the heading containing the selection head reveals its prefix (and optional closing hashes or Setext underline). Only the innermost inline span containing that head reveals its own delimiters, including a link's destination. Other spans on the same line stay concealed. A span's closing endpoint belongs to the surrounding prose, so finishing a span conceals it immediately. Revealed syntax is muted, smaller monospace text; content keeps its semantic styles and heading size. Losing focus conceals syntax without changing source selection or history.
-
-Mappings work in UTF-8 byte offsets, as does Iced/cosmic-text. Both native editing and rich shaping use the same visible projection. Concealed syntax takes no space, including long link destinations. Lists/tasks/quotes contribute their display glyphs directly to flow; table separators and image objects retain their structural replacements. Structural source revisions are parsed once; safe word edits rebase the existing parse. Source updates splice retained text and parsed metadata in place. A disclosure change retains the parse, source buffer and revision identity while rebuilding projected text and mapped metadata. Context is represented by exact marker ranges, so disclosing a heading does not expose unrelated inline spans or nested markers.
-
-At an offset beside hidden syntax, two source positions may correspond to one displayed caret. The source selection retains that affinity. Pointer hits, vertical navigation, drag anchors, and selection rectangles map through the same source/display pieces. Hidden syntax adds no arrow stops. Absolute document motions target source endpoints, including concealed trailing delimiters. Wrap affinity records whether an ambiguous caret belongs upstream or downstream and is resolved against the new layout after disclosure. Preferred horizontal position survives these layout changes.
-
-Disclosure can reflow the affected paragraph or heading and move later blocks vertically. Before relayout, the widget anchors the visible source caret's screen Y; if the caret is offscreen, it anchors the first visible source row instead. After relayout it adjusts the scroll offset by that anchor's displacement, clamping to the document extent. Focus changes do not scroll an offscreen caret into view. Ordinary navigation still brings its target into view. Horizontal caret position may change with the local text flow.
-
-An edit is translated into a source splice. Selection replacements honor their full original range even when the inserted text shares a prefix or suffix. Visible delimiters edit literally. Edits crossing concealed delimiter boundaries repair the surviving pairs; deleting the last character of a concealed span removes empty wrappers. CommonMark's flanking rules cannot represent every rich-text join, especially around punctuation/emoji. When a repair would expose invalid delimiters, the affected inline spans are normalized to escaped plain text, preserving their displayed characters. This may clear formatting on that affected span, never the rest of the document.
-
-The existing native buffer receives minimal text splices when source edits or syntax disclosure change the display. Proven predecessor regions are applied from the end, so moving disclosure between distant headings does not replace the unchanged document between them. The native buffer wrapper owns the standard `Content`, a reusable text snapshot, and an index of its physical line starts. Widgets receive immutable native content; every mutation goes through the wrapper. After a native edit, it reads the span between the selected endpoints and one neighboring line on either side, adjusting the window by the native line-count change. This covers insertion, paste/IME commit, Enter, deletion and indentation without reproducing Unicode editing rules. It splices the snapshot and rebases suffix offsets. Navigation reads no native text, and cursor conversion uses the same physical index instead of scanning the document. The index follows native lines even when concatenated mixed endings could be interpreted differently. Synchronization splices expand endpoints inside CRLF/LFCR to complete native endings, preserving the unchanged bytes in the replacement.
-
-Document loading populates an empty native buffer with batches of physical lines, avoiding both Iced 0.14's eager whole-document shaping and cosmic-text's quadratic insertion of one large paste. It keeps the standard `Content` and native actions; text remains document-wide.
-
-The widget emits source selections and stores drag anchors in source coordinates, so revealing markers between pointer events cannot shift the selected text. Rich widget state survives edits, including preferred horizontal caret position and preedit state. Wrap affinity is stored as upstream/downstream intent, independently of evicted geometry's Y coordinates. Iced's input-method API positions its composition overlay at the measured caret; only committed text enters the document model. Real CJK IME testing across platforms remains necessary.
+Contextual disclosure reveals the active heading prefix and innermost inline
+span. It preserves source selection, wrap affinity, preferred horizontal caret
+position, and a source-based viewport anchor through local reflow. An offscreen
+caret does not force the viewport to jump when focus or disclosure changes.
 
 ## Selection, formatting, and history
 
-A source `Selection` has separate anchor/head offsets, preserving reverse selection. Native movements update it through the projection. Restoring a caret explicitly clears any native selection because Iced 0.14's `Content::move_to` retains an existing anchor when given `selection: None`. Switching source/live mode maps both endpoints without changing the document. Source-only search matches, such as a hidden URL, open source mode so the selection remains inspectable.
+Source selections retain distinct anchor/head positions. Visual wrap affinity,
+source/display affinity, and CRDT insertion affinity are separate concepts.
+Source-based targets preserve intent across asynchronous work and replica edits.
+Local generations identify derived-cache revisions, not document identity or
+causal history.
 
-Bold, italic, inline-code, and strikethrough formatting operate separately on selected lines and preserve heading/list prefixes. Commands use a concealed projection so active syntax does not change their selection semantics. Exact selected marks can be toggled off. Strikethrough retains parsed single/double tilde delimiters and caches colored strike segments from measured glyphs; revealed syntax stays unstruck. Enter continues ordered/unordered/task lists and blockquotes; Enter in an empty item exits it. Disclosed heading prefixes support ordinary caret movement, selection, and literal deletion.
-
-Yrs owns the authoritative text and scoped human/agent undo. Source ranges are UTF-8 bytes translated through an incremental UTF-16 index. Local source edits, rich repair, accepted proposals and imported operations enter one document transaction path. Source/projection/native/layout caches remain derived; local generations are distinct from document identity and causal versions. Stable positions preserve intent through intervening edits. See [collaboration](collaboration.md) for transaction, undo, IME and proposal contracts.
+Native edits, formatting, rich-text repair, accepted proposals, imports, and
+undo/redo share the document mutation boundary. IME preedit stays transient;
+committed text creates one source transaction. Human and accepted-agent history
+are separate and session-local. See [collaboration](collaboration.md) for the
+coordinate, stable-target, transaction, and persistence contracts.
 
 ## Parsing and performance
 
-Footnote metadata is collected with the projection parser. Missing references are
-recognized by a second inline parse only in disjoint paragraphs, headings and
-table cells containing footnote-looking syntax. Definitions use the parser's
-current continuation syntax. Numbered references reuse lossless replacement
-pieces and reveal their exact source while active. Footnote-bearing projections,
-including unresolved-only documents, retain the conservative global dependency
-path; safe word edits rebase their source metadata. Read transforms only the
-references/definitions within each indexed block and invalidates its global
-number/link caches on relevant source changes. See [footnotes](footnotes.md).
+The source cache certifies conservative local reparse windows. Projection updates
+reuse proven unchanged metadata and immutable mapping/highlight snapshots.
+Uncertain boundaries, global Markdown dependencies, and oversized batches use the
+general path. An optimization may fall back without dropping or changing CRDT
+operations. Predecessor identities prevent applying a local patch to stale state.
 
-The outline derives a cached hierarchy from top-level heading metadata on source revisions. Headings inside lists, quotes, and fences are not document sections. Collapse state stays outside Markdown; a heading range ends at the next heading of equal or lower level. Section moves use one validated delete/insert transaction with explicit source selection remapping and one human undo group. Fold anchors retain original and moved CRDT positions so disclosure follows undo/redo. Quick Jump searches all headings and their parent context, with a bounded result window. See [outline behavior](outline.md).
+Large documents shape resident paragraphs and table rows around the viewport.
+Height estimates can refine during scrolling; exact resident geometry remains
+the basis for interaction. Native content and its tracked snapshot stay under
+one owner so mutations cannot bypass synchronization.
 
-Pulldown-cmark establishes top-level document ranges on load. After an edit inside an eligible block, the source model reparses that block's isolated window (at most 64 KiB), splices replacement blocks and adjusts suffix offsets and statistics. Candidates are unindented paragraphs, headings, tables and rules with unchanged blank-line barriers and safe neighbors. Containers, HTML, fences, definitions, footnotes, uncertain boundaries and large windows use the full parser. Documents containing reference definitions or footnotes retain the full source-parsing path. Overlapping parser offsets are kept as one non-incremental range. Undo/redo applies the same change path once; it does not reparse a second time on commit.
+Contiguous buffers, suffix rebasing, global parsing, outline rebuilding, and very
+long paragraphs or table rows remain scaling limits. The [performance guide](performance.md)
+describes profiling and links to dated measurements.
 
-The projection retains its fast path for ASCII word characters and interior spaces strictly within an existing parsed text run. It owns its source/display Strings and parsed vectors. A small `Arc<()>` identifies the source revision for layout, independently of text allocation; every source edit replaces that identity, while disclosure retains it. Word edits preflight the active context before mutating retained metadata. Equal-length word replacements retain mapping/line-start snapshots and skip offset rebasing; other word edits adjust the relevant metadata suffix without deep-cloning image/table payloads. Other eligible edits use the source model's predecessor revision and certified window, validate the unchanged prefix/suffix, and parse only that fragment. A complete splice plan validates metadata containment and ordering before mutation. Parsed decorations, inline pairs, rich structures and safe text runs outside it retain their allocations with suffix offsets rebased in place. Displayed rich metadata is patched separately from source metadata, preserving each coordinate system. Line starts are spliced from the local result. Mapping construction reserves one successor buffer; old layout retains its immutable mapping, highlight revision and line index. Identity mapping pieces can be split at window boundaries; replacements may not cross them. Unaffected line highlight arrays stay shared. Disclosure changes outside the edited window and global dependencies use the general path. Plain paragraph changes omit an unchanged terminating newline from layout invalidation; structural windows remain broad so heading kinds, tables and image flow are rediscovered. Differential tests compare both paths with full parsing, every source/display mapping and fresh rich geometry.
+## Rich blocks and writing tools
 
-Certified batches covering up to 32 independent windows use atomic projection preflight and one immutable successor map. They retain unaffected payloads and pass sparse display regions to native synchronization and layout; uncertain or larger batches keep the general path. See [offline imports](offline-imports.md) for the bounds and validation.
+Feature contracts live with their behavior documentation:
 
-Disclosure rebuilds the compact text/map but repaints only affected physical lines. Unchanged line styles are shared through `Arc` slices. Setext underlines and multiline marker ranges use the general path. Sorted change regions describe the predecessor projection by highlight identity, so skipped or unrelated revisions cannot accidentally patch stale geometry. Every accepted source update gets a fresh highlight revision, including equal-length edits that share unchanged mapping/index snapshots.
-
-Rich layout caches both shaped paragraphs and local glyph/grapheme caret stops. Its exact full-document path, used for small documents and differential tests, can patch ordinary paragraphs with unchanged metrics, rebase geometry below them, and rebuild visibility indexes. Tables, image flow, multiline structural edits, theme/width/zoom changes, and unrelated revisions rebuild that exact layout. The virtual path described below builds only resident units and shares unchanged cached paragraphs within that window. Intermediate edited shapes are not accumulated indefinitely. Differential tests compare incremental and virtual geometry with fresh layouts over repeated reflow.
-
-Caret lookup uses source-ordered row ranges. Vertical interval indexes account for the different source and Y ordering inside wrapping table cells. Drawing submits only visible fragments, decorations, and selection rectangles, so selecting half a document does not submit thousands of offscreen quads. Table lookup converts the selection once and binary-searches table/row ranges. Drawing never parses Markdown.
-
-For documents above 256 physical layout units, `VirtualLayout` keeps only a viewport and one viewport of overscan on either side, plus adjacent units for navigation. A unit is a physical paragraph or a table row, so a large table does not require shaping the whole table. Smaller documents retain exact full layout. Each materialized unit uses the same `RichLayout` builder and paragraph cache as full layout; evicted paragraphs, glyph stops, fragments, and decorations are released. Only scalar height hints survive eviction.
-
-The document-wide unit index stores offsets and estimated or measured heights. A Fenwick tree uses double-precision sums for height updates and position queries. Local changes with a proven projection predecessor rebase unit offsets and invalidate affected geometry; multiline or unrelated changes rebuild the lightweight index. Height fingerprints are estimates only. They never authorize reuse of shaped text, which still requires the exact paragraph cache key.
-
-Pointer hits, visual motion, caret placement, and selection rectangles use measured resident geometry. Distant source navigation materializes the destination directly. A selection's remote anchor does not require shaping intervening text. Wheel scrolling, scrollbar movement, and drag autoscroll prepare the new window before drawing or hit testing. As estimates are refined, the first visible source row keeps its screen position. Disclosure, resizing, and theme/image metric changes preserve a visible source caret or viewport row; caret wrap affinity and selection direction remain source based. The scrollbar's estimated extent can refine while exploring previously unvisited text.
-
-Context-sensitive fallback parsing, contiguous source/projection/native snapshot storage, immutable mapping/index copies, metadata scans and suffix rebasing, outline construction, and a single exceptionally long paragraph or table row remain scaling limits. The native mirror adds one retained String and physical line index; changing text length still shifts its suffix and rebases index offsets. Large selections and exceptionally long physical lines can still require large native reads, and capacity growth can copy the retained snapshot. Native shapes can accumulate on visited lines, and the stock Source widget can still shape extensively when changing metrics. The original measurements are in [the baseline report](performance.md), followed by [viewport virtualization](virtualization.md), [deferred native initialization](native-buffer.md), [incremental block parsing](incremental-parsing.md), [native snapshots](native-snapshots.md), and [source/projection updates](source-projection-updates.md).
-
-## Rich blocks
-
-Task marker decorations retain parser-certified source ranges. Live checkbox hits use the same measured selection rectangles as text, and release accepts only an unmoved single click against the original source revision and layout. Live, Source keyboard commands and Read controls share a same-length source transaction that preserves selection direction and history. See [task lists](task-lists.md).
-
-Table cells retain source and display ranges. Source-only pipes, padding, and
-alignment rows project to tabs and row breaks. Cells wrap independently with
-shared row heights and alignment. Bare inline `<br>` and character references
-have explicit display mappings. Shaped glyph offsets are rebased from each
-physical line into the cell's paragraph, including blank lines and Unicode.
-Measured cell rectangles resolve empty-cell pointer targets independently of
-neighboring text fragments. Live cells use the full content width with a small
-top spacing and row-level header/rule decorations. The selected table adds grid
-lines and coordinate handles over its existing edges and outside page margin;
-activating it does not change text or cell geometry. Inactive tables have no
-coordinate hit targets. Hovering a selected table's row/column label reveals a
-menu arrow inside the existing handle space, leaving label and cell geometry
-unchanged. Its pointer hit uses the same measured rectangle as drawing; label
-clicks retain row/column selection and modified clicks retain range extension.
-Short-row cells materialize only on committed entry;
-document-wide text selections remain continuous.
-
-`document/table_input.rs` plans document-style text entry, line breaks, and
-cross-cell or cross-block replacements as sorted source splices. Selected values
-are cleared or replaced without deleting their grid. Boundary cells repair inline
-formatting locally. Required edge delimiters are added only to affected rows.
-`document/table_clipboard.rs` decodes and encodes bounded quoted TSV, retaining
-embedded delimiters and empty cells. A separate native Sheets profile preserves
-quote-only values and terminal blank records. Copy also serializes escaped HTML
-with literal string metadata and Office `mso-spacerun` spans for ASCII space/tab
-runs. The original values remain unchanged; destination number-format coercion
-is not compensated with apostrophe prefixes.
-`document/table_clipboard_html.rs` reads recognized Sheets and Excel Web HTML as
-explicit cells, avoiding ambiguous plain-text quotes and preserving final empty
-rows. Within a verified Sheets snapshot, typed string metadata supplies literal
-strings; other cells retain displayed text. Excel recognition requires actual
-ProgId and Generator metadata. Its reader uses displayed cell text, suppresses
-one formatting line ending after `<br>`, and maps nonbreaking spaces to ordinary
-spaces only inside `mso-spacerun` spans. Neither profile imports formulas or
-underlying number serials. The bounded inert reader rejects merged, nested,
-hidden, or unsupported table content; it does not render HTML or import markup
-into the document.
-`document/table_paste.rs` plans a values
-rectangle with sparse splices and coalesced growth insertions, preserving untouched
-cell bytes and physical row endings. One batched projection oracle checks literal
-values and structure before a single human transaction. The grid coordinator
-fills or tiles compatible selected ranges, or grows from one selected cell;
-incompatible and oversized requests leave source unchanged. Copy and paste
-intents resolve their current target in App after preceding selection messages.
-Ordered runtime clipboard writes and reads preserve Copy → Move → Paste within
-one Iced event batch and verify the plain-text alternative. Native rich work
-then runs off the UI path; `io/table_clipboard.rs` retains its owner, matches text
-before and after metadata reads and cell decoding, and checks text immediately
-before enrichment and after writing.
-Cut waits for verified writes and revalidates its source revision and selection;
-asynchronous paste also validates its captured target. Model/widget tests use
-their in-memory clipboard, with explicit completion messages for native paths.
-When the runtime supplies no text, a worker may recover a recognized entirely
-empty native spreadsheet table only after matching HTML reads around decoding
-and confirming empty/absent text. Missing ordinary clipboard contents remain a
-no-op; the delayed empty result retains the same source/selection guards.
-Paste and clear/cut transactions attach directed grid coordinates and a stable
-table source position to the existing history item, alongside source selections.
-Undo/redo resolves that table after source restoration and restores the original
-or expanded rectangle. Plain text transactions retain their existing history path.
-`app/table.rs` coordinates revision-checked pointer targets, stable menu/dialog
-targets, source selections, and deliberate human undo grouping. Live context
-menus use row/column/cell scopes over a transparent dismiss layer. The toolbar
-and keyboard locate the active cell through a widget operation over measured
-geometry; popup positioning stays within the window. A second measured operation
-minimally scrolls keyboard-selected menu actions into view, and changing groups
-resets the menu scroll position. Window unfocus dismisses only the context menu.
-Menu previews retain the
-source selection, and every action validates the captured table before applying.
-Source keeps the keyboard-operated dialog. The footer stays document focused.
-`app/table_grid.rs` keeps cell anchor/head and active-cell positions distinct from
-the continuous source selection. A quiet state retains the last source cell target
-for keyboard/IME re-entry while hiding the active grid.
-Pointer and keyboard ranges use cell rectangles, not the intervening linear
-Markdown span. Cell selection and movement within existing content never mutate
-source. At a document edge, a plain outward arrow can create the missing paragraph
-in one human transaction. One transient native text editor is a child of `RichEditor`, positioned
-over the active cell; its plain-text draft and bounded local history stay outside
-the authoritative document. Commit checks a stable expected cell target, applies
-source-preserving splices once, and returns to cell selection. Escape discards
-the draft, collapses a range, then quiets a single selected cell without changing
-its source selection. Clicking prose commits and clears the table presentation.
-The pending editor can grow over neighboring rows until commit,
-when normal row reflow and viewport anchoring apply. Source keeps literal editing.
-
-Plain Up/Down at a logical table edge use the active cell's measured horizontal
-position to find an existing outside source row. The source row is shaped before
-resolving the target, including across virtualized table boundaries. Adjacent
-tables adopt a cell in their boundary row. A source-distinct blank paragraph is
-usable; a terminal caret shared with the last cell is not a safe outside target.
-When no outside destination exists, the widget requests a revision-checked
-boundary exit from `app/table_grid.rs`. The App validates the logical row and
-document edge, then inserts only the missing separator at BOF/EOF, reusing plain
-whitespace and preserving the table's physical line-ending style. The paragraph
-sits outside any table container. Creation is one undo group, separate from
-subsequent prose typing; the normal document transaction limits still apply.
-This path is confined to physical unmodified arrow keys, preserving range
-extension and native draft arrows as well as Enter/Tab commit traversal.
-
-Structural mapping pieces record the relative pipe/newline boundary. Concealed
-padding before it maps to the preceding cell and padding after it to the next;
-source hints round-trip only on their own side. The active cell tracks stable
-value bounds through local/remote changes and reflow. Original padding stays
-concealed. Typed edge spaces use numeric character references to survive Markdown
-trimming after focus moves; repeated trailing spaces normalize to ordinary source
-spaces when they become interior text. Inline formatting markers stay concealed
-inside cells. See [table editing](table-editing.md) for the current interaction
-contract and reproducible validation.
-
-Images project to an atomic object replacement character. Their complete Markdown remains behind that object. Selection, deletion, clipboard transfer, source switching, and undo map through the same source pieces as text. Images occupy block flow, including images written inline and images inside table cells. Local/file/HTTP/HTTPS loading and decoding run outside the UI thread, with four concurrent loads, a 20-second HTTP timeout, redirect limits, a 16 MiB encoded cap, decoder allocation/dimension limits, and a 128 MiB document image cache. Renderer handles contain decoded RGBA pixels. Failed images retain their object and show a message. GIFs show the first frame; SVG is unsupported.
+- [Code](code-editing.md), [tasks](task-lists.md), [strikethrough](strikethrough.md),
+  and [footnotes](footnotes.md) retain source-aware editing and continuous selection.
+- [Tables](table-editing.md) use directed rectangular selection and a transient
+  native cell draft; a successful commit becomes one document transaction.
+- [Outline](outline.md) state is local; section moves preserve source and history.
+- [Writing workflows](writing-workflows.md) cover checked link/image/quotation
+  targets, asset import, Save As, recovery, and HTML export.
 
 ## Files
 
-File reads/writes run in Tokio blocking tasks. Reads are capped at 16 MiB even if a file grows. Opening locks document edits until completion. Saving captures a snapshot; edits made while it saves remain dirty.
+Blocking file work, native rich clipboard access, and image decoding run off the
+UI event path with explicit limits. Opening guards against edits until completion.
+Saving captures a source/state snapshot; subsequent edits remain dirty.
 
-Collaborative saves compare both Markdown and checkpoint baselines under an advisory interprocess lock. A synced journal makes publication of Markdown and CRDT metadata recoverable across both renames. Permissions, physical symlink targets and atomic writes retain their existing behavior. External Markdown/metadata mismatches are explicit conflicts. Full encoded state retains pending updates and uses a fresh active replica identity on every reopen. See [persistence and recovery](collaboration.md#persistence-and-recovery).
+Markdown/checkpoint publication uses cooperative locks, checked baselines, atomic
+writes, and a recovery journal. Conflicts preserve files and surface an error.
+Each reopen uses a fresh writer identity. See [persistence and recovery](collaboration.md#persistence-and-recovery)
+and [security boundaries](../SECURITY.md).
 
-HTML export escapes raw Markdown HTML and includes a restrictive content security policy. Live images resolve relative to the saved document; remote URLs are fetched automatically. The optional older Read renderer still uses local image handles and remote placeholders. Preferences contain appearance and recent paths, and writes are serialized.
+## Themes
 
-The collaboration foundation measurements are in [CRDT performance](crdt-performance.md), followed by [cached UTF-16 traversal](utf16-performance.md).
-
-[Offline import measurements](offline-imports.md) record staged update filtering and incremental source/projection batches.
-
-## Writing workflows
-
-`app/writing.rs` owns focused link/image/quotation details and deferred paste/import intent; `document/writing.rs` recognizes and serializes their portable Markdown. All accepted edits still use `Document::transact` with stable targets and deliberate human undo grouping. `io/assets.rs` publishes bounded immutable assets and copies references for Save As; `io/export.rs` embeds local images in self-contained HTML. `app/recovery.rs` debounces idle checkpoints and retires late writes; `io/recovery.rs` stores one checksummed compatible CRDT state plus the saved-file baseline atomically. Presentation remains local. The [writing workflow policy](writing-workflows.md) describes limits, conflict behavior, recovery retention and validation.
+Theme definitions resolve into semantic tokens and an Iced theme on load or
+switch. `App` stores the `ResolvedTheme`; its theme callback returns that stored
+handle. Widgets, highlights, and canvas drawing consume the same tokens through
+centralized styles. See [appearance](design-system.md).

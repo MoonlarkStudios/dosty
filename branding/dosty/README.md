@@ -63,13 +63,9 @@ plates with transparent corners. No shadows are baked in.
 
 [palette.json](palette.json) is the source of truth.
 
-| Role | Light | Dark |
-| --- | --- | --- |
-| Field | Cream `#F3EFE4` | Charcoal `#20231F` |
-| Wordmark | Charcoal `#20231F` | Cream `#F3EFE4` |
-| Main body | Smoked teal `#365D58` | Muted teal `#71918A` |
-| Upper curl | Sage `#7B8C75` | Sage `#9FAD94` |
-| Page underside | Parchment `#DED2B8` | Parchment `#C9B99B` |
+The light and dark palettes use cream/charcoal fields, smoked or muted teal
+for the mark body, sage for the curl, and parchment for the page underside.
+Read the JSON for exact colors used by the exporter.
 
 Inside the app, resolved `brand_ink`, `brand_accent`, and `brand_paper` semantic
 colors adapt the mark to each theme; the wordmark uses `text`. Legacy custom

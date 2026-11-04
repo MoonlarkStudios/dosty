@@ -1,5 +1,8 @@
 # Native buffer snapshots
 
+Historical measurements of the identified revisions. See the
+[current performance guide](../performance.md) for the active architecture and profiling workflow.
+
 Measured on 2026-10-22 with mise's Rust 1.95.0, locked Iced 0.14 / cosmic-text 0.15, release optimization, macOS 26.7.1 on Apple silicon (arm64), and bundled Newsreader fonts. The baseline is `10507ff`, after [incremental block parsing](incremental-parsing.md).
 
 The subsequent [source/projection update report](source-projection-updates.md) addresses text and metadata copying after native snapshotting.
@@ -58,10 +61,6 @@ The counter records native text assembled for snapshot reads, including endings.
 
 ## Validation and remaining limits
 
-`mise run check` passes formatting, Clippy with warnings denied, and 94 regression tests; seven benchmarks/profiles are ignored by default. All five release benchmarks, the complete 10k/50k interaction profile, and `mise run release` pass. The macOS bundle is rebuilt and ad-hoc signed without opening or restarting existing windows.
-
-Differential tests compare snapshots, native text, physical line starts, cursor, selection and line endings after every edit kind at Unicode boundaries, with forward/reverse selections, empty documents, CR/LF/CRLF/LFCR, RTL, combining characters and joined emoji. Repeated motions, word/line selection, indentation, paste and line joins cross deferred-load batch boundaries. Exhaustive synchronization splices cover endpoints inside paired endings. Application tests assert snapshot/native/projection agreement after messages, including Source/Live switching, CRLF reverse replacement, disclosure, table/image editing and undo/redo. Full native reads used as correctness oracles in benchmarks/profiles remain outside the timed edit path. Existing rich-widget tests cover scroll anchors, wrap affinity, cross-block dragging and transient IME composition.
-
 Large selected spans and exceptionally long physical lines can still require large native reads. The mirror and its index remain contiguous; source/projection copying, metadata rebasing, conservative parser fallbacks and outline construction retain linear costs. Native shaping caches can accumulate, and the stock Source widget still has metric-related shaping costs. The 16 MiB document guard and patch-based undo remain in place.
 
 These are CPU/software measurements, excluding native OS input delivery, GPU presentation, accessibility, file I/O and image decoding. Actual CJK IME integration still needs native manual testing. Existing user windows and unsaved documents were preserved.
@@ -85,7 +84,7 @@ target/release/deps/dosty-<hash> performance_native_snapshots --ignored --nocapt
 
 The baseline was profiled before edits. To reproduce it, archive `10507ff` to a temporary directory and build through mise from the trusted repository with `--manifest-path` pointing to the archive. A shared `CARGO_TARGET_DIR` reuses dependencies; run the baseline executable before rebuilding the current version because the filename can be identical. The interaction sequence is unchanged; the current harness adds complete native/snapshot equality checks after timing. The load-component diagnostic now includes the mirror and index. The older 2k continuous-edit benchmark keeps correctness reads outside its edit timer as well.
 
-- [Baseline interactions and process metrics](performance/native-snapshots/before-interactions.txt).
-- [Final interactions and process metrics](performance/native-snapshots/after-interactions.txt).
-- [Serial native snapshot diagnostic](performance/native-snapshots/snapshot-component.txt).
-- [All release benchmarks](performance/native-snapshots/model-layout.txt).
+- [Baseline interactions and process metrics](native-snapshots/before-interactions.txt).
+- [Final interactions and process metrics](native-snapshots/after-interactions.txt).
+- [Serial native snapshot diagnostic](native-snapshots/snapshot-component.txt).
+- [All release benchmarks](native-snapshots/model-layout.txt).
