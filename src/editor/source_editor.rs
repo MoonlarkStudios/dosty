@@ -15,6 +15,8 @@ pub(crate) struct SourceEditor<'a> {
     child: Element<'a, Message>,
     collaboration: &'a Collaboration,
     selection: Selection,
+    #[cfg(target_os = "macos")]
+    observe_accessibility_composition: bool,
 }
 struct State {
     owner: (uuid::Uuid, u64),
@@ -32,7 +34,15 @@ impl<'a> SourceEditor<'a> {
             child,
             collaboration,
             selection,
+            #[cfg(target_os = "macos")]
+            observe_accessibility_composition: false,
         }
+    }
+    /// Reports pending IME intent only when the native accessibility bridge is active.
+    #[cfg(target_os = "macos")]
+    pub fn observe_accessibility_composition(mut self, observe: bool) -> Self {
+        self.observe_accessibility_composition = observe;
+        self
     }
     fn reconcile(&self, tree: &mut Tree) {
         let state = tree.state.downcast_mut::<State>();
@@ -100,6 +110,8 @@ impl Widget<Message, Theme, Renderer> for SourceEditor<'_> {
     ) {
         self.reconcile(tree);
         let state = tree.state.downcast_mut::<State>();
+        #[cfg(target_os = "macos")]
+        let previous_pending = state.target.is_some();
         match event {
             Event::InputMethod(input_method::Event::Opened | input_method::Event::Closed) => {
                 state.target = None;
@@ -180,6 +192,14 @@ impl Widget<Message, Theme, Renderer> for SourceEditor<'_> {
                 shell,
                 viewport,
             );
+        }
+        #[cfg(target_os = "macos")]
+        if self.observe_accessibility_composition && previous_pending != state.target.is_some() {
+            shell.publish(Message::AccessibilityComposition {
+                document: state.owner.0,
+                replica: state.owner.1,
+                pending: state.target.is_some(),
+            });
         }
     }
     fn draw(

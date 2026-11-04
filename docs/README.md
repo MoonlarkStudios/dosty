@@ -18,6 +18,7 @@ Start with the [README](../README.md) to build and run Dosty, the
 | [Strikethrough](strikethrough.md) | Formatting and source disclosure |
 | [Footnotes](footnotes.md) | Syntax, note details, numbering, and navigation |
 | [Appearance](design-system.md) | Themes, semantic colors, typography, and layout |
+| [macOS Source accessibility](accessibility.md) | Opt-in native text, selection, actions, and prototype limits |
 | [Performance](performance.md) | Current scaling limits and profiling methodology |
 | [Release readiness](evaluation.md) | Unsupported behavior and platform validation limits |
 | [Identity and compatibility](identity-migration.md) | Configuration paths, legacy aliases, and retained file formats |

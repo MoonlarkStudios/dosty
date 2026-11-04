@@ -20,7 +20,18 @@ pub fn run() -> iced::Result {
     let icon = window::icon::from_rgba(icon.to_vec(), icon.width(), icon.height())
         .expect("the decoded Dosty icon must contain complete RGBA pixels");
 
-    iced::application(App::new, App::update, App::view)
+    #[cfg(target_os = "macos")]
+    let bootstrap = (std::env::var_os("DOSTY_ACCESSIBILITY_PROTOTYPE").as_deref()
+        == Some(std::ffi::OsStr::new("1")))
+    .then(super::application::accessibility::Bootstrap::new);
+    #[cfg(target_os = "macos")]
+    let accessibility = bootstrap.as_ref().map(|bootstrap| bootstrap.config.clone());
+    #[cfg(target_os = "macos")]
+    let boot = move || App::new_with_accessibility(bootstrap.as_ref());
+    #[cfg(not(target_os = "macos"))]
+    let boot = App::new;
+
+    let application = iced::application(boot, App::update, App::view)
         .font(include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice())
@@ -35,6 +46,10 @@ pub fn run() -> iced::Result {
             icon: Some(icon),
             exit_on_close_request: false,
             ..window::Settings::default()
-        })
-        .run()
+        });
+    #[cfg(target_os = "macos")]
+    if let Some(accessibility) = accessibility {
+        return iced_winit::run_with_accessibility(application, accessibility).map_err(Into::into);
+    }
+    application.run()
 }

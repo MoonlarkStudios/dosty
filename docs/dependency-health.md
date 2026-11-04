@@ -36,9 +36,19 @@ The [Yrs pending-update repair](yrs-pending-updates.md) documents the correctnes
 invariant and deterministic regression needed during rebases. Renderer and
 highlighter manifest patches remain governed by the vendor policy.
 
+The macOS [Source accessibility bridge](accessibility.md) also uses a narrow
+window-runtime patch to install AccessKit before a native window becomes visible.
+Its provenance and removal criteria remain in the vendor policy. The bridge's
+macOS dependencies do not enable Windows accessibility or Unix adapter runtime
+features; the lockfile still records AccessKit's declared Windows dependencies.
+
 ## Evidence
 
 The [2026-11-03 parser audit](validation/dependencies/pulldown-cmark-0.13.6-audit.txt)
 and [earlier audit capture](validation/dependencies/audit.txt) are dated records,
 not live status. [Dependency-update measurements](performance/dependencies.md)
 retain the matching profiles and limitations.
+
+The [2026-11-04 prototype audit](validation/accessibility/audit.txt) belongs to
+that recorded initial implementation. It is historical evidence rather than a
+statement about the current advisory database.

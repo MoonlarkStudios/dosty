@@ -113,7 +113,41 @@ the theme palette or grammar corpus. Application syntax snapshot/Unicode/theme
 regressions cover the consumer. Remove the override when a compatible Iced release
 provides equivalent minimal features or maintained replacements.
 
-All three patches were reversed in temporary copies and verified against their
-original checksum manifests during this review. Root `[patch.crates-io]` entries
-select the imports; do not update these directories without preserving provenance,
-licenses, a reviewable patch, and relevant validation.
+## Iced window runtime 0.14.1
+
+`iced_winit/` preserves the crates.io **iced_winit 0.14.1** distribution at Iced
+revision `38237dd294da3256c2ac4d3f8288fc73956c91e0`, path `winit` in
+[iced-rs/iced](https://github.com/iced-rs/iced).
+`iced_winit-upstream.sha256` retains the archive hash and all 12 original file
+hashes. Its MIT license is copied from that exact upstream revision.
+
+`iced_winit.patch` adds a macOS-only, optional application-owned AccessKit tree
+bridge. `run()` retains its existing behavior; `run_with_accessibility()`
+installs the safe `accesskit_winit` adapter before native visibility, forwards
+window focus and scale changes, publishes full tree snapshots after application
+updates, and drops adapters on close. Geometry stays in logical client
+coordinates until the bridge scales the root for native physical pixels.
+One tree is shared by the prototype's single document window. No unsafe code
+is added. Two imported deprecated queue reads use equivalent `try_recv`
+handling; no lint allowances are added.
+
+The patch pins macOS-only `accesskit 0.21.1` and `accesskit_winit 0.29.2`, with
+the latter's default features disabled and `rwh_06` enabled. Their macOS adapter
+is `accesskit_macos 0.22.2`. The lockfile also records AccessKit's declared
+Windows dependencies; this does not enable Windows accessibility or add Unix
+adapter runtime dependencies. See the [prototype](../docs/accessibility.md) for
+the missing upstream hooks, semantics and native validation limits.
+
+Remove this override when the pinned-compatible upstream runtime exposes
+equivalent adapter lifecycle hooks or native widget accessibility. Retain
+provenance and reviewable patch evidence on rebases. Run
+`mise exec -- cargo test --locked -p iced_winit --lib`, the application checks,
+release build, repository checks and audit after changes. Native AX/VoiceOver
+validation must use a separate test bundle and disposable source/configuration.
+
+The first three patches were reversed in temporary copies and verified against
+their original checksum manifests in the earlier dependency review. The
+[window-runtime verification](../docs/validation/accessibility/vendor-provenance.json)
+separately reverses its patch and checks all 12 original files. Root
+`[patch.crates-io]` entries select the imports; do not update these directories
+without preserving provenance, licenses, a reviewable patch, and relevant validation.

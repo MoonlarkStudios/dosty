@@ -1,0 +1,472 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -109,6 +109,14 @@
+ optional = true
+ default-features = false
+ 
++[target.'cfg(target_os = "macos")'.dependencies.accesskit]
++version = "=0.21.1"
++
++[target.'cfg(target_os = "macos")'.dependencies.accesskit_winit]
++version = "=0.29.2"
++default-features = false
++features = ["rwh_06"]
++
+ [lints.clippy]
+ default_trait_access = "deny"
+ filter_map_next = "deny"
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -29,6 +29,9 @@
+ pub mod clipboard;
+ pub mod conversion;
+ 
++#[cfg(target_os = "macos")]
++pub mod accessibility;
++
+ mod error;
+ mod proxy;
+ mod window;
+@@ -70,6 +73,38 @@
+     P: Program + 'static,
+     P::Theme: theme::Base,
+ {
++    run_with_config(
++        program,
++        #[cfg(target_os = "macos")]
++        None,
++    )
++}
++
++/// Runs a program with an application-supplied macOS accessibility tree.
++///
++/// The native adapter is installed before the window is first shown. This
++/// prototype shares one tree between windows; applications using this entry
++/// point should open a single document window.
++#[cfg(target_os = "macos")]
++pub fn run_with_accessibility<P>(
++    program: P,
++    accessibility: accessibility::Config,
++) -> Result<(), Error>
++where
++    P: Program + 'static,
++    P::Theme: theme::Base,
++{
++    run_with_config(program, Some(accessibility))
++}
++
++fn run_with_config<P>(
++    program: P,
++    #[cfg(target_os = "macos")] accessibility: Option<accessibility::Config>,
++) -> Result<(), Error>
++where
++    P: Program + 'static,
++    P::Theme: theme::Base,
++{
+     use winit::event_loop::EventLoop;
+ 
+     let boot_span = debug::boot();
+@@ -151,6 +186,12 @@
+         error: Option<Error>,
+         system_theme: Option<oneshot::Sender<theme::Mode>>,
+ 
++        #[cfg(target_os = "macos")]
++        accessibility: Option<accessibility::Config>,
++        #[cfg(target_os = "macos")]
++        accessibility_windows:
++            FxHashMap<winit::window::WindowId, accessibility::Window>,
++
+         #[cfg(target_arch = "wasm32")]
+         canvas: Option<web_sys::HtmlCanvasElement>,
+     }
+@@ -163,6 +204,11 @@
+         receiver: control_receiver,
+         error: None,
+         system_theme: Some(system_theme_sender),
++
++        #[cfg(target_os = "macos")]
++        accessibility,
++        #[cfg(target_os = "macos")]
++        accessibility_windows: FxHashMap::default(),
+ 
+         #[cfg(target_arch = "wasm32")]
+         canvas: None,
+@@ -203,6 +249,19 @@
+             window_id: winit::window::WindowId,
+             event: winit::event::WindowEvent,
+         ) {
++            #[cfg(target_os = "macos")]
++            {
++                if let Some(window) =
++                    self.accessibility_windows.get_mut(&window_id)
++                {
++                    window.process_event(&event);
++                }
++
++                if matches!(event, winit::event::WindowEvent::Destroyed) {
++                    let _ = self.accessibility_windows.remove(&window_id);
++                }
++            }
++
+             #[cfg(target_os = "windows")]
+             let is_move_or_resize = matches!(
+                 event,
+@@ -278,8 +337,8 @@
+                 let poll = self.instance.as_mut().poll(&mut self.context);
+ 
+                 match poll {
+-                    task::Poll::Pending => match self.receiver.try_next() {
+-                        Ok(Some(control)) => match control {
++                    task::Poll::Pending => match self.receiver.try_recv() {
++                        Ok(control) => match control {
+                             Control::ChangeFlow(flow) => {
+                                 use winit::event_loop::ControlFlow;
+ 
+@@ -350,6 +409,7 @@
+                                 let window = event_loop
+                                     .create_window(window_attributes)
+                                     .expect("Create window");
++                                let window = Arc::new(window);
+ 
+                                 #[cfg(target_os = "macos")]
+                                 if let Some(position) = position {
+@@ -402,11 +462,24 @@
+                                     };
+                                 }
+ 
++                                #[cfg(target_os = "macos")]
++                                if let Some(config) = self.accessibility.clone()
++                                {
++                                    let _ = self.accessibility_windows.insert(
++                                        window.id(),
++                                        accessibility::Window::new(
++                                            event_loop,
++                                            window.clone(),
++                                            config,
++                                        ),
++                                    );
++                                }
++
+                                 self.process_event(
+                                     event_loop,
+                                     Event::WindowCreated {
+                                         id,
+-                                        window: Arc::new(window),
++                                        window,
+                                         exit_on_close_request,
+                                         make_visible: visible,
+                                         on_open,
+@@ -415,12 +488,20 @@
+                             }
+                             Control::Exit => {
+                                 self.process_event(event_loop, Event::Exit);
++                                #[cfg(target_os = "macos")]
++                                self.accessibility_windows.clear();
+                                 event_loop.exit();
+                                 break;
+                             }
+                             Control::Crash(error) => {
+                                 self.error = Some(error);
++                                #[cfg(target_os = "macos")]
++                                self.accessibility_windows.clear();
+                                 event_loop.exit();
++                            }
++                            #[cfg(target_os = "macos")]
++                            Control::CloseAccessibilityWindow(id) => {
++                                let _ = self.accessibility_windows.remove(&id);
+                             }
+                             Control::SetAutomaticWindowTabbing(_enabled) => {
+                                 #[cfg(target_os = "macos")]
+@@ -438,10 +519,17 @@
+                         }
+                     },
+                     task::Poll::Ready(_) => {
++                        #[cfg(target_os = "macos")]
++                        self.accessibility_windows.clear();
+                         event_loop.exit();
+                         break;
+                     }
+                 };
++            }
++
++            #[cfg(target_os = "macos")]
++            for window in self.accessibility_windows.values_mut() {
++                window.refresh();
+             }
+         }
+     }
+@@ -490,6 +578,8 @@
+         scale_factor: f32,
+     },
+     SetAutomaticWindowTabbing(bool),
++    #[cfg(target_os = "macos")]
++    CloseAccessibilityWindow(winit::window::WindowId),
+ }
+ 
+ async fn run_instance<P>(
+@@ -559,10 +649,10 @@
+ 
+     'next_event: loop {
+         // Empty the queue if possible
+-        let event = if let Ok(event) = event_receiver.try_next() {
+-            event
+-        } else {
+-            event_receiver.next().await
++        let event = match event_receiver.try_recv() {
++            Ok(event) => Some(event),
++            Err(mpsc::TryRecvError::Closed) => None,
++            Err(mpsc::TryRecvError::Empty) => event_receiver.next().await,
+         };
+ 
+         let Some(event) = event else {
+@@ -1402,6 +1492,13 @@
+                 let _ = interfaces.remove(&id);
+ 
+                 if let Some(window) = window_manager.remove(id) {
++                    #[cfg(target_os = "macos")]
++                    control_sender
++                        .start_send(Control::CloseAccessibilityWindow(
++                            window.raw.id(),
++                        ))
++                        .expect("Send accessibility close action");
++
+                     if clipboard.window_id() == Some(window.raw.id()) {
+                         *clipboard = window_manager
+                             .first()
+--- /dev/null
++++ b/src/accessibility.rs
+@@ -0,0 +1,234 @@
++//! A small native accessibility bridge for applications supplying their own tree.
++//!
++//! This is deliberately separate from Iced's widget tree: the application owns
++//! the semantics and handles actions using its ordinary update path. Every
++//! published update must contain a complete tree, including its [`Tree`].
++//! Node geometry uses logical window-client coordinates. The bridge scales the
++//! root transform to native physical pixels, including on display changes.
++//!
++//! [`Tree`]: accesskit::Tree
++
++use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
++use std::sync::{Arc, Mutex};
++
++/// Shared accessibility state for one application window.
++///
++/// Pass a clone to [`crate::run_with_accessibility`] and publish subsequent
++/// complete trees through [`Self::update`]. Action callbacks must enqueue work
++/// for the application's update path rather than mutating application state
++/// reentrantly. They may be called from a platform accessibility callback.
++#[derive(Clone)]
++pub struct Config {
++    snapshot: Arc<Mutex<Snapshot>>,
++    handler: Arc<dyn Fn(ActionRequest) + Send + Sync>,
++}
++
++#[derive(Clone)]
++struct Snapshot {
++    tree: Arc<TreeUpdate>,
++    generation: u64,
++}
++
++impl Config {
++    /// Creates a bridge with the complete initial accessibility tree.
++    pub fn new(
++        initial_tree: TreeUpdate,
++        handler: impl Fn(ActionRequest) + Send + Sync + 'static,
++    ) -> Self {
++        Self {
++            snapshot: Arc::new(Mutex::new(Snapshot {
++                tree: Arc::new(initial_tree),
++                generation: 0,
++            })),
++            handler: Arc::new(handler),
++        }
++    }
++
++    /// Replaces the complete tree that native accessibility clients observe.
++    ///
++    /// The runtime applies changed snapshots after processing application
++    /// messages. If accessibility is activated later, its initial tree is this
++    /// latest snapshot rather than the tree originally passed to [`Self::new`].
++    pub fn update(&self, tree: TreeUpdate) {
++        let mut snapshot = self
++            .snapshot
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        snapshot.tree = Arc::new(tree);
++        snapshot.generation = snapshot.generation.wrapping_add(1);
++    }
++
++    fn snapshot(&self) -> Snapshot {
++        self.snapshot
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner)
++            .clone()
++    }
++}
++
++struct Activation {
++    config: Config,
++    scale: Arc<Mutex<f64>>,
++}
++
++impl ActivationHandler for Activation {
++    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
++        let scale = *self
++            .scale
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        Some(physical_tree(&self.config.snapshot().tree, scale))
++    }
++}
++
++fn physical_tree(tree: &TreeUpdate, scale: f64) -> TreeUpdate {
++    let mut update = tree.clone();
++    if let Some(root) = update.tree.as_ref().map(|tree| tree.root)
++        && let Some((_, node)) =
++            update.nodes.iter_mut().find(|(id, _)| *id == root)
++    {
++        let transform = node
++            .transform()
++            .copied()
++            .unwrap_or(accesskit::Affine::IDENTITY);
++        node.set_transform(accesskit::Affine::scale(scale) * transform);
++    }
++    update
++}
++
++struct Actions(Arc<dyn Fn(ActionRequest) + Send + Sync>);
++
++impl ActionHandler for Actions {
++    fn do_action(&mut self, request: ActionRequest) {
++        (self.0)(request);
++    }
++}
++
++struct Deactivation;
++
++impl accesskit::DeactivationHandler for Deactivation {
++    fn deactivate_accessibility(&mut self) {}
++}
++
++/// Keeps the adapter alive until the runtime closes its native window.
++///
++/// The adapter is dropped before our last retained window reference, so the
++/// native view remains valid while AccessKit restores its original class.
++pub(crate) struct Window {
++    adapter: accesskit_winit::Adapter,
++    raw: Arc<winit::window::Window>,
++    config: Config,
++    generation: u64,
++    scale: Arc<Mutex<f64>>,
++    applied_scale: f64,
++}
++
++impl Window {
++    pub(crate) fn new(
++        event_loop: &winit::event_loop::ActiveEventLoop,
++        window: Arc<winit::window::Window>,
++        config: Config,
++    ) -> Self {
++        let generation = config.snapshot().generation;
++        let applied_scale = window.scale_factor();
++        let scale = Arc::new(Mutex::new(applied_scale));
++        let adapter = accesskit_winit::Adapter::with_direct_handlers(
++            event_loop,
++            &window,
++            Activation {
++                config: config.clone(),
++                scale: scale.clone(),
++            },
++            Actions(config.handler.clone()),
++            Deactivation,
++        );
++
++        Self {
++            adapter,
++            raw: window,
++            config,
++            generation,
++            scale,
++            applied_scale,
++        }
++    }
++
++    pub(crate) fn process_event(&mut self, event: &winit::event::WindowEvent) {
++        if let winit::event::WindowEvent::ScaleFactorChanged {
++            scale_factor,
++            ..
++        } = event
++        {
++            *self
++                .scale
++                .lock()
++                .unwrap_or_else(std::sync::PoisonError::into_inner) =
++                *scale_factor;
++        }
++        self.adapter.process_event(&self.raw, event);
++    }
++
++    pub(crate) fn refresh(&mut self) {
++        let snapshot = self.config.snapshot();
++        let scale = *self
++            .scale
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        if snapshot.generation != self.generation || scale != self.applied_scale
++        {
++            self.adapter
++                .update_if_active(|| physical_tree(&snapshot.tree, scale));
++            self.generation = snapshot.generation;
++            self.applied_scale = scale;
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use accesskit::{Affine, Node, NodeId, Point, Role, Tree};
++
++    fn tree(label: &str) -> TreeUpdate {
++        let mut root = Node::new(Role::Window);
++        root.set_label(label);
++        root.set_transform(Affine::translate((3.0, 4.0)));
++        TreeUpdate {
++            nodes: vec![(NodeId(0), root)],
++            tree: Some(Tree::new(NodeId(0))),
++            focus: NodeId(0),
++        }
++    }
++
++    #[test]
++    fn native_scaling_preserves_logical_snapshot() {
++        let logical = tree("Document");
++        let physical = physical_tree(&logical, 2.0);
++        let root = &physical.nodes[0].1;
++        assert_eq!(
++            *root.transform().unwrap() * Point::new(1.0, 2.0),
++            Point::new(8.0, 12.0),
++        );
++        assert_eq!(
++            *logical.nodes[0].1.transform().unwrap() * Point::new(1.0, 2.0),
++            Point::new(4.0, 6.0),
++        );
++        assert_eq!(physical_tree(&logical, 2.0), physical);
++    }
++
++    #[test]
++    fn delayed_activation_reads_latest_tree_and_scale() {
++        let config = Config::new(tree("Initial"), |_| {});
++        let scale = Arc::new(Mutex::new(1.0));
++        let mut activation = Activation {
++            config: config.clone(),
++            scale: scale.clone(),
++        };
++        config.update(tree("Changed"));
++        *scale.lock().unwrap() = 2.0;
++        assert_eq!(
++            activation.request_initial_tree().unwrap(),
++            physical_tree(&tree("Changed"), 2.0),
++        );
++    }
++}

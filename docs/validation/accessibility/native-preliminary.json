@@ -1,0 +1,33 @@
+{
+  "stage": "preliminary native AX validation before grapheme-boundary correction",
+  "date": "2026-11-04",
+  "os": [
+    "ProductName:\t\tmacOS",
+    "ProductVersion:\t\t26.7.1",
+    "BuildVersion:\t\t25G241"
+  ],
+  "architecture": "arm64",
+  "bundle_id": "app.dosty.editor.accessibility-prototype",
+  "executable_sha256": "962e5827ac3b628e5f7fa74b2aa09726193319f415d230b87992ed526c985580",
+  "fixture_sha256": "2eab727bf5e5f595bed06c720ca19fb1151da67693257c3ec26e95635e12666a",
+  "fixture_bytes": 124,
+  "saved_bytes_match_fixture": true,
+  "operations": [
+    "Observed focused native text entry area labelled Markdown source",
+    "Set entire source through native AXValue",
+    "Selected 日本語 through native selected text range",
+    "Typed native edit into that range",
+    "Cmd+Z restored Japanese text and selected range",
+    "Saved through native panel in isolated target directory",
+    "Compared saved Markdown bytes against synthetic fixture",
+    "Closed only prototype window and observed its process exit",
+    "Existing Dosty Clipboard Validation V3 remained running"
+  ],
+  "spoken_voiceover": "not tested in this preliminary pass",
+  "limitations": [
+    "No real CJK composition",
+    "No display scale transition",
+    "No Live semantics",
+    "No spatial glyph geometry"
+  ]
+}

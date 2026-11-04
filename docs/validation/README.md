@@ -11,6 +11,9 @@ Raw logs, captures, fixtures, and source/executable digests remain byte-exact.
 - [Clipboard, image drop, file dialogs, and input methods](native-writing.md):
   macOS sessions on 2026-10-23, including actual PNG drop and accented input;
   real CJK candidate-window behavior remains unverified.
+- [Source accessibility](accessibility.md): initial macOS native text/editing
+  and user-confirmed VoiceOver observations on 2026-11-04; these predate later
+  prototype review fixes and ownership refactoring.
 - [Spreadsheet clipboard](table-clipboard.md): macOS/Chrome Sheets and Excel Web
   observations on 2026-11-03, with exact-value artifacts and coercion limitations.
 - [Brand fidelity and native presentation](dosty-branding/README.md): reference
