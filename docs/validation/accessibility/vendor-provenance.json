@@ -1,0 +1,18 @@
+{
+  "patch_reversal": "passed",
+  "original_files_verified": 12,
+  "paths": [
+    ".cargo_vcs_info.json",
+    "Cargo.lock",
+    "Cargo.toml",
+    "Cargo.toml.orig",
+    "README.md",
+    "src/clipboard.rs",
+    "src/conversion.rs",
+    "src/error.rs",
+    "src/lib.rs",
+    "src/proxy.rs",
+    "src/window.rs",
+    "src/window/state.rs"
+  ]
+}

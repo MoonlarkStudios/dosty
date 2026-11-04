@@ -5,6 +5,8 @@ vendor/cryoglyph/** -whitespace
 vendor/cryoglyph.patch -whitespace
 vendor/iced_highlighter/** -whitespace
 vendor/iced_highlighter.patch -whitespace
+vendor/iced_winit/** -whitespace
+vendor/iced_winit.patch -whitespace
 docs/performance/utf16/*.txt -whitespace
 docs/performance/offline-imports/*.txt -whitespace
 docs/performance/outline/*.txt -whitespace

@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-04",
+  "base_commit": "5f8d163c34cba0596647037b68c635f9fe60dea6",
+  "os": [
+    "ProductName:\t\tmacOS",
+    "ProductVersion:\t\t26.7.1",
+    "BuildVersion:\t\t25G241"
+  ],
+  "toolchain": [
+    "rustc 1.95.0 (59807616e 2026-04-14)",
+    "binary: rustc",
+    "commit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860",
+    "commit-date: 2026-04-14",
+    "host: aarch64-apple-darwin",
+    "release: 1.95.0",
+    "LLVM version: 22.1.2"
+  ],
+  "source_sha256": {
+    "Cargo.toml": "000208434565a940b4a237257069908dd8c3849f069d7cacbdc72cc8db4661cb",
+    "Cargo.lock": "15df4e860b8e8a665bf465f155476ff59b1b6b2a028add2a34966f31121ab656",
+    "src/app/application.rs": "cf07b1d7a160ce157d79291c90e3cf41478965f5da8d3a944094ee66c3f3715c",
+    "src/app/startup.rs": "c50824baa362333ff55e9d4dd5ce1bc7c23ebc8001d613c70dc0ff95962c6948",
+    "src/app/accessibility.rs": "970f6b467b4c4b481194786c6647eb329d43bad77827409859cccc7a5d42fdd6",
+    "src/app/accessibility_tree.rs": "7b978067ebfc3767ccbc91d971539d52d951371752664019ba62f533d12e5d3d",
+    "vendor/iced_winit/src/lib.rs": "7722e6f54c08e989666c3081d59b7c582ac68716125de1f6534bf3b918e24159",
+    "vendor/iced_winit/src/accessibility.rs": "274047425bea472b9d0253a2e8f0baf504c593ece95266b536b27c0fb3a6775a",
+    "vendor/iced_winit.patch": "27dde5430bdb22dae8926b6785f2b9e5b4b477009ba8021363bec607d72c9aba"
+  },
+  "validation_scope": "macOS Apple silicon; native AX text/editing smoke checks, not performance measurements",
+  "release_executable_sha256": "c534a1ee3d0c554171fa8fcf7fe6c08d40cc9bb80e2f9f1806cf9050ddc92e86",
+  "signed_bundle_executable_sha256": "ff5d62a1857880474e8a07598120df3e43f676638d641df70aa4a1a9dbf676b9"
+}

@@ -16,6 +16,8 @@ See the [writing guide](assets/guide.md) for everyday editing and
 [table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.
 
 Dosty is in early development. See the [current limitations](docs/evaluation.md).
+An opt-in [macOS Source accessibility prototype](docs/accessibility.md) is available
+for native testing; application-wide screen-reader support remains incomplete.
 Previously named Koan and Daytrip; [existing settings and drafts remain compatible](docs/identity-migration.md).
 
 Native DMG, Windows setup EXE, DEB and RPM packaging is available through the

@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running unittests src/lib.rs (target/debug/deps/iced_winit-d742c9766d8906e8)
+
+running 2 tests
+test accessibility::tests::native_scaling_preserves_logical_snapshot ... ok
+test accessibility::tests::delayed_activation_reads_latest_tree_and_scale ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -43,6 +43,13 @@ pub(super) mod table_grid;
 #[path = "writing.rs"]
 pub(super) mod writing;
 
+#[cfg(target_os = "macos")]
+#[path = "accessibility.rs"]
+pub(super) mod accessibility;
+#[cfg(target_os = "macos")]
+#[path = "accessibility_tree.rs"]
+mod accessibility_tree;
+
 const EDITOR: &str = "document-editor";
 const SCROLL: &str = "document-scroll";
 const SEARCH: &str = "document-search";
@@ -60,6 +67,8 @@ mod theme_tests;
 mod task_tests;
 
 pub struct App {
+    #[cfg(target_os = "macos")]
+    accessibility: Option<accessibility::State>,
     document: Document,
     editor: native_buffer::Buffer,
     native_edited: bool,
@@ -112,6 +121,18 @@ pub struct App {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    #[cfg(target_os = "macos")]
+    Accessibility(accesskit::ActionRequest),
+    #[cfg(target_os = "macos")]
+    AccessibilityLayout(accessibility::EditorLayout),
+    #[cfg(target_os = "macos")]
+    AccessibilityRefresh,
+    #[cfg(target_os = "macos")]
+    AccessibilityComposition {
+        document: uuid::Uuid,
+        replica: u64,
+        pending: bool,
+    },
     TableGrid(table_grid::Message),
     Table(table::Message),
     Footnote(footnotes::Message),
@@ -274,6 +295,8 @@ impl App {
         let source = include_str!("../../assets/welcome.md").to_owned();
         let projection = Projection::new(&source);
         let mut app = Self {
+            #[cfg(target_os = "macos")]
+            accessibility: None,
             document: Document::new(source.clone()),
             editor: native_buffer::Buffer::new(&projection.text),
             native_edited: false,
@@ -390,16 +413,28 @@ impl App {
             } else {
                 event_message
             }),
+            #[cfg(target_os = "macos")]
+            if self.accessibility.is_some() {
+                iced::event::listen_with(accessibility::event_message)
+            } else {
+                Subscription::none()
+            },
         ])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        #[cfg(target_os = "macos")]
+        let measure_accessibility = !matches!(message, Message::AccessibilityLayout(_));
         #[cfg(test)]
         {
             self.document.costs = Default::default();
         }
         let task = self.update_message(message);
-        Task::batch([task, self.image_tasks(), self.recovery_cleanup()])
+        let tasks = Task::batch([task, self.image_tasks(), self.recovery_cleanup()]);
+        #[cfg(target_os = "macos")]
+        return Task::batch([tasks, self.refresh_accessibility(measure_accessibility)]);
+        #[cfg(not(target_os = "macos"))]
+        tasks
     }
 
     fn image_tasks(&mut self) -> Task<Message> {
@@ -606,6 +641,18 @@ impl App {
             return Task::none();
         }
         match message {
+            #[cfg(target_os = "macos")]
+            Message::Accessibility(request) => return self.accessibility_action(request),
+            #[cfg(target_os = "macos")]
+            Message::AccessibilityLayout(layout) => self.accessibility_layout(layout),
+            #[cfg(target_os = "macos")]
+            Message::AccessibilityRefresh => {}
+            #[cfg(target_os = "macos")]
+            Message::AccessibilityComposition {
+                document,
+                replica,
+                pending,
+            } => self.accessibility_composition(document, replica, pending),
             Message::TableGrid(message) => return self.update_grid(message),
             Message::Table(message) => return self.update_table(message),
             Message::Footnote(message) => return self.update_footnote(message),
@@ -2583,7 +2630,10 @@ impl App {
                 iced::highlighter::Theme::InspiredGitHub
             },
         );
-        SourceEditor::new(base.into(), self.document.collaboration(), self.selection).into()
+        let editor = SourceEditor::new(base.into(), self.document.collaboration(), self.selection);
+        #[cfg(target_os = "macos")]
+        let editor = editor.observe_accessibility_composition(self.accessibility.is_some());
+        editor.into()
     }
 
     fn format_bar(&self) -> Element<'_, Message> {

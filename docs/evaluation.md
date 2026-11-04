@@ -8,7 +8,7 @@ accessibility or complete desktop compatibility.
 
 | Area | Current limits |
 | --- | --- |
-| Accessibility | Native screen-reader navigation is incomplete and remains a release blocker. |
+| Accessibility | An opt-in [macOS Source prototype](accessibility.md) exposes native text and selection. Live/Read semantics, application controls, spatial text geometry, and broader VoiceOver workflows remain incomplete; complete screen-reader support is a release blocker. |
 | Input and platforms | Real CJK candidate windows, bidirectional editing, alternate keyboard layouts, dragging/autoscroll, and Windows/Linux native workflows need broader validation. |
 | Performance | Global Markdown dependencies, uncertain parse boundaries, contiguous buffers, suffix rebasing, outline construction, and very long paragraphs/table rows retain document-size costs. Native input/GPU presentation latency is not established by software profiles. |
 | Durability | Recovery can lose edits since the last checkpoint. Undo stacks are session-local. Multiwindow session management and filesystem/power-loss behavior need broader testing. |

@@ -61,6 +61,20 @@ committed text creates one source transaction. Human and accepted-agent history
 are separate and session-local. See [collaboration](collaboration.md) for the
 coordinate, stable-target, transaction, and persistence contracts.
 
+## Native accessibility prototype
+
+The opt-in [macOS Source bridge](accessibility.md) belongs to the application
+layer. It publishes committed Markdown and checked source selections through
+AccessKit; native requests return through the ordinary message and document
+transaction path. A narrow pinned `iced_winit` patch owns adapter creation before
+window visibility, focus/scale events, snapshot delivery, and adapter teardown.
+The existing Source widget still owns native editing and transient IME intent.
+
+The semantic subtree is available only in Source mode without a modal, pending
+load, or pending composition. Availability and document revisions invalidate
+old accessibility targets. Rich Live/Read semantics and application-wide controls
+remain outside this prototype.
+
 ## Parsing and performance
 
 The source cache certifies conservative local reparse windows. Projection updates

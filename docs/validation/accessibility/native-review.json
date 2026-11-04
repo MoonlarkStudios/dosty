@@ -1,0 +1,36 @@
+{
+  "date": "2026-11-04",
+  "base_commit": "276a735cf8e3d64cfcd41af9f2fc7e35e1144381",
+  "scope": "native AX unchanged-value selection preservation after review fixes and ownership-refactor integration",
+  "bundle_id": "app.dosty.editor.accessibility-review",
+  "source_sha256": {
+    "Cargo.toml": "000208434565a940b4a237257069908dd8c3849f069d7cacbdc72cc8db4661cb",
+    "Cargo.lock": "15df4e860b8e8a665bf465f155476ff59b1b6b2a028add2a34966f31121ab656",
+    "src/app/application.rs": "d7592a05998b4a1a49a2c8b2c162a8676231e429f570e12b803d8ee11f4338f0",
+    "src/app/startup.rs": "c50824baa362333ff55e9d4dd5ce1bc7c23ebc8001d613c70dc0ff95962c6948",
+    "src/app/accessibility.rs": "946c2495c5a182fd5d10e204b048f2ce2f62a4c2697f94ce2213af673286eaa9",
+    "src/app/accessibility_tree.rs": "7b978067ebfc3767ccbc91d971539d52d951371752664019ba62f533d12e5d3d",
+    "src/editor/source_editor.rs": "57fd834949e1f0620e07522bb58c71dd95e26f0aad0af87f8c0888e946af26fd",
+    "vendor/iced_winit/src/lib.rs": "7722e6f54c08e989666c3081d59b7c582ac68716125de1f6534bf3b918e24159",
+    "vendor/iced_winit/src/accessibility.rs": "274047425bea472b9d0253a2e8f0baf504c593ece95266b536b27c0fb3a6775a",
+    "vendor/iced_winit.patch": "27dde5430bdb22dae8926b6785f2b9e5b4b477009ba8021363bec607d72c9aba"
+  },
+  "release_executable_sha256": "5fbf28285931f0822c6af9411669803c5e2a04c5e1ca49c37c1afd77e643f6d1",
+  "signed_executable_sha256": "045e90c1360fd23eff8c7570638ef0e481a20f1f1a1a5f94d6f3d2f901936d0a",
+  "fixture_bytes": 46,
+  "fixture_sha256": "97d98d0640da2ddd1738e38e9de23f3bc67211147663ec399e55973d9b40ee22",
+  "byte_exact_native_save": true,
+  "observations": [
+    "A separate signed app with isolated configuration exposed the focused Markdown source AX text area",
+    "Native AXValue replaced source with the synthetic review fixture",
+    "Selected unchanged through native AX range, observed that exact selection, resent identical AXValue, and observed unchanged still selected",
+    "Selected joined emoji 🧑‍💻 through native AX range, observed that exact selection, resent identical AXValue, and observed emoji still selected",
+    "Native save wrote fixture bytes exactly",
+    "Close requested only for the saved review test window; existing prototype and clipboard-validation apps were preserved"
+  ],
+  "limitations": [
+    "VoiceOver setting was not changed or its spoken output retested",
+    "Pending IME guard is covered by real widget event regressions, not native CJK candidate testing",
+    "No spatial text/extended session/performance claim"
+  ]
+}

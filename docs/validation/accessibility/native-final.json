@@ -1,0 +1,46 @@
+{
+  "stage": "final native AX and user-confirmed VoiceOver smoke validation",
+  "date": "2026-11-04",
+  "os": [
+    "ProductName:\t\tmacOS",
+    "ProductVersion:\t\t26.7.1",
+    "BuildVersion:\t\t25G241"
+  ],
+  "bundle_id": "app.dosty.editor.accessibility-prototype",
+  "signed_executable_sha256": "ff5d62a1857880474e8a07598120df3e43f676638d641df70aa4a1a9dbf676b9",
+  "fixture_sha256": "2eab727bf5e5f595bed06c720ca19fb1151da67693257c3ec26e95635e12666a",
+  "fixture_bytes": 124,
+  "saved_file": "target/accessibility-validation/Native final.md",
+  "saved_bytes_match_fixture": true,
+  "native_ax_operations": [
+    "Observed focused multiline Markdown source text area",
+    "Set AXValue to exact synthetic fixture; refreshed tree after a transient stale-element report and confirmed applied value",
+    "Placed native AX caret before joined emoji 🧑‍💻",
+    "Pressed Right and typed !; observed 🧑‍💻!. with the emoji intact",
+    "Cmd+Z restored the exact fixture value",
+    "Native save panel wrote final fixture, byte-exact"
+  ],
+  "voiceover": {
+    "permission": "User explicitly approved a brief VoiceOver test and restoration",
+    "initial_enabled_state": false,
+    "enabled_state_observed": true,
+    "commands_sent": [
+      "interact with text: Control+Option+Shift+Down",
+      "read contents: Control+Option+A",
+      "read line: Control+Option+L"
+    ],
+    "caption_feedback_shortcut": "Control+Option+Command+F10 sent twice; caption output not independently inspected",
+    "automation_speech_feedback": "Attaching to com.apple.VoiceOver timed out; no automated speech transcript captured",
+    "user_confirmation": "Yes, it announced or read the source",
+    "final_enabled_state_observed": false,
+    "settings_pane_restored": "Microphone"
+  },
+  "left_open_for_review": "Saved synthetic Native final.md in isolated prototype bundle",
+  "limitations": [
+    "Not a complete application VoiceOver audit",
+    "No real CJK composition",
+    "No display-scale transition",
+    "No Live/Read semantics or application controls",
+    "No spatial glyph geometry or extended VoiceOver editing session"
+  ]
+}

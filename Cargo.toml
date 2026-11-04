@@ -33,6 +33,10 @@ ropey = "=1.6.1"
 base64 = "=0.23.1"
 arboard = { version = "=3.7.0", features = ["wayland-data-control"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+accesskit = "=0.21.1"
+iced_winit = { version = "=0.14.1", default-features = false }
+
 [dev-dependencies]
 # Drive real asynchronous import tasks in application workflow tests.
 iced_runtime = "0.14"
@@ -57,3 +61,4 @@ strip = "debuginfo"
 yrs = { path = "vendor/yrs" }
 cryoglyph = { path = "vendor/cryoglyph" }
 iced_highlighter = { path = "vendor/iced_highlighter" }
+iced_winit = { path = "vendor/iced_winit" }
