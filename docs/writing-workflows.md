@@ -50,7 +50,10 @@ reference snapshot is relocated. Relative image assets needed by saved, current,
 and session-history source are retained before publishing a file move. References
 that cannot retain their meaning block the move instead of rewriting Markdown.
 Folder moves keep their contained files and checkpoint siblings together and
-reject symlinks. Renames that change only capitalization work on case-insensitive
+reject symlinks. Windows cannot rename a folder while files inside it are open, so
+there the moved folder's own locks are released just before the rename while both
+parent folders stay locked; another Dosty window holding a file inside makes the
+move fail with nothing changed. Renames that change only capitalization work on case-insensitive
 volumes such as default APFS and NTFS; they pass through a temporary visible name. Incoming links from other documents are not rewritten.
 
 Folder moves are bounded to 32,768 entries, 128 directories, 128 Markdown

@@ -202,12 +202,15 @@ fn manifest(root: &Path, active: Option<&Path>) -> Result<Manifest, FileError> {
     Ok(manifest)
 }
 
-fn locks(directories: BTreeSet<PathBuf>) -> Result<Vec<File>, FileError> {
+fn locks(directories: BTreeSet<PathBuf>) -> Result<Vec<(PathBuf, File)>, FileError> {
     // Canonical absolute lexical order is shared by all organization operations.
     // Saves take their one directory lock before the document checkpoint lock.
     directories
         .into_iter()
-        .map(|directory| collaboration_store::directory_write_lock(&directory))
+        .map(|directory| {
+            let lock = collaboration_store::directory_write_lock(&directory)?;
+            Ok((directory, lock))
+        })
         .collect()
 }
 
@@ -290,7 +293,7 @@ fn move_item_blocking(
         let mut directories = before.directories.clone();
         directories.insert(from_parent.to_owned());
         directories.insert(to_parent.clone());
-        let _locks = locks(directories)?;
+        let held = locks(directories)?;
         destination_clear(&to, false)?;
         if manifest(&from, active_path.as_deref())? != before {
             return Err(error(
@@ -347,6 +350,18 @@ fn move_item_blocking(
         // All cooperating writes are excluded until the new namespace is ready.
         // As with ordinary saves, advisory locks cannot constrain external tools.
         absent(&to)?;
+        // Windows cannot rename a directory while handles inside it are open.
+        // Release the moved tree's locks and checkpoint guards, keeping both
+        // parents locked. A cooperating writer that opens a handle inside the
+        // tree in this interval makes the rename fail with nothing moved; one
+        // that starts after it fails at the vanished path.
+        #[cfg(windows)]
+        let held: Vec<_> = {
+            snapshots.clear();
+            held.into_iter()
+                .filter(|(directory, _)| !directory.starts_with(&from))
+                .collect()
+        };
         fs::rename(&from, &to).map_err(|e| {
             error(format!(
                 "Cannot move this folder (moves must stay on one filesystem): {e}"
@@ -358,6 +373,7 @@ fn move_item_blocking(
             ));
         }
         drop(snapshots);
+        drop(held);
     } else {
         let _locks = locks(BTreeSet::from([from_parent.to_owned(), to_parent.clone()]))?;
         destination_clear(&to, true)?;
