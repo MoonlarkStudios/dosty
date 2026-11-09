@@ -1112,16 +1112,13 @@ mod tests {
         );
     }
 
+    // POSIX resolves every component, so a reference through the old folder
+    // name breaks once it is gone. Win32 resolves `..` lexically, so the same
+    // reference keeps working there.
+    #[cfg(unix)]
     #[test]
     fn folder_rename_rejects_paths_that_traverse_the_vanished_old_name() {
-        // Windows drive paths contain `:` and are addressable only as file URLs,
-        // whose dot segments URL parsing removes before any path is resolved.
-        let cases: &[bool] = if cfg!(windows) {
-            &[false]
-        } else {
-            &[false, true]
-        };
-        for &absolute in cases {
+        for absolute in [false, true] {
             let directory = tempfile::tempdir().unwrap();
             let from = directory.path().join("Drafts");
             let to = directory.path().join("Finished");

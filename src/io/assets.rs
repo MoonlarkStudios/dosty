@@ -169,14 +169,38 @@ pub fn local_path(destination: &str, base: Option<&Path>) -> Result<Option<PathB
     #[cfg(windows)]
     let decoded = decoded.replace('/', "\\");
     let path = PathBuf::from(&*decoded);
-    if path.is_absolute() {
-        Ok(Some(path))
+    let path = if path.is_absolute() {
+        path
     } else {
-        Ok(Some(
-            base.ok_or_else(|| error("Save the document to resolve relative images."))?
-                .join(path),
-        ))
+        base.ok_or_else(|| error("Save the document to resolve relative images."))?
+            .join(path)
+    };
+    #[cfg(windows)]
+    let path = lexically_normalized(&path);
+    Ok(Some(path))
+}
+
+/// Win32 resolves `.` and `..` lexically, but a verbatim `\\?\` path passes
+/// them to the filesystem unchanged. Apply the Win32 rule so references resolve
+/// the same way below canonical bases as anywhere else on Windows.
+#[cfg(any(windows, test))]
+fn lexically_normalized(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                }
+            }
+            component => normalized.push(component.as_os_str()),
+        }
     }
+    normalized
 }
 
 /// Create without replacing existing bytes, and refuse symlink components in the
@@ -342,6 +366,20 @@ fn error(message: &str) -> FileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dot_segments_normalize_lexically_without_leaving_the_root() {
+        for (path, expected) in [
+            (
+                "/notes/drafts/../media/./figure.png",
+                "/notes/media/figure.png",
+            ),
+            ("/notes/a/b/../../c.png", "/notes/c.png"),
+            ("/../figure.png", "/figure.png"),
+        ] {
+            assert_eq!(lexically_normalized(Path::new(path)), Path::new(expected));
+        }
+    }
     fn png() -> Vec<u8> {
         let mut bytes = Cursor::new(Vec::new());
         image::RgbaImage::new(4, 3)
