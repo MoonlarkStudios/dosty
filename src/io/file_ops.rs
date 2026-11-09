@@ -643,6 +643,12 @@ fn future_reference(path: &Path, moved: &Path, destination_root: &Path) -> Optio
     while let Some(component) = components.next() {
         match component {
             Component::CurDir => continue,
+            // A Windows prefix such as `\\?\C:` names a volume device rather
+            // than a directory, so neither it nor the root is probed.
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
             Component::ParentDir => {
                 current.pop();
             }
