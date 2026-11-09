@@ -13,6 +13,7 @@ use super::{
 };
 use crate::app::brand;
 use crate::app::icon::{self, Icon};
+use crate::editor::menu_input;
 use crate::theme::styles::{self, Button};
 
 // Match the compact native traffic-light row without replacing or repositioning
@@ -458,6 +459,25 @@ impl App {
         self.preserve_viewport_generation = Some(self.document.collaboration().generation());
     }
 
+    /// Whether an Edit command can act on the widget that will receive it.
+    ///
+    /// Commands are delivered to the focused widget. Dialog fields, Find, and
+    /// table drafts own their text history and clipboard, so only the document
+    /// consults its undo stacks. The command menu itself closes before delivery
+    /// and therefore does not count as a receiving field.
+    pub(super) fn edit_command_enabled(&self, command: menu_input::Command) -> bool {
+        let field_focused = !matches!(self.overlay, None | Some(Overlay::Chrome))
+            || self.search_open
+            || self.grid.draft.is_some();
+        !self.loading
+            && (field_focused
+                || match command {
+                    menu_input::Command::Undo => self.document.can_undo(),
+                    menu_input::Command::Redo => self.document.can_redo(),
+                    _ => self.mode != EditorMode::Read,
+                })
+    }
+
     fn save_state(&self) -> SaveState {
         if self.chrome.saving {
             SaveState::Saving
@@ -803,32 +823,21 @@ impl App {
                 ]
             }
             Menu::Edit => [
-                ("Undo", crate::editor::menu_input::Command::Undo, Icon::Undo),
-                ("Redo", crate::editor::menu_input::Command::Redo, Icon::Redo),
-                (
-                    "Cut",
-                    crate::editor::menu_input::Command::Cut,
-                    Icon::Document,
-                ),
-                (
-                    "Copy",
-                    crate::editor::menu_input::Command::Copy,
-                    Icon::Document,
-                ),
-                (
-                    "Paste",
-                    crate::editor::menu_input::Command::Paste,
-                    Icon::Document,
-                ),
-                (
-                    "Select all",
-                    crate::editor::menu_input::Command::SelectAll,
-                    Icon::Document,
-                ),
+                ("Undo", menu_input::Command::Undo, Icon::Undo),
+                ("Redo", menu_input::Command::Redo, Icon::Redo),
+                ("Cut", menu_input::Command::Cut, Icon::Document),
+                ("Copy", menu_input::Command::Copy, Icon::Document),
+                ("Paste", menu_input::Command::Paste, Icon::Document),
+                ("Select all", menu_input::Command::SelectAll, Icon::Document),
             ]
             .into_iter()
             .map(|(label, command, icon)| {
-                Command::action(label, icon, AppMessage::MenuEdit(command), !self.loading)
+                Command::action(
+                    label,
+                    icon,
+                    AppMessage::MenuEdit(command),
+                    self.edit_command_enabled(command),
+                )
             })
             .collect(),
             Menu::Document => {

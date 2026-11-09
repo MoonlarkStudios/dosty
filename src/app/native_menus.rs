@@ -340,19 +340,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
     match command {
         Command::QuickOpen => (ready && app.folder.root().is_some(), false),
-        Command::Edit(action) => {
-            let dialog = app.overlay.is_some() || app.search_open || app.grid.draft.is_some();
-            let enabled = !app.loading
-                && match action {
-                    menu_input::Command::Undo => dialog || app.document.can_undo(),
-                    menu_input::Command::Redo => dialog || app.document.can_redo(),
-                    menu_input::Command::Cut | menu_input::Command::Paste => {
-                        dialog || app.mode != EditorMode::Read
-                    }
-                    _ => dialog || app.mode != EditorMode::Read,
-                };
-            (enabled, false)
-        }
+        Command::Edit(action) => (app.edit_command_enabled(action), false),
         Command::Mode(mode) => (ready, app.mode == mode),
         Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
         Command::Rename | Command::Move | Command::Location => (ready && app.path.is_some(), false),
