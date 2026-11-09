@@ -164,7 +164,11 @@ pub fn local_path(destination: &str, base: Option<&Path>) -> Result<Option<PathB
     let decoded = percent_encoding::percent_decode_str(destination)
         .decode_utf8()
         .map_err(|e| error(&e.to_string()))?;
-    let path = PathBuf::from(decoded.as_ref());
+    // Markdown separates path segments with `/`. Canonical Windows bases use the
+    // verbatim `\\?\` form, where only `\` separates components.
+    #[cfg(windows)]
+    let decoded = decoded.replace('/', "\\");
+    let path = PathBuf::from(&*decoded);
     if path.is_absolute() {
         Ok(Some(path))
     } else {
