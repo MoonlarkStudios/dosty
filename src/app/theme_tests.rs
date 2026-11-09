@@ -47,8 +47,10 @@ fn render(app: &App, size: Size, name: &str) {
 }
 
 fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) {
-    let mut renderer =
-        Renderer::Secondary(iced_tiny_skia::Renderer::new(Font::DEFAULT, 18.0.into()));
+    let mut renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+        styles::BODY_FONT,
+        18.0.into(),
+    ));
     let mut root = app.view();
     let mut tree = widget::Tree::new(root.as_widget());
     // Responsive widgets resolve their content during layout.
@@ -139,8 +141,7 @@ fn table_clipboard_previews() {
             "Launch plan.md".into(),
         );
         app.resolved_theme = preset.resolve();
-        app.preferences.recent.clear();
-        app.sidebar = false;
+        app.chrome.files.open = false;
         app.notification = None;
         app.editor_focused = true;
         drop(app.update_grid(table_grid::Message::Select {
@@ -195,7 +196,7 @@ fn document_table_previews() {
     let (mut app, _) = App::new();
     let source = include_str!("../../tests/fixtures/document-tables.md");
     app.set_document(source.into(), None, "Document tables.md".into());
-    app.sidebar = false;
+    app.chrome.files.open = false;
     app.notification = None;
     app.mode = EditorMode::Live;
     app.editor_focused = true;
@@ -246,7 +247,7 @@ fn table_grid_previews() {
         None,
         "Launch plan.md".into(),
     );
-    app.sidebar = false;
+    app.chrome.files.open = false;
     app.notification = None;
     app.mode = EditorMode::Live;
     app.editor_focused = true;
@@ -326,11 +327,9 @@ fn theme_ui_previews() {
     std::fs::create_dir_all("target/theme-validation").unwrap();
     let (mut app, _) = App::new();
     app.preferences.custom_theme = None;
-    app.sidebar = true;
-    app.focus = false;
-    app.sidebar_tab = SidebarTab::Files;
+    app.chrome.files.open = true;
+    app.chrome.sidebars_hidden = false;
     app.notification = None;
-    app.preferences.recent.clear();
     for preset in Preset::ALL {
         app.resolved_theme = preset.resolve();
         render(&app, Size::new(1180.0, 820.0), preset.name());
@@ -356,9 +355,9 @@ fn theme_ui_previews() {
     app.display_name = "Notes for a very long and unbroken document title that should never push controls out of the window.md".into();
     render(&app, Size::new(760.0, 520.0), "long-title-narrow");
     app.display_name = "Welcome.md".into();
-    app.focus = true;
+    app.chrome.sidebars_hidden = true;
     render(&app, Size::new(1180.0, 820.0), "focus");
-    app.focus = false;
+    app.chrome.sidebars_hidden = false;
     app.search_open = true;
     render(&app, Size::new(760.0, 520.0), "search-narrow");
     app.search_open = false;
@@ -384,6 +383,119 @@ fn theme_ui_previews() {
             &format!("{}-code", preset.name()),
         );
     }
+}
+
+#[test]
+#[ignore = "render Native quiet titlebar, save states, settings, and navigation for visual inspection"]
+fn native_quiet_previews() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in [
+        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+    ] {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+    std::fs::create_dir_all("target/theme-validation").unwrap();
+    let (mut app, initial) = App::new();
+    drop(initial);
+    app.preferences = Preferences::default();
+    app.set_document("# The quiet hour\n\n*A small field note on making room to notice.*\n\nAt the edge of the morning, the coast is almost colourless. Water folds around the rocks. A path disappears into the grass. For a few minutes, there is nothing to answer and nowhere else to be.\n\n## Making room\n\nWe came here to write about attention. We stayed because the light kept changing.\n".into(), Some("/tmp/The quiet hour.md".into()), "The quiet hour.md".into());
+    for preset in Preset::ALL {
+        app.resolved_theme = preset.resolve();
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("native-quiet-{}", preset.name()),
+        );
+        render(
+            &app,
+            Size::new(760.0, 520.0),
+            &format!("native-quiet-{}-narrow", preset.name()),
+        );
+    }
+    app.resolved_theme = Preset::Paper.resolve();
+    app.dirty = true;
+    render(&app, Size::new(1180.0, 820.0), "native-quiet-typing");
+    app.chrome.outline.open = true;
+    render(&app, Size::new(1180.0, 820.0), "native-quiet-navigation");
+    render(&app, Size::new(760.0, 520.0), "native-quiet-outline-narrow");
+    app.path = Some("/writing/Field notes/The quiet hour.md".into());
+    drop(
+        app.update_folder(folder::Message::Scanned {
+            generation: 0,
+            result: Ok(crate::io::folder::Snapshot {
+                root: "/writing/Field notes".into(),
+                entries: [
+                    ("The quiet hour.md", false),
+                    ("Launch notes.md", false),
+                    ("Research", true),
+                    ("Research/Source notes.md", false),
+                    ("Research/A clearer thought.md", false),
+                ]
+                .into_iter()
+                .map(|(name, is_directory)| crate::io::folder::Entry {
+                    path: std::path::Path::new("/writing/Field notes").join(name),
+                    is_directory,
+                })
+                .collect(),
+                limited: false,
+                warnings: Vec::new(),
+            }),
+        }),
+    );
+    app.chrome.files.open = true;
+    render(&app, Size::new(1180.0, 820.0), "native-quiet-both-sidebars");
+    render(&app, Size::new(760.0, 520.0), "native-quiet-both-narrow");
+    drop(app.update_quick_open(quick_open::Message::Open));
+    render(&app, Size::new(1180.0, 820.0), "workspace-quick-open");
+    render(&app, Size::new(760.0, 520.0), "workspace-quick-open-narrow");
+    drop(app.update_quick_open(quick_open::Message::Query("research".into())));
+    render(
+        &app,
+        Size::new(1180.0, 820.0),
+        "workspace-quick-open-filtered",
+    );
+    drop(app.cancel_quick_open());
+    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Workspace)));
+    render(&app, Size::new(1180.0, 820.0), "workspace-menu");
+    drop(app.update_message(Message::CloseOverlay));
+    for font in WritingFont::ALL {
+        app.resolved_theme.typography.font = font;
+        app.preferences.writing_font = font;
+        render(&app, Size::new(1180.0, 820.0), &format!("typeface-{font}"));
+        app.mode = EditorMode::Read;
+        render(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("typeface-{font}-read"),
+        );
+        app.mode = EditorMode::Live;
+    }
+    app.resolved_theme.typography.font = WritingFont::SansSerif;
+    app.preferences.writing_font = WritingFont::SansSerif;
+    app.chrome.files.open = false;
+    app.chrome.outline.open = false;
+    app.overlay = Some(Overlay::Settings);
+    render(
+        &app,
+        Size::new(760.0, 520.0),
+        "native-quiet-settings-narrow",
+    );
+    render(&app, Size::new(1180.0, 1000.0), "typeface-settings");
+    app.overlay = None;
+    app.display_name =
+        "A very long document name that must never push the save indicator outside the titlebar.md"
+            .into();
+    app.chrome.save_error = Some("This file changed outside Dosty.".into());
+    render(
+        &app,
+        Size::new(760.0, 520.0),
+        "native-quiet-save-failed-narrow",
+    );
 }
 
 #[test]
@@ -456,8 +568,7 @@ fn table_context_previews() {
                 drop(task);
                 app.set_document(source.into(), None, "Launch plan.md".into());
                 app.resolved_theme = preset.resolve();
-                app.preferences.recent.clear();
-                app.sidebar = false;
+                app.chrome.files.open = false;
                 app.editor_focused = true;
                 app.selection = Selection::caret(source.find("Keep the team").unwrap());
                 app.sync_editor();
@@ -522,8 +633,7 @@ fn table_hover_previews() {
             drop(task);
             app.set_document(source.into(), None, "Launch plan.md".into());
             app.resolved_theme = preset.resolve();
-            app.preferences.recent.clear();
-            app.sidebar = false;
+            app.chrome.files.open = false;
             app.editor_focused = true;
             drop(app.update_grid(table_grid::Message::Select {
                 revision: std::sync::Arc::clone(&app.projection.source_id),

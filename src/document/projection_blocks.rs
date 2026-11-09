@@ -145,10 +145,12 @@ impl Projection {
             && local.rich.code_blocks.is_empty()
             && local.rich.tables.is_empty()
             && local.rich.images.is_empty()
+            && local.rich.links.is_empty()
             && plan.rich.headings.is_empty()
             && plan.rich.code_blocks.is_empty()
             && plan.rich.tables.is_empty()
-            && plan.rich.images.is_empty();
+            && plan.rich.images.is_empty()
+            && plan.rich.links.is_empty();
         let mut region = shown.clone();
         if plain && self.text[region.old.clone()].ends_with('\n') && local.text.ends_with('\n') {
             region.old.end -= 1;
@@ -234,6 +236,7 @@ fn patch<T>(
 struct RichPlan {
     headings: Range<usize>,
     images: Range<usize>,
+    links: Range<usize>,
     tables: Range<usize>,
     code_blocks: Range<usize>,
 }
@@ -242,6 +245,7 @@ impl RichPlan {
         Some(Self {
             headings: window(&old.headings, c, |h| h.range.clone())?,
             images: window(&old.images, c, |i| i.range.clone())?,
+            links: window(&old.links, c, |link| link.range.clone())?,
             tables: window(&old.tables, c, |t| t.range.clone())?,
             code_blocks: window(&old.code_blocks, c, |b| b.range.clone())?,
         })
@@ -266,6 +270,13 @@ impl RichPlan {
             self.images,
             display,
             |i, a, b| translate(&mut i.range, a, b),
+        );
+        patch(
+            &mut old.links,
+            local.links,
+            self.links,
+            display,
+            |link, a, b| translate(&mut link.range, a, b),
         );
         let tail = self.code_blocks.start + local.code_blocks.len();
         old.code_blocks.splice(
@@ -458,6 +469,7 @@ mod tests {
         rich.images
             .iter()
             .flat_map(|image| [image.url.as_ptr() as usize, image.alt.as_ptr() as usize])
+            .chain(rich.links.iter().map(|link| link.url.as_ptr() as usize))
             .chain(rich.tables.iter().flat_map(|table| {
                 [
                     table.alignment.as_ptr() as usize,
@@ -478,7 +490,7 @@ mod tests {
 
     #[test]
     fn local_updates_retain_owned_payloads_and_immutable_layout_snapshots() {
-        let source = "# Before\n\nPlain **bold** and words.\n\n| A | B |\n|---|---|\n| c | d |\n\n![alt](somewhere.png)\n\nTail";
+        let source = "# Before\n\nPlain **bold** and words.\n\n| A | B |\n|---|---|\n| c | d |\n\n![alt](somewhere.png)\n\n[Related](other.md)\n\nTail";
         let point = source.find("Plain").unwrap() + 3;
         let mut document = Document::new(source.into());
         let mut projection = Projection::with_context(source, Some(point));

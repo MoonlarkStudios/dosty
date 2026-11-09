@@ -8,11 +8,18 @@ use iced::{Color, Element, Point, Rectangle, Renderer, Theme};
 #[derive(Debug, Clone, Copy)]
 pub enum Icon {
     Sidebar,
+    Outline,
     Document,
     Plus,
     Folder,
     Search,
-    Focus,
+    ChevronDown,
+    CollapseAll,
+    ExpandAll,
+    Check,
+    Modified,
+    Unsaved,
+    Warning,
     Settings,
     Save,
     Code,
@@ -35,9 +42,13 @@ pub enum Icon {
 }
 
 pub fn view<'a, Message: 'a>(kind: Icon, color: Color) -> Element<'a, Message> {
+    sized(kind, color, 18.0)
+}
+
+pub fn sized<'a, Message: 'a>(kind: Icon, color: Color, size: f32) -> Element<'a, Message> {
     Canvas::new(Drawing { kind, color })
-        .width(18)
-        .height(18)
+        .width(size)
+        .height(size)
         .into()
 }
 
@@ -57,15 +68,21 @@ impl<Message> canvas::Program<Message> for Drawing {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        frame.scale(bounds.width / 18.0);
         let stroke = Stroke::default()
             .with_color(self.color)
             .with_width(1.35)
             .with_line_cap(canvas::LineCap::Round)
             .with_line_join(canvas::LineJoin::Round);
         let paths: &[&[(f32, f32)]] = match self.kind {
+            Icon::ChevronDown => &[&[(5., 7.), (9., 11.), (13., 7.)]],
             Icon::Sidebar => &[
                 &[(3., 3.), (15., 3.), (15., 15.), (3., 15.), (3., 3.)],
                 &[(7., 3.), (7., 15.)],
+            ],
+            Icon::Outline => &[
+                &[(3., 3.), (15., 3.), (15., 15.), (3., 15.), (3., 3.)],
+                &[(11., 3.), (11., 15.)],
             ],
             Icon::Document => &[
                 &[
@@ -95,11 +112,23 @@ impl<Message> canvas::Program<Message> for Drawing {
                 &[(2., 5.), (2., 3.), (7., 3.), (9., 5.), (15., 5.)],
             ],
             Icon::Search => &[&[(11., 11.), (16., 16.)]],
-            Icon::Focus => &[
-                &[(6., 2.), (2., 2.), (2., 6.)],
-                &[(12., 2.), (16., 2.), (16., 6.)],
-                &[(2., 12.), (2., 16.), (6., 16.)],
-                &[(12., 16.), (16., 16.), (16., 12.)],
+            Icon::CollapseAll => &[
+                &[(2., 11.), (2., 2.), (11., 2.)],
+                &[(5., 5.), (15., 5.), (15., 15.), (5., 15.), (5., 5.)],
+                &[(8., 10.), (12., 10.)],
+            ],
+            Icon::ExpandAll => &[
+                &[(2., 11.), (2., 2.), (11., 2.)],
+                &[(5., 5.), (15., 5.), (15., 15.), (5., 15.), (5., 5.)],
+                &[(8., 10.), (12., 10.)],
+                &[(10., 8.), (10., 12.)],
+            ],
+            Icon::Check => &[&[(4., 9.), (7., 12.), (14., 5.)]],
+            Icon::Modified | Icon::Unsaved => &[],
+            Icon::Warning => &[
+                &[(9., 2.), (17., 16.), (1., 16.), (9., 2.)],
+                &[(9., 6.), (9., 10.)],
+                &[(9., 13.), (9., 13.2)],
             ],
             Icon::Settings => &[
                 &[(3., 5.), (15., 5.)],
@@ -275,6 +304,12 @@ impl<Message> canvas::Program<Message> for Drawing {
         }
         if matches!(self.kind, Icon::Search) {
             frame.stroke(&Path::circle(Point::new(7.5, 7.5), 5.0), stroke);
+        }
+        if matches!(self.kind, Icon::Modified) {
+            frame.fill(&Path::circle(Point::new(9.0, 9.0), 3.5), self.color);
+        }
+        if matches!(self.kind, Icon::Unsaved) {
+            frame.stroke(&Path::circle(Point::new(9.0, 9.0), 3.5), stroke);
         }
         if matches!(self.kind, Icon::Image) {
             frame.fill(&Path::circle(Point::new(12.0, 6.5), 1.25), self.color);

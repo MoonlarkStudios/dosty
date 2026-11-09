@@ -9,12 +9,14 @@ use std::time::Duration;
 use iced::advanced::image::Handle;
 use iced::{Size, Task};
 
-use crate::document::rich_document::Image;
+use crate::document::rich_document::{Image, Link};
 
 const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DECODED_BYTES: u64 = 64 * 1024 * 1024;
 const CACHE_BYTES: usize = 128 * 1024 * 1024;
 const CONCURRENT_LOADS: usize = 4;
+const MAX_REFERENCE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_REFERENCES: usize = 65_536;
 static LOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(CONCURRENT_LOADS);
 static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
 
@@ -43,6 +45,7 @@ pub struct ImageStore {
     // Decoded assets may be evicted; source references remain available to Undo.
     // Save As carries this document session's previously referenced local files.
     history: HashSet<String>,
+    links: HashSet<String>,
     history_bytes: usize,
     history_incomplete: bool,
     revision: u64,
@@ -52,13 +55,55 @@ impl ImageStore {
     pub fn history(&self) -> crate::io::assets::History {
         crate::io::assets::History {
             references: self.history.iter().cloned().collect(),
+            links: self.links.iter().cloned().collect(),
             complete: !self.history_incomplete,
         }
     }
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.links.clear();
         self.history_bytes = 0;
         self.history_incomplete = false;
+    }
+
+    /// Retain local hyperlink destinations that Undo or Redo can restore.
+    /// Reuse the projection's incremental parse rather than parsing source on
+    /// the UI event path. The image and link ledgers share one memory bound.
+    pub(crate) fn record_links(&mut self, links: &[Link]) {
+        for link in links {
+            self.record_reference(&link.url, false);
+            if self.history_incomplete {
+                break;
+            }
+        }
+    }
+
+    fn record_reference(&mut self, destination: &str, image: bool) {
+        if self.history_incomplete
+            || destination.is_empty()
+            || destination.starts_with('#')
+            || destination.starts_with("http://")
+            || destination.starts_with("https://")
+            || (!image && destination.contains(':') && !destination.starts_with("file://"))
+        {
+            return;
+        }
+        let existing = if image { &self.history } else { &self.links };
+        if existing.contains(destination) {
+            return;
+        }
+        if self.history_bytes + destination.len() > MAX_REFERENCE_BYTES
+            || self.history.len() + self.links.len() >= MAX_REFERENCES
+        {
+            self.history_incomplete = true;
+            return;
+        }
+        self.history_bytes += destination.len();
+        if image {
+            self.history.insert(destination.to_owned());
+        } else {
+            self.links.insert(destination.to_owned());
+        }
     }
 
     pub fn revision(&self) -> u64 {
@@ -93,20 +138,7 @@ impl ImageStore {
         let active = images
             .iter()
             .map(|image| {
-                if !self.history_incomplete
-                    && !image.url.starts_with("http://")
-                    && !image.url.starts_with("https://")
-                    && !self.history.contains(&image.url)
-                {
-                    if self.history_bytes + image.url.len() > 16 * 1024 * 1024
-                        || self.history.len() >= 65_536
-                    {
-                        self.history_incomplete = true;
-                    } else {
-                        self.history_bytes += image.url.len();
-                        self.history.insert(image.url.clone());
-                    }
-                }
+                self.record_reference(&image.url, true);
                 key(&image.url, base)
             })
             .collect::<HashSet<_>>();
@@ -256,6 +288,27 @@ mod tests {
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
         bytes.into_inner()
+    }
+
+    #[test]
+    fn historical_hyperlinks_survive_deletion_and_share_the_reference_limit() {
+        let mut store = ImageStore::default();
+        let links = crate::document::projection::Projection::new(
+            "[Related](other.md) [Web](https://example.com)",
+        );
+        store.record_links(&links.rich.links);
+        store.record_links(&[]);
+        assert_eq!(store.history().links, ["other.md"]);
+        assert!(store.history().references.is_empty());
+        assert!(store.history().complete);
+        store.history_bytes = MAX_REFERENCE_BYTES;
+        let next = crate::document::projection::Projection::new("[Another](next.md)");
+        store.record_links(&next.rich.links);
+        assert!(!store.history().complete);
+        store.clear_history();
+        store.record_links(&next.rich.links);
+        assert_eq!(store.history().links, ["next.md"]);
+        assert!(store.history().complete);
     }
 
     #[tokio::test]

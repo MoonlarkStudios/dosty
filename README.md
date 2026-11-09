@@ -12,6 +12,15 @@ A quiet, native Markdown editor built with Rust and Iced. Write with headings,
 emphasis, strikethrough, editable tables, images, task checkboxes, footnotes, and
 themes, or switch to the Markdown source at any time.
 
+Start with a blank document, open one file, or open a folder as a workspace.
+Within a workspace, Files live in the left sidebar; an optional Outline lives on the right.
+The folder-name menu manages the workspace. Quick Open (Cmd/Ctrl+P) finds files
+by name or relative path, including files in collapsed folders.
+An always-visible titlebar offers formatting on demand and a document menu for editing
+modes. Writing uses sans-serif text by default, with serif available in Settings. macOS uses native application menus. Configurable word count and reading
+time sit below the writing area. Dosty keeps no recent-file history or saved
+folder sessions.
+
 See the [writing guide](assets/guide.md) for everyday editing and
 [table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.
 

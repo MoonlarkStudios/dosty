@@ -152,8 +152,12 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
     assert_eq!(app.document.source(), "# Heading\n\nUnfinished paragraph.");
 }
 
-#[test]
-fn document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_intact() {
+#[tokio::test]
+async fn document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_intact() {
+    use iced::futures::StreamExt;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("another.md");
+    std::fs::write(&path, "Another document.").unwrap();
     let mut app = app("# Heading\n\nParagraph.");
     send(
         &mut app,
@@ -165,7 +169,16 @@ fn document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_intact()
         head: 2,
     };
     select(&mut app, selection);
-    send(&mut app, AppMessage::Dropped(PathBuf::from("another.md")));
+    let task = app.update_message(AppMessage::Dropped(path));
+    assert_eq!(app.document.source(), source);
+    assert_eq!(app.selection, selection);
+    let mut effects = iced_runtime::task::into_stream(task).unwrap();
+    while let Some(effect) = effects.next().await {
+        match effect {
+            iced_runtime::Action::Output(message) => send(&mut app, message),
+            effect => panic!("Unexpected document drop effect: {effect:?}"),
+        }
+    }
     assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
     assert!(matches!(app.pending, Some(Pending::Open(Some(_)))));
     assert_eq!(app.document.source(), source);

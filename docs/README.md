@@ -9,7 +9,7 @@ Start with the [README](../README.md) to build and run Dosty, the
 | Document | Reader need |
 | --- | --- |
 | [Architecture](architecture.md) | Ownership, data flow, module boundaries, and editing invariants |
-| [Writing workflows](writing-workflows.md) | Links, images, quotations, assets, Save As, recovery, and HTML export |
+| [Writing workflows](writing-workflows.md) | Files/folders, workspace identity, Quick Open, organization and dragging, native menus, independent sidebars, formatting, links, images, saving, recovery, and export |
 | [Collaboration](collaboration.md) | Source coordinates, transactions, offline replicas, proposals, history, and persistence |
 | [Outline](outline.md) | Heading navigation, local collapse state, and section moves |
 | [Code editing](code-editing.md) | Code entry, copying, rendering, and highlighting limits |

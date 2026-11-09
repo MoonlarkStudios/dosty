@@ -17,12 +17,14 @@ const MAX_DECODED: u64 = 64 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct History {
     pub references: Vec<String>,
+    pub links: Vec<String>,
     pub complete: bool,
 }
 impl Default for History {
     fn default() -> Self {
         Self {
             references: Vec::new(),
+            links: Vec::new(),
             complete: true,
         }
     }
@@ -258,6 +260,17 @@ pub fn relocate(
     new: &Path,
     history: &History,
 ) -> Result<(), FileError> {
+    relocate_sources(&[source], old, new, history)
+}
+
+/// A move must retain both the saved file and the active unsaved source without
+/// publishing the latter. Their relative assets share one bounded copy budget.
+pub(super) fn relocate_sources(
+    sources: &[&str],
+    old: Option<&Path>,
+    new: &Path,
+    history: &History,
+) -> Result<(), FileError> {
     // First save establishes the base of manually written relative references.
     // There is no earlier location to copy from; queued imports run after save.
     let Some(old) = old else {
@@ -268,7 +281,9 @@ pub fn relocate(
     if old_base.as_ref() == Some(&new_base) {
         return Ok(());
     }
-    let required = Parser::new_ext(source, MARKDOWN_OPTIONS)
+    let required = sources
+        .iter()
+        .flat_map(|source| Parser::new_ext(source, MARKDOWN_OPTIONS))
         .filter_map(|event| match event {
             Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
             _ => None,
@@ -280,7 +295,7 @@ pub fn relocate(
     references.sort_unstable();
     if !history.complete {
         return Err(error(
-            "Image reference history exceeds 16 MiB or 65,536 entries. Save and reopen the document to begin a new undo session before moving it to another folder.",
+            "Local reference history exceeds 16 MiB or 65,536 entries. Save and reopen the document to begin a new undo session before moving it to another folder.",
         ));
     }
     let mut total = 0;

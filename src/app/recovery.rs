@@ -36,6 +36,7 @@ pub(super) struct State {
     saved: Option<u64>,
     inflight: Option<Uuid>,
     retired: HashSet<Uuid>,
+    prior_paths: Vec<Uuid>,
     cleanup: Vec<Uuid>,
     entries: Vec<recovery::Entry>,
 }
@@ -48,12 +49,22 @@ impl Default for State {
             saved: None,
             inflight: None,
             retired: HashSet::new(),
+            prior_paths: Vec::new(),
             cleanup: Vec::new(),
             entries: Vec::new(),
         }
     }
 }
 impl State {
+    pub(super) fn path_changed(&mut self) {
+        // Keep the previous recovery copy until its replacement is published,
+        // but refresh path metadata even if the source generation is unchanged.
+        let previous = std::mem::replace(&mut self.id, Uuid::new_v4());
+        self.prior_paths.push(previous);
+        self.saved = None;
+        self.edited = Instant::now();
+    }
+
     pub fn needs_checkpoint(&self, generation: u64) -> bool {
         self.saved != Some(generation) && self.inflight.is_none()
     }
@@ -70,10 +81,14 @@ impl State {
         self.saved = None;
         self.edited = Instant::now();
         self.last_checkpoint = self.edited;
-        if self.inflight == Some(id) {
-            self.retired.insert(id);
-        } else {
-            self.cleanup.push(id);
+        let mut retired = std::mem::take(&mut self.prior_paths);
+        retired.push(id);
+        for id in retired {
+            if self.inflight == Some(id) {
+                self.retired.insert(id);
+            } else {
+                self.cleanup.push(id);
+            }
         }
     }
     fn written(&mut self, id: Uuid, generation: u64, success: bool) {
@@ -84,6 +99,7 @@ impl State {
             self.cleanup.push(id);
         } else if id == self.id && success {
             self.saved = Some(generation);
+            self.cleanup.append(&mut self.prior_paths);
         }
     }
 }
@@ -135,7 +151,8 @@ impl App {
         match message {
             Message::Available(result) => match result {
                 Ok(true) if self.notification.is_none() => {
-                    self.notification = Some("Recovery copies are available in the sidebar.".into())
+                    self.notification =
+                        Some("Recovery copies are available in File → Help & settings.".into())
                 }
                 Err(error) => tracing::warn!(%error, "Could not list recovery copies"),
                 _ => {}
@@ -332,6 +349,45 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_path_write_cannot_suppress_or_remove_new_path_recovery() {
+        let mut state = State::default();
+        let previous = state.id;
+        state.saved = Some(4);
+        state.inflight = Some(previous);
+        state.path_changed();
+        let current = state.id;
+        assert_ne!(previous, current);
+        assert!(state.cleanup.is_empty());
+        state.written(previous, 4, true);
+        assert_eq!(state.saved, None);
+        assert!(state.needs_checkpoint(4));
+        assert!(
+            state.cleanup.is_empty(),
+            "old copy survives until replacement"
+        );
+        state.inflight = Some(current);
+        state.written(current, 4, false);
+        assert!(state.cleanup.is_empty());
+        state.inflight = Some(current);
+        state.written(current, 4, true);
+        assert_eq!(state.saved, Some(4));
+        assert_eq!(state.cleanup, vec![previous]);
+    }
+
+    #[test]
+    fn explicit_save_retires_old_path_copy_after_its_inflight_write() {
+        let mut state = State::default();
+        let old = state.id;
+        state.inflight = Some(old);
+        state.path_changed();
+        state.retire();
+        assert!(state.retired.contains(&old));
+        assert!(!state.cleanup.contains(&old));
+        state.written(old, 8, true);
+        assert!(state.cleanup.contains(&old));
+        assert_eq!(state.saved, None);
+    }
     #[test]
     fn late_write_cannot_resurrect_saved_or_discarded_document() {
         let mut state = State::default();

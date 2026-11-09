@@ -1382,7 +1382,7 @@ impl App {
                 .id(CELL_EDITOR)
                 .on_action(|action| AppMessage::TableGrid(Message::Draft(action)))
                 .key_binding(draft_binding)
-                .font(styles::BODY_FONT)
+                .font(self.resolved_theme.typography.font.font())
                 .size(self.resolved_theme.typography.body_size * self.zoom)
                 .line_height(iced::widget::text::LineHeight::Relative(
                     self.resolved_theme.typography.line_height,

@@ -1,14 +1,42 @@
 //! All component styling consumes the same resolved semantic tokens.
 
-use iced::widget::{button, container, markdown, scrollable, text_editor, text_input};
+use iced::widget::{
+    button, checkbox, container, markdown, pick_list, scrollable, text_editor, text_input,
+};
 use iced::{Background, Border, Color, Font, Theme};
 
 use crate::theme::{ResolvedTheme, Tokens};
 
-pub const BODY_FONT: Font = Font {
-    family: iced::font::Family::Name("Newsreader"),
-    ..Font::DEFAULT
-};
+pub const BODY_FONT: Font = crate::theme::WritingFont::SansSerif.font();
+pub const SIDEBAR_ROW_HEIGHT: f32 = 32.0;
+pub const SIDEBAR_TEXT_SIZE: f32 = 13.0;
+pub const SIDEBAR_INDENT: f32 = 14.0;
+pub const SIDEBAR_INSET: f32 = 8.0;
+pub const SIDEBAR_RADIUS: f32 = 5.0;
+
+pub fn sidebar_fill(tokens: Tokens, selected: bool, hovered: bool) -> Color {
+    if selected {
+        tokens.accent_soft
+    } else if hovered {
+        tokens.hover
+    } else {
+        Color::TRANSPARENT
+    }
+}
+
+pub fn sidebar_label(
+    tokens: Tokens,
+    selected: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, _| button::Style {
+        text_color: if selected {
+            tokens.on_accent_soft
+        } else {
+            tokens.muted
+        },
+        ..button::Style::default()
+    }
+}
 
 pub const CODE_LINE_HEIGHT: f32 = 1.5;
 /// Reading space before a table also bounds its optional edge handles.
@@ -60,8 +88,8 @@ pub fn code_surface(tokens: Tokens) -> container::Style {
 pub fn heading_size(body_size: f32, level: u8) -> f32 {
     body_size
         * match level {
-            1 => 2.22,
-            2 => 1.67,
+            1 => 1.9,
+            2 => 1.4,
             3 => 1.3,
             4 => 1.15,
             5 => 1.05,
@@ -142,6 +170,64 @@ pub fn panel(background: Color) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(background.into()),
         ..container::Style::default()
+    }
+}
+
+pub fn checkbox_style(tokens: Tokens) -> impl Fn(&Theme, checkbox::Status) -> checkbox::Style {
+    move |_, status| {
+        let checked = match status {
+            checkbox::Status::Active { is_checked }
+            | checkbox::Status::Hovered { is_checked }
+            | checkbox::Status::Disabled { is_checked } => is_checked,
+        };
+        checkbox::Style {
+            background: if checked {
+                tokens.accent
+            } else {
+                tokens.canvas
+            }
+            .into(),
+            icon_color: tokens.on_accent,
+            border: Border {
+                color: if checked { tokens.accent } else { tokens.muted },
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            text_color: Some(tokens.text),
+        }
+    }
+}
+
+pub fn typeface_picker(tokens: Tokens) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style {
+    move |_, status| pick_list::Style {
+        text_color: tokens.text,
+        placeholder_color: tokens.muted,
+        handle_color: tokens.muted,
+        background: tokens.elevated.into(),
+        border: Border {
+            color: if matches!(status, pick_list::Status::Active) {
+                tokens.control_border
+            } else {
+                tokens.accent
+            },
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+    }
+}
+
+pub fn typeface_menu(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::overlay::menu::Style {
+    move |_| iced::widget::overlay::menu::Style {
+        background: tokens.elevated.into(),
+        text_color: tokens.text,
+        selected_text_color: tokens.on_accent_soft,
+        selected_background: tokens.accent_soft.into(),
+        border: Border {
+            color: tokens.border,
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+        shadow: iced::Shadow::default(),
     }
 }
 
@@ -242,7 +328,7 @@ pub fn inset(tokens: Tokens) -> impl Fn(&Theme) -> container::Style {
 pub fn markdown_settings(theme: &ResolvedTheme) -> markdown::Settings {
     let tokens = theme.tokens;
     let mut style = markdown::Style::from(&theme.iced);
-    style.font = BODY_FONT;
+    style.font = theme.typography.font.font();
     style.link_color = tokens.accent;
     style.inline_code_color = tokens.text;
     style.inline_code_highlight = markdown::Highlight {
@@ -268,6 +354,7 @@ pub fn markdown_settings(theme: &ResolvedTheme) -> markdown::Settings {
 pub fn inline_format(
     style: crate::document::projection::Style,
     tokens: Tokens,
+    body_font: Font,
 ) -> iced::advanced::text::highlighter::Format<Font> {
     use crate::document::projection::Style;
     use iced::advanced::text::highlighter::Format;
@@ -277,7 +364,7 @@ pub fn inline_format(
     {
         Font::MONOSPACE
     } else {
-        BODY_FONT
+        body_font
     };
     Format {
         font: Some(Font {
