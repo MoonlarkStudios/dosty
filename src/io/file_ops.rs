@@ -243,6 +243,9 @@ fn move_item_blocking(
     }
     let to_parent = real_directory(to.parent().unwrap_or(Path::new(".")))?;
     let to = to_parent.join(filename);
+    if names_same_entry(&from, &to)? {
+        return rename_through_staging(&from, &to, active);
+    }
     // An unavailable active file must not prevent organizing an unrelated item.
     // Resolve a missing leaf through its parent so an ancestor move still gets
     // the saved-baseline conflict rather than silently remapping a deleted file.
@@ -397,6 +400,92 @@ fn move_item_blocking(
         active_path: remapped,
         warning,
     })
+}
+
+/// Whether `to` is another spelling of `from` on a case- or
+/// normalization-insensitive filesystem, such as default APFS or NTFS.
+///
+/// Such a rename names the existing entry itself, so the no-clobber checks would
+/// otherwise reject it as an occupied destination. The requested spelling must
+/// not exist as its own directory entry: two hard links or two distinct files are
+/// genuine conflicts.
+fn names_same_entry(from: &Path, to: &Path) -> Result<bool, FileError> {
+    let (Some(parent), Some(requested)) = (to.parent(), to.file_name()) else {
+        return Ok(false);
+    };
+    if from.parent() != Some(parent) || from.file_name() == Some(requested) {
+        return Ok(false);
+    }
+    let target = match fs::symlink_metadata(to) {
+        Ok(target) => target,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in fs::read_dir(parent)? {
+        if entry?.file_name() == requested {
+            return Ok(false);
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let source = fs::symlink_metadata(from)?;
+        Ok(source.dev() == target.dev() && source.ino() == target.ino())
+    }
+    // Stable Rust exposes no Windows file identity. Without an exact entry, a
+    // requested name that resolves and differs only by case reaches `from`.
+    #[cfg(not(unix))]
+    {
+        let _ = target;
+        let fold = |path: &Path| path.file_name().map(|n| n.to_string_lossy().to_lowercase());
+        Ok(fold(from) == fold(to))
+    }
+}
+
+/// Rename an entry to another spelling of its own name through an unused
+/// visible sibling, using the ordinary checked move for each step.
+fn rename_through_staging(
+    from: &Path,
+    to: &Path,
+    active: Option<&ActiveDocument>,
+) -> Result<MoveResult, FileError> {
+    let parent = from.parent().expect("a named entry has a parent");
+    let stem = from
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| error("Choose a valid destination name."))?;
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let staging = parent.join(match from.extension().and_then(|e| e.to_str()) {
+        Some(extension) if from.is_file() => format!("{stem} (renaming {tag}).{extension}"),
+        _ => format!("{stem} (renaming {tag})"),
+    });
+    let first = move_item_blocking(from, &staging, active)?;
+    let staged = active.map(|active| ActiveDocument {
+        path: first
+            .active_path
+            .clone()
+            .unwrap_or_else(|| active.path.clone()),
+        ..active.clone()
+    });
+    match move_item_blocking(&staging, to, staged.as_ref()) {
+        Ok(second) => Ok(MoveResult {
+            from: first.from,
+            to: second.to,
+            active_path: second.active_path,
+            warning: second.warning.or(first.warning),
+        }),
+        Err(failure) => {
+            // Restore the original spelling. If that also fails, report where
+            // the entry now is rather than leaving the writer to search for it.
+            if let Err(restore) = move_item_blocking(&staging, from, staged.as_ref()) {
+                return Err(error(format!(
+                    "{failure} The item remains at \"{}\": {restore}",
+                    staging.display()
+                )));
+            }
+            Err(failure)
+        }
+    }
 }
 
 fn check_active(active: &ActiveDocument, snapshot: &MoveSnapshot) -> Result<(), FileError> {
@@ -690,6 +779,70 @@ mod tests {
         assert_eq!(restored.update, state.update);
         assert_eq!(document.source(), active.source);
         assert!(create_document_blocking(directory.path(), "Essay.md").is_ok());
+    }
+
+    #[test]
+    fn staged_rename_preserves_checkpoint_and_active_document() {
+        let directory = tempfile::tempdir().unwrap();
+        let from = directory.path().join("essay.md");
+        let document = Document::new("Saved\n".into());
+        let state = document.collaboration().state();
+        collaboration_store::save(&from, document.source(), &state, None, None).unwrap();
+        let active = ActiveDocument {
+            path: from.clone(),
+            saved_source: "Saved\n".into(),
+            saved_version: Some(collaboration_store::version(&state)),
+            source: "Saved and unsaved\n".into(),
+            history: History::default(),
+        };
+        let from = fs::canonicalize(&from).unwrap();
+        let to = fs::canonicalize(directory.path()).unwrap().join("Essay.md");
+        let result = rename_through_staging(&from, &to, Some(&active)).unwrap();
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, to);
+        assert_eq!(result.active_path.as_ref(), Some(&to));
+        let names: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| is_markdown(Path::new(name)))
+            .collect();
+        assert_eq!(names, ["Essay.md"]);
+        let (source, restored) = collaboration_store::load(&to).unwrap();
+        assert_eq!(source, "Saved\n");
+        assert_eq!(restored.unwrap().document, state.document);
+    }
+
+    #[test]
+    fn failed_staged_rename_restores_the_original_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(directory.path()).unwrap();
+        let from = root.join("essay.md");
+        let occupied = root.join("Essay.md");
+        fs::write(&from, "mine").unwrap();
+        fs::write(&occupied, "theirs").unwrap();
+        assert!(rename_through_staging(&from, &occupied, None).is_err());
+        assert_eq!(fs::read_to_string(&from).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(&occupied).unwrap(), "theirs");
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            3,
+            "only the folder lock is added"
+        );
+    }
+
+    #[test]
+    fn distinct_entries_are_never_treated_as_one_spelling() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(directory.path()).unwrap();
+        let from = root.join("a.md");
+        fs::write(&from, "a").unwrap();
+        assert!(!names_same_entry(&from, &root.join("missing.md")).unwrap());
+        assert!(!names_same_entry(&from, &from).unwrap());
+        let linked = root.join("A.md");
+        fs::hard_link(&from, &linked).unwrap();
+        assert!(!names_same_entry(&from, &linked).unwrap());
+        assert!(move_item_blocking(&from, &linked, None).is_err());
+        assert_eq!(fs::read_to_string(&from).unwrap(), "a");
     }
 
     #[test]

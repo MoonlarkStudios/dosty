@@ -50,7 +50,8 @@ reference snapshot is relocated. Relative image assets needed by saved, current,
 and session-history source are retained before publishing a file move. References
 that cannot retain their meaning block the move instead of rewriting Markdown.
 Folder moves keep their contained files and checkpoint siblings together and
-reject symlinks. Incoming links from other documents are not rewritten.
+reject symlinks. Renames that change only capitalization work on case-insensitive
+volumes such as default APFS and NTFS; they pass through a temporary visible name. Incoming links from other documents are not rewritten.
 
 Folder moves are bounded to 32,768 entries, 128 directories, 128 Markdown
 documents, and 128 MiB of Markdown source; each document retains the ordinary
