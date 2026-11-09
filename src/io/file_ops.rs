@@ -813,21 +813,37 @@ mod tests {
     }
 
     #[test]
+    fn capitalization_only_rename_succeeds_on_every_filesystem() {
+        let directory = tempfile::tempdir().unwrap();
+        let from = directory.path().join("essay.md");
+        fs::write(&from, "keep me").unwrap();
+        let result = move_item_blocking(&from, &directory.path().join("Essay.md"), None).unwrap();
+        assert_eq!(result.to.file_name().unwrap(), "Essay.md");
+        let names: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| is_markdown(Path::new(name)))
+            .collect();
+        assert_eq!(names, ["Essay.md"]);
+        assert_eq!(fs::read_to_string(&result.to).unwrap(), "keep me");
+    }
+
+    #[test]
     fn failed_staged_rename_restores_the_original_name() {
         let directory = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(directory.path()).unwrap();
         let from = root.join("essay.md");
-        let occupied = root.join("Essay.md");
+        let occupied = root.join("Other.md");
         fs::write(&from, "mine").unwrap();
         fs::write(&occupied, "theirs").unwrap();
         assert!(rename_through_staging(&from, &occupied, None).is_err());
         assert_eq!(fs::read_to_string(&from).unwrap(), "mine");
         assert_eq!(fs::read_to_string(&occupied).unwrap(), "theirs");
-        assert_eq!(
-            fs::read_dir(&root).unwrap().count(),
-            3,
-            "only the folder lock is added"
-        );
+        let markdown = fs::read_dir(&root)
+            .unwrap()
+            .filter(|entry| is_markdown(&entry.as_ref().unwrap().path()))
+            .count();
+        assert_eq!(markdown, 2, "no staging name remains");
     }
 
     #[test]
@@ -838,7 +854,7 @@ mod tests {
         fs::write(&from, "a").unwrap();
         assert!(!names_same_entry(&from, &root.join("missing.md")).unwrap());
         assert!(!names_same_entry(&from, &from).unwrap());
-        let linked = root.join("A.md");
+        let linked = root.join("b.md");
         fs::hard_link(&from, &linked).unwrap();
         assert!(!names_same_entry(&from, &linked).unwrap());
         assert!(move_item_blocking(&from, &linked, None).is_err());
