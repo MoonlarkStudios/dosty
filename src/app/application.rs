@@ -6,13 +6,12 @@ use std::sync::Arc;
 
 use iced::keyboard::{self, Key, key};
 use iced::widget::{
-    button, column, container, markdown, mouse_area, operation, responsive, row, rule, scrollable,
-    space, stack, text, text_editor, text_input, tooltip,
+    button, checkbox, column, container, markdown, mouse_area, operation, pick_list, responsive,
+    row, scrollable, space, stack, text, text_editor, text_input, tooltip,
 };
 use iced::window;
 use iced::{Alignment, Element, Event, Fill, Font, Shrink, Subscription, Task, Theme};
 
-use crate::app::brand;
 use crate::app::icon::{self, Icon};
 use crate::document::Document;
 use crate::document::collaboration::{AgentProposal, CompositionTarget, EditOrigin, ReplicaState};
@@ -28,12 +27,21 @@ use crate::io::collaboration_store;
 use crate::io::image_store::{ImageStore, LoadedImage};
 use crate::io::storage::{self, FileError, LoadedFile, Preferences};
 use crate::theme::styles::{self, Button};
-use crate::theme::{Preset, ResolvedTheme};
+use crate::theme::{Preset, ResolvedTheme, WritingFont};
 
+#[path = "chrome.rs"]
+pub(super) mod chrome;
+#[path = "folder.rs"]
+pub(super) mod folder;
 #[path = "footnotes.rs"]
 pub(super) mod footnotes;
+#[cfg(target_os = "macos")]
+#[path = "native_menus.rs"]
+pub(super) mod native_menus;
 #[path = "outline.rs"]
 pub(super) mod outline;
+#[path = "quick_open.rs"]
+pub(super) mod quick_open;
 #[path = "recovery.rs"]
 mod recovery;
 #[path = "table.rs"]
@@ -96,9 +104,15 @@ pub struct App {
     preferences: Preferences,
     preferences_writing: bool,
     preferences_pending: bool,
-    sidebar: bool,
-    sidebar_tab: SidebarTab,
-    focus: bool,
+    chrome: chrome::State,
+    menu_input: Vec<crate::editor::menu_input::Request>,
+    menu_input_sequence: u64,
+    #[cfg(target_os = "macos")]
+    native_menus: Option<native_menus::State>,
+    #[cfg(target_os = "macos")]
+    native_menu_queue: std::collections::VecDeque<native_menus::Command>,
+    folder: folder::State,
+    quick_open: quick_open::State,
     overlay: Option<Overlay>,
     pending: Option<Pending>,
     search_open: bool,
@@ -121,6 +135,16 @@ pub struct App {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    EscapeCaptured,
+    MenuEdit(crate::editor::menu_input::Command),
+    MenuEditConsumed(u64),
+    #[cfg(target_os = "macos")]
+    NativeMenu(native_menus::Command),
+    #[cfg(target_os = "macos")]
+    NativeMenusReady,
+    Chrome(chrome::Message),
+    Folder(folder::Message),
+    QuickOpen(quick_open::Message),
     #[cfg(target_os = "macos")]
     Accessibility(accesskit::ActionRequest),
     #[cfg(target_os = "macos")]
@@ -201,12 +225,14 @@ pub enum Message {
     Exported(Result<Option<PathBuf>, FileError>),
     ToggleSource,
     ToggleReading,
-    ToggleSidebar,
-    SidebarTab(SidebarTab),
-    ToggleFocus,
+    SetMode(EditorMode),
+    ToggleSidebar(Sidebar),
+    ShowSidebar(Sidebar),
+    HideSidebars,
     ShowSettings,
     CloseOverlay,
     Theme(Preset),
+    WritingFont(WritingFont),
     LoadTheme,
     ThemeLoaded(Result<Option<(PathBuf, String)>, FileError>),
     PreferencesSaved(Result<(), FileError>),
@@ -227,7 +253,7 @@ pub enum Message {
     Dropped(PathBuf),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Bold,
     Italic,
@@ -250,15 +276,17 @@ pub enum EditorMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SidebarTab {
+pub enum Sidebar {
     Files,
     Outline,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Overlay {
+    Chrome,
+    Folder,
+    QuickOpen,
     Table,
-    QuickJump,
     Settings,
     Collaboration,
     Unsaved,
@@ -269,6 +297,7 @@ enum Overlay {
 
 #[derive(Debug, Clone)]
 enum Pending {
+    FolderNew(PathBuf),
     New,
     Open(Option<PathBuf>),
     Replica,
@@ -281,18 +310,19 @@ enum Pending {
 
 impl App {
     pub fn new() -> (Self, Task<Message>) {
-        let preferences = storage::load_preferences();
+        let (preferences, remove_legacy_history) = storage::load_preferences();
         let preset = Preset::ALL
             .into_iter()
             .find(|preset| preset.name() == preferences.theme)
             .unwrap_or(Preset::Paper);
         let preset_themes = Preset::ALL.map(Preset::resolve);
-        let resolved_theme = preset_themes
+        let mut resolved_theme = preset_themes
             .iter()
             .find(|theme| theme.name == preset.name())
             .cloned()
             .unwrap_or_else(|| preset_themes[0].clone());
-        let source = include_str!("../../assets/welcome.md").to_owned();
+        resolved_theme.typography.font = preferences.writing_font;
+        let source = String::new();
         let projection = Projection::new(&source);
         let mut app = Self {
             #[cfg(target_os = "macos")]
@@ -312,7 +342,7 @@ impl App {
             editor_focused: false,
             selection: Selection::default(),
             path: None,
-            display_name: "Welcome.md".into(),
+            display_name: "Untitled.md".into(),
             saved_source: source,
             saved_version: None,
             saved_generation: 0,
@@ -324,9 +354,15 @@ impl App {
             preferences,
             preferences_writing: false,
             preferences_pending: false,
-            sidebar: true,
-            sidebar_tab: SidebarTab::Files,
-            focus: false,
+            chrome: chrome::State::default(),
+            menu_input: Vec::new(),
+            menu_input_sequence: 0,
+            #[cfg(target_os = "macos")]
+            native_menus: None,
+            #[cfg(target_os = "macos")]
+            native_menu_queue: std::collections::VecDeque::new(),
+            folder: folder::State::default(),
+            quick_open: quick_open::State::default(),
             overlay: None,
             pending: None,
             search_open: false,
@@ -369,9 +405,21 @@ impl App {
             .unwrap_or_else(Task::none);
         let image_task = app.image_tasks();
         let recovery_task = app.recovery_discovery();
+        let preferences_task = if remove_legacy_history {
+            app.persist_preferences()
+        } else {
+            Task::none()
+        };
         (
             app,
-            Task::batch([theme_task, open_task, image_task, recovery_task]),
+            Task::batch([
+                operation::focus(EDITOR),
+                theme_task,
+                open_task,
+                image_task,
+                recovery_task,
+                preferences_task,
+            ]),
         )
     }
 
@@ -408,10 +456,11 @@ impl App {
             } else {
                 Subscription::none()
             },
-            iced::event::listen_with(if matches!(self.overlay, Some(Overlay::Table)) {
-                table::event_message
-            } else {
-                event_message
+            iced::event::listen_with(match self.overlay {
+                Some(Overlay::Chrome) => chrome::event_message,
+                Some(Overlay::Folder) => folder::event_message,
+                Some(Overlay::Table) => table::event_message,
+                _ => event_message,
             }),
             #[cfg(target_os = "macos")]
             if self.accessibility.is_some() {
@@ -430,6 +479,8 @@ impl App {
             self.document.costs = Default::default();
         }
         let task = self.update_message(message);
+        #[cfg(target_os = "macos")]
+        self.sync_native_menus();
         let tasks = Task::batch([task, self.image_tasks(), self.recovery_cleanup()]);
         #[cfg(target_os = "macos")]
         return Task::batch([tasks, self.refresh_accessibility(measure_accessibility)]);
@@ -438,6 +489,7 @@ impl App {
     }
 
     fn image_tasks(&mut self) -> Task<Message> {
+        self.images.record_links(&self.projection.rich.links);
         self.images
             .request(
                 &self.projection.rich.images,
@@ -450,6 +502,29 @@ impl App {
     }
 
     fn update_message(&mut self, mut message: Message) -> Task<Message> {
+        // Captured Escape also dismisses native text-input dialogs; editor
+        // bindings retain their own single CloseOverlay action.
+        if self.overlay == Some(Overlay::Chrome)
+            && matches!(
+                message,
+                Message::New
+                    | Message::Open
+                    | Message::OpenPath(_)
+                    | Message::Save
+                    | Message::SaveAs
+                    | Message::HideSidebars
+                    | Message::ToggleSource
+                    | Message::ToggleReading
+                    | Message::SetMode(_)
+                    | Message::ToggleSearch
+                    | Message::Format(_)
+                    | Message::Undo
+                    | Message::Redo
+            )
+        {
+            self.overlay = None;
+            self.chrome.menu = None;
+        }
         let leaving_grid = matches!(
             message,
             Message::Outline(
@@ -470,6 +545,7 @@ impl App {
                 | Message::Edit(_)
                 | Message::ToggleSource
                 | Message::ToggleReading
+                | Message::SetMode(_)
                 | Message::Format(_)
                 | Message::Activate(_)
                 | Message::JumpTo(_)
@@ -490,6 +566,7 @@ impl App {
                     | Message::Redo
                     | Message::ToggleSource
                     | Message::ToggleReading
+                    | Message::SetMode(_)
                     | Message::Format(_)
                     | Message::Save
                     | Message::SaveAs
@@ -522,7 +599,7 @@ impl App {
                             | outline::Message::Move(_)
                             | outline::Message::BeginDrag(_)
                             | outline::Message::Drop(_)
-                            | outline::Message::QuickJump
+                            | outline::Message::Filter
                             | outline::Message::Accept
                     )
             ))
@@ -598,9 +675,15 @@ impl App {
                     | Message::Select(_)
                     | Message::SelectSource(_)
                     | Message::TableTab(_)
+                    | Message::Activate(_)
+                    | Message::JumpTo(_)
+                    | Message::Append
+                    | Message::Navigate(_)
                     | Message::Format(_)
                     | Message::Undo
                     | Message::Redo
+                    | Message::Replace
+                    | Message::ReplaceAll
                     | Message::ToggleTask { .. }
                     | Message::ToggleTaskSource { .. }
                     | Message::ToggleCurrentTask
@@ -633,6 +716,7 @@ impl App {
                     | Message::Welcome
                     | Message::ToggleSource
                     | Message::ToggleReading
+                    | Message::SetMode(_)
                     | Message::ToggleSearch
                     | Message::Replace
                     | Message::ReplaceAll
@@ -641,6 +725,40 @@ impl App {
             return Task::none();
         }
         match message {
+            Message::EscapeCaptured => {
+                if matches!(
+                    self.overlay,
+                    Some(Overlay::Chrome | Overlay::Folder | Overlay::QuickOpen)
+                ) {
+                    return self.update_message(Message::CloseOverlay);
+                }
+                return self.update_outline(outline::Message::CancelDrag);
+            }
+            Message::MenuEdit(command) => {
+                self.menu_input_sequence = self.menu_input_sequence.wrapping_add(1);
+                self.menu_input.push(crate::editor::menu_input::Request {
+                    sequence: self.menu_input_sequence,
+                    command,
+                });
+            }
+            Message::MenuEditConsumed(sequence) => {
+                if let Some(index) = self
+                    .menu_input
+                    .iter()
+                    .position(|request| request.sequence == sequence)
+                {
+                    self.menu_input.drain(..=index);
+                }
+                #[cfg(target_os = "macos")]
+                return self.drain_native_menu_commands();
+            }
+            #[cfg(target_os = "macos")]
+            Message::NativeMenu(command) => return self.native_menu_command(command),
+            #[cfg(target_os = "macos")]
+            Message::NativeMenusReady => self.attach_native_menus(),
+            Message::Chrome(message) => return self.update_chrome(message),
+            Message::Folder(message) => return self.update_folder(message),
+            Message::QuickOpen(message) => return self.update_quick_open(message),
             #[cfg(target_os = "macos")]
             Message::Accessibility(request) => return self.accessibility_action(request),
             #[cfg(target_os = "macos")]
@@ -949,7 +1067,7 @@ impl App {
                 return self.import_dropped_image(path);
             }
             Message::OpenPath(path) | Message::Dropped(path) => {
-                return self.request(Pending::Open(Some(path)));
+                return self.update_folder(folder::Message::OpenPath(path));
             }
             Message::Guide => return self.request(Pending::Guide),
             Message::Welcome => return self.request(Pending::Welcome),
@@ -994,9 +1112,9 @@ impl App {
                             filename(&file.path),
                         );
                         self.saved_version = version;
-                        self.remember(file.path);
+                        let folder_task = self.folder_document_changed();
                         return Task::batch([
-                            self.persist_preferences(),
+                            folder_task,
                             operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
                         ]);
                     }
@@ -1010,8 +1128,10 @@ impl App {
                 generation,
             } => {
                 self.busy = false;
+                self.chrome.saving = false;
                 match result {
                     Ok(path) => {
+                        self.chrome.save_error = None;
                         self.path = Some(path.clone());
                         self.display_name = filename(&path);
                         self.saved_source = (*source).clone();
@@ -1019,22 +1139,18 @@ impl App {
                         self.saved_generation = generation;
                         self.dirty = self.document.source() != self.saved_source
                             || self.document.collaboration().generation() != self.saved_generation;
-                        self.remember(path);
+                        let folder_task = self.folder_document_changed();
                         if !self.dirty {
                             self.recovery.retire();
                         }
-                        self.notification = Some("Document saved".into());
                         if !self.dirty
                             && let Some(pending) = self.pending.take()
                         {
                             self.overlay = None;
-                            return Task::batch([
-                                self.execute(pending),
-                                self.persist_preferences(),
-                            ]);
+                            return Task::batch([self.execute(pending), folder_task]);
                         }
                         return Task::batch([
-                            self.persist_preferences(),
+                            folder_task,
                             Task::done(Message::Writing(writing::Message::ResumeImage)),
                         ]);
                     }
@@ -1043,6 +1159,7 @@ impl App {
                     }
                     Err(error) => {
                         self.writing.pending_media = None;
+                        self.chrome.save_error = Some(error.to_string());
                         self.notification = Some(error.to_string());
                     }
                 }
@@ -1114,17 +1231,41 @@ impl App {
                     return operation::focus(EDITOR);
                 }
             }
-            Message::ToggleSidebar => self.sidebar = !self.sidebar,
-            Message::SidebarTab(tab) => self.sidebar_tab = tab,
-            Message::ToggleFocus => self.focus = !self.focus,
+            Message::SetMode(mode) => {
+                if self.mode != mode {
+                    self.mode = mode;
+                    self.document.break_history_group();
+                    self.preserve_viewport_generation =
+                        Some(self.document.collaboration().generation());
+                    if mode != EditorMode::Read {
+                        self.sync_editor();
+                        return operation::focus(EDITOR);
+                    }
+                }
+            }
+            Message::ToggleSidebar(side) => return self.toggle_sidebar(side),
+            Message::ShowSidebar(side) => return self.show_sidebar(side),
+            Message::HideSidebars => return self.toggle_hidden_sidebars(),
             Message::ShowSettings => {
                 self.document.break_history_group();
                 self.overlay = Some(Overlay::Settings);
             }
             Message::CloseOverlay => {
-                let quick_jump = matches!(self.overlay, Some(Overlay::QuickJump));
-                let table = matches!(self.overlay, Some(Overlay::Table));
+                if self.overlay == Some(Overlay::QuickOpen) {
+                    return self.cancel_quick_open();
+                }
                 drop(self.update_outline(outline::Message::CancelDrag));
+                if self.overlay.is_none() && self.outline.filter_open {
+                    return self.update_outline(outline::Message::CancelFilter);
+                }
+                if self.overlay == Some(Overlay::Folder) {
+                    return self.update_folder(folder::Message::Cancel);
+                }
+                if self.overlay == Some(Overlay::Chrome) {
+                    self.chrome.menu = None;
+                }
+                let chrome = self.overlay == Some(Overlay::Chrome);
+                let table = matches!(self.overlay, Some(Overlay::Table));
                 if !self.busy {
                     if self.overlay.is_none() {
                         if self.search_open {
@@ -1142,7 +1283,9 @@ impl App {
                         self.editor_focused = true;
                         self.sync_editor();
                     }
-                    if quick_jump || table {
+                    if table || chrome {
+                        self.preserve_viewport_generation =
+                            Some(self.document.collaboration().generation());
                         return operation::focus(EDITOR);
                     }
                 }
@@ -1156,6 +1299,16 @@ impl App {
                     .unwrap_or_else(|| self.preset_themes[0].clone());
                 self.preferences.theme = preset.name().into();
                 self.preferences.custom_theme = None;
+                self.resolved_theme.typography.font = self.preferences.writing_font;
+                self.preserve_viewport_generation =
+                    Some(self.document.collaboration().generation());
+                return self.persist_preferences();
+            }
+            Message::WritingFont(font) => {
+                self.preferences.writing_font = font;
+                self.resolved_theme.typography.font = font;
+                self.preserve_viewport_generation =
+                    Some(self.document.collaboration().generation());
                 return self.persist_preferences();
             }
             Message::LoadTheme => {
@@ -1181,10 +1334,13 @@ impl App {
             }
             Message::ThemeLoaded(result) => match result {
                 Ok(Some((path, source))) => match ResolvedTheme::from_toml(&source) {
-                    Ok(theme) => {
+                    Ok(mut theme) => {
                         self.preferences.theme = theme.name.clone();
                         self.preferences.custom_theme = Some(path);
+                        theme.typography.font = self.preferences.writing_font;
                         self.resolved_theme = theme;
+                        self.preserve_viewport_generation =
+                            Some(self.document.collaboration().generation());
                         return self.persist_preferences();
                     }
                     Err(error) => self.notification = Some(error.to_string()),
@@ -1298,7 +1454,15 @@ impl App {
                     return self.execute(pending);
                 }
             }
-            Message::CloseRequested(id) => return self.request(Pending::Close(id)),
+            Message::CloseRequested(id) => {
+                if self.overlay == Some(Overlay::QuickOpen) {
+                    // Re-enter the ordinary close path after dismissing the
+                    // picker so a pending table draft reaches the save guard.
+                    drop(self.cancel_quick_open());
+                    return self.update_message(Message::CloseRequested(id));
+                }
+                return self.request(Pending::Close(id));
+            }
             Message::Link(url) => return self.open_destination(url),
             Message::LinkOpened(result) => {
                 if let Err(error) = result {
@@ -2083,6 +2247,7 @@ impl App {
 
     fn execute(&mut self, pending: Pending) -> Task<Message> {
         match pending {
+            Pending::FolderNew(parent) => return self.folder_new_document(parent),
             Pending::Recover(snapshot) => self.restore_draft(*snapshot),
             Pending::Sample => {
                 self.busy = true;
@@ -2151,10 +2316,14 @@ impl App {
     }
 
     fn install_document(&mut self, document: Document, path: Option<PathBuf>, name: String) {
+        self.menu_input.clear();
+        #[cfg(target_os = "macos")]
+        self.native_menu_queue.clear();
         self.recovery.retire();
         self.writing = writing::State::default();
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
+        self.quick_open.clear();
         self.table = table::State::default();
         self.table_editing = None;
         self.grid = table_grid::State::default();
@@ -2180,6 +2349,8 @@ impl App {
         self.path = path;
         self.display_name = name;
         self.dirty = false;
+        self.chrome.saving = false;
+        self.chrome.save_error = None;
         self.selection = Selection::default();
         self.active = None;
         self.notification = None;
@@ -2193,6 +2364,7 @@ impl App {
             return Task::none();
         }
         self.busy = true;
+        self.chrome.saving = true;
         let path = if save_as { None } else { self.path.clone() };
         let expected = path.as_ref().map(|_| self.saved_source.clone());
         let source = Arc::new(self.document.source().to_owned());
@@ -2252,12 +2424,6 @@ impl App {
         )
     }
 
-    fn remember(&mut self, path: PathBuf) {
-        self.preferences.recent.retain(|existing| existing != &path);
-        self.preferences.recent.insert(0, path);
-        self.preferences.recent.truncate(8);
-    }
-
     fn persist_preferences(&mut self) -> Task<Message> {
         if self.preferences_writing {
             self.preferences_pending = true;
@@ -2272,36 +2438,20 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
-        let content = column![
-            self.header(),
-            self.search_bar(),
-            self.writing_surface(),
-            self.status_bar()
-        ]
-        .spacing(0)
-        .height(Fill);
-        let base = row![
-            if self.sidebar && !self.focus {
-                self.sidebar_view()
-            } else {
-                space().width(0).into()
-            },
-            content
-        ]
-        .height(Fill);
-        let mut layers = stack![base];
+        let mut layers = stack![responsive(move |size| self.workspace_view(size))];
+        if let Some(actions) = self.context_actions() {
+            layers = layers.push(actions);
+        }
         if let Some(overlay) = self.overlay {
             let backdrop = mouse_area(container(space()).width(Fill).height(Fill).style(
-                styles::panel(
-                    if matches!(overlay, Overlay::Table) && self.table.is_menu() {
-                        iced::Color::TRANSPARENT
-                    } else {
-                        tokens.scrim
-                    },
-                ),
+                styles::panel(if self.context_menu_open(overlay) {
+                    iced::Color::TRANSPARENT
+                } else {
+                    tokens.scrim
+                }),
             ))
             .on_press(Message::CloseOverlay);
-            let backdrop = if matches!(overlay, Overlay::Table) && self.table.is_menu() {
+            let backdrop = if self.context_menu_open(overlay) {
                 backdrop
                     .on_right_press(Message::CloseOverlay)
                     .on_scroll(|_| Message::CloseOverlay)
@@ -2309,17 +2459,26 @@ impl App {
                 backdrop
             };
             let modal = responsive(move |size| {
-                if matches!(overlay, Overlay::Table) && self.table.is_menu() {
-                    return self.table_menu_view(size);
+                if self.overlay == Some(Overlay::QuickOpen) {
+                    return self.quick_open_view(size);
+                }
+                if self.context_menu_open(overlay) {
+                    return match overlay {
+                        Overlay::Chrome => self.chrome_menu_view(size),
+                        Overlay::Folder => self.folder_menu_view(size),
+                        _ => self.table_menu_view(size),
+                    };
                 }
                 let modal = match overlay {
+                    Overlay::Chrome => self.chrome_menu_view(size),
+                    Overlay::Folder => self.folder_overlay_view((size.height - 48.0).max(80.0)),
                     Overlay::Settings => self.settings_view((size.height - 48.0).min(760.0)),
                     Overlay::Collaboration => self.collaboration_view(),
                     Overlay::Unsaved => self.unsaved_view(),
                     Overlay::Writing => self.writing_view(),
                     Overlay::Footnote => self.footnote_view(),
                     Overlay::Recovery => self.recovery_view(),
-                    Overlay::QuickJump => self.quick_jump_view(),
+                    Overlay::QuickOpen => self.quick_open_view(size),
                     Overlay::Table => self.table_view(),
                 };
                 container(
@@ -2354,152 +2513,103 @@ impl App {
                     .padding(48),
             );
         }
-        layers.into()
+        crate::editor::menu_input::MenuInput::new(layers.into(), &self.menu_input).into()
     }
 
-    fn header(&self) -> Element<'_, Message> {
-        let tokens = self.resolved_theme.tokens;
-        let header = row![
-            if self.focus {
-                space().width(0).into()
-            } else {
-                self.icon_button(
-                    Icon::Sidebar,
-                    "Toggle sidebar",
-                    Message::ToggleSidebar,
-                    self.sidebar,
-                )
-            },
-            container(
-                text(self.display_name.trim_end_matches(".md"))
-                    .size(13)
-                    .font(Font {
-                        weight: iced::font::Weight::Medium,
-                        ..Font::DEFAULT
-                    })
-                    .color(tokens.text)
-                    .wrapping(text::Wrapping::None)
-                    .width(Fill)
-            )
-            .width(Fill)
-            .clip(true),
-            text(if self.dirty { "●" } else { "" })
-                .size(8)
-                .color(tokens.accent),
-            self.icon_button(
-                Icon::Search,
-                "Find · ⌘/Ctrl F",
-                Message::ToggleSearch,
-                self.search_open
-            ),
-            self.icon_button(
-                Icon::Focus,
-                "Focus mode · ⌘/Ctrl Shift F",
-                Message::ToggleFocus,
-                self.focus
-            ),
-            self.icon_button(Icon::Export, "Export HTML", Message::Export, false),
-            self.icon_button(Icon::Save, "Save · ⌘/Ctrl S", Message::Save, false),
-        ]
-        .spacing(9)
-        .align_y(Alignment::Center);
-        container(header).padding([14, 22]).height(62).into()
-    }
-
-    fn sidebar_view(&self) -> Element<'_, Message> {
-        let tokens = self.resolved_theme.tokens;
-        let brand = row![
-            brand::view(tokens),
-            space::horizontal(),
-            self.icon_button(Icon::Plus, "New document · ⌘/Ctrl N", Message::New, false)
-        ]
-        .align_y(Alignment::Center);
-        let tabs = row![
-            self.small_button(
-                "Files",
-                Message::SidebarTab(SidebarTab::Files),
-                self.sidebar_tab == SidebarTab::Files
-            ),
-            self.small_button(
-                "Outline",
-                Message::SidebarTab(SidebarTab::Outline),
-                self.sidebar_tab == SidebarTab::Outline
-            )
-        ]
-        .spacing(6);
-        let mut list = column![].spacing(4);
-        if self.sidebar_tab == SidebarTab::Outline {
-            list = list.push(self.outline_list());
-        } else {
-            list = list.push(text("WORKSPACE").size(10).color(tokens.faint));
-            list = list.push(self.file_button(&self.display_name, None, true));
-            list = list.push(self.file_action(
-                "Recovery copies",
-                Message::Recovery(recovery::Message::Show),
-                false,
-            ));
-            list = list.push(self.file_action(
-                "The quiet hour · sample",
-                Message::Writing(writing::Message::Sample),
-                false,
-            ));
-            if self.display_name != "Welcome.md" {
-                list = list.push(self.file_action("Welcome", Message::Welcome, false));
-            }
-            if self.display_name != "Markdown guide.md" {
-                list = list.push(self.file_action("Markdown guide", Message::Guide, false));
-            }
-            if self
-                .preferences
-                .recent
-                .iter()
-                .any(|path| Some(path) != self.path.as_ref())
-            {
-                list = list
-                    .push(space().height(22))
-                    .push(text("RECENT").size(10).color(tokens.faint))
-                    .push(space().height(5));
-                for path in &self.preferences.recent {
-                    if Some(path) != self.path.as_ref() {
-                        list =
-                            list.push(self.file_button(&filename(path), Some(path.clone()), false));
-                    }
-                }
-            }
+    fn context_menu_open(&self, overlay: Overlay) -> bool {
+        match overlay {
+            Overlay::Chrome => true,
+            Overlay::Folder => self.folder.is_menu(),
+            Overlay::Table => self.table.is_menu(),
+            _ => false,
         }
-        let bottom = column![
-            rule::horizontal(1).style(move |_| rule::Style {
-                color: tokens.border,
-                snap: true,
-                radius: 0.0.into(),
-                fill_mode: rule::FillMode::Full
-            }),
-            self.action_row(Icon::Folder, "Open a document", Message::Open),
-            self.action_row(
-                Icon::Settings,
-                "Appearance & shortcuts",
-                Message::ShowSettings
-            ),
+    }
+
+    fn sidebar_view(&self, side: Sidebar) -> Element<'_, Message> {
+        let tokens = self.resolved_theme.tokens;
+        let title: Element<'_, Message> = match side {
+            Sidebar::Files => {
+                let root = self.folder.root().expect("Files requires a workspace");
+                tooltip(
+                    button(
+                        row![
+                            container(
+                                text(folder::name(root))
+                                    .size(styles::SIDEBAR_TEXT_SIZE)
+                                    .wrapping(text::Wrapping::None)
+                            )
+                            .clip(true)
+                            .width(Fill),
+                            icon::sized(Icon::ChevronDown, tokens.muted, 12.0),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::Chrome(chrome::Message::Menu(
+                        chrome::Menu::Workspace,
+                    )))
+                    .padding([5, styles::SIDEBAR_INSET as u16])
+                    .width(Fill)
+                    .style(styles::button_style(tokens, Button::Quiet)),
+                    text(root.display().to_string()).size(11),
+                    tooltip::Position::Bottom,
+                )
+                .into()
+            }
+            Sidebar::Outline => container(
+                text("Outline")
+                    .size(styles::SIDEBAR_TEXT_SIZE)
+                    .color(tokens.muted),
+            )
+            .padding([0, styles::SIDEBAR_INSET as u16])
+            .width(Fill)
+            .into(),
+        };
+        let tool = |kind, label, message| {
+            tooltip(
+                button(icon::sized(kind, tokens.muted, 16.0))
+                    .padding(6)
+                    .on_press(message)
+                    .style(styles::button_style(tokens, Button::Quiet)),
+                text(label).size(11),
+                tooltip::Position::Bottom,
+            )
+        };
+        let header = row![
+            title,
+            if side == Sidebar::Outline {
+                self.outline_tools()
+            } else {
+                container(tool(
+                    Icon::Search,
+                    "Quick Open · ⌘/Ctrl P",
+                    Message::QuickOpen(quick_open::Message::Open),
+                ))
+                .id("workspace-quick-open")
+                .into()
+            },
+            tool(Icon::Close, "Close sidebar", Message::ToggleSidebar(side),),
         ]
-        .spacing(8);
-        container(
-            column![
-                brand,
-                space().height(16),
-                tabs,
-                space().height(12),
-                scrollable(list)
-                    .height(Fill)
-                    .style(styles::scrollbar(tokens)),
-                bottom
-            ]
-            .spacing(12),
-        )
-        .padding(20)
-        .width(260)
-        .height(Fill)
-        .style(styles::panel(tokens.surface))
-        .into()
+        .spacing(2)
+        .height(styles::SIDEBAR_ROW_HEIGHT)
+        .align_y(Alignment::Center);
+        let list = match side {
+            Sidebar::Files => self.folder_view(),
+            Sidebar::Outline => self.outline_view(),
+        };
+        container(column![header, list].spacing(8))
+            .padding(styles::SIDEBAR_INSET)
+            .width(match side {
+                Sidebar::Files => chrome::FILES_WIDTH,
+                Sidebar::Outline => chrome::OUTLINE_WIDTH,
+            })
+            .height(Fill)
+            .style(styles::panel(tokens.surface))
+            .id(match side {
+                Sidebar::Files => "workspace-sidebar",
+                Sidebar::Outline => "outline-sidebar",
+            })
+            .into()
     }
 
     fn writing_surface(&self) -> Element<'_, Message> {
@@ -2507,20 +2617,12 @@ impl App {
         let width = self.resolved_theme.typography.content_width;
         if self.mode != EditorMode::Read {
             return container(
-                column![
-                    if self.focus {
-                        space().height(8).into()
-                    } else {
-                        self.format_bar()
-                    },
-                    space().height(if self.focus { 16 } else { 24 }),
-                    self.editor_view(self.mode == EditorMode::Source)
-                ]
-                .spacing(0)
-                .max_width(width)
-                .height(Fill),
+                column![self.editor_view(self.mode == EditorMode::Source)]
+                    .spacing(0)
+                    .max_width(width)
+                    .height(Fill),
             )
-            .padding(iced::Padding::new(32.0).top(24.0).bottom(8.0))
+            .padding(iced::Padding::new(32.0).top(56.0).bottom(16.0))
             .center_x(Fill)
             .height(Fill)
             .into();
@@ -2541,7 +2643,7 @@ impl App {
                 .rendered_with_footnotes(index, self.projection.footnotes());
             let rendered: Element<'_, Message> = if items.is_empty() {
                 text(self.document.block_source(index))
-                    .font(styles::BODY_FONT)
+                    .font(self.resolved_theme.typography.font.font())
                     .size(18)
                     .color(tokens.muted)
                     .into()
@@ -2634,167 +2736,6 @@ impl App {
         #[cfg(target_os = "macos")]
         let editor = editor.observe_accessibility_composition(self.accessibility.is_some());
         editor.into()
-    }
-
-    fn format_bar(&self) -> Element<'_, Message> {
-        let mut toolbar = row![].spacing(3).align_y(Alignment::Center);
-        for (kind, format) in [
-            (Icon::Heading, Format::Heading),
-            (Icon::Bold, Format::Bold),
-            (Icon::Italic, Format::Italic),
-            (Icon::Strikethrough, Format::Strikethrough),
-            (Icon::Code, Format::Code),
-            (Icon::Link, Format::Link),
-            (Icon::Quote, Format::Quote),
-            (Icon::List, Format::List),
-            (Icon::Task, Format::Task),
-            (Icon::Fence, Format::Fence),
-            (Icon::Table, Format::Table),
-        ] {
-            let message = if matches!(format, Format::Quote) {
-                Message::Writing(writing::Message::Details(writing::Kind::Quote))
-            } else if matches!(format, Format::Table)
-                && table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
-                    .is_some()
-            {
-                Message::Table(table::Message::OpenMenu)
-            } else {
-                Message::Format(format)
-            };
-            let hint = match format {
-                Format::Heading => "Heading",
-                Format::Bold => "Bold · ⌘ / Ctrl+B",
-                Format::Italic => "Italic · ⌘ / Ctrl+I",
-                Format::Strikethrough => "Strikethrough · ⌘ / Ctrl+Shift+X",
-                Format::Code => "Inline code",
-                Format::Link => "Link · ⌘ / Ctrl+K",
-                Format::Quote => "Quotation and source credit",
-                Format::List => "List",
-                Format::Task => "Task",
-                Format::Fence => "Code block",
-                Format::Table => "Insert table / table controls · ⌘/Ctrl Shift T",
-            };
-            toolbar = toolbar.push(self.icon_button(kind, hint, message, false));
-        }
-        toolbar = toolbar.push(self.icon_button(
-            Icon::Image,
-            "Add or edit image · paste or drop",
-            Message::Writing(writing::Message::Details(writing::Kind::Image)),
-            false,
-        ));
-        toolbar = toolbar.push(self.small_button(
-            "Footnote",
-            Message::Footnote(footnotes::Message::Details),
-            false,
-        ));
-        toolbar.height(32).into()
-    }
-
-    fn status_bar(&self) -> Element<'_, Message> {
-        let tokens = self.resolved_theme.tokens;
-        responsive(move |size| {
-            let compact = size.width < 740.0;
-            let mode = button(
-                text(if self.mode == EditorMode::Source {
-                    "Source"
-                } else {
-                    "Live"
-                })
-                .size(12),
-            )
-            .on_press(Message::ToggleSource)
-            .padding([6, 10])
-            .style(styles::button_style(
-                tokens,
-                if self.mode == EditorMode::Source {
-                    Button::Selected
-                } else {
-                    Button::Quiet
-                },
-            ));
-            let undo = button(icon::view(
-                Icon::Undo,
-                if self.document.can_undo() {
-                    tokens.muted
-                } else {
-                    tokens.disabled
-                },
-            ))
-            .on_press_maybe(self.document.can_undo().then_some(Message::Undo))
-            .padding(5)
-            .style(styles::button_style(tokens, Button::Quiet));
-            let redo = button(icon::view(
-                Icon::Redo,
-                if self.document.can_redo() {
-                    tokens.muted
-                } else {
-                    tokens.disabled
-                },
-            ))
-            .on_press_maybe(self.document.can_redo().then_some(Message::Redo))
-            .padding(5)
-            .style(styles::button_style(tokens, Button::Quiet));
-            let mut status = row![
-                mode,
-                self.small_button(
-                    if self.mode == EditorMode::Read {
-                        "Edit"
-                    } else {
-                        "Read"
-                    },
-                    Message::ToggleReading,
-                    self.mode == EditorMode::Read
-                ),
-                undo,
-                redo,
-                space::horizontal(),
-                text(format!("{} words", self.document.words()))
-                    .size(11)
-                    .color(tokens.muted)
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center);
-            if !compact {
-                status = status.push(
-                    text(format!(
-                        "·  {} min read",
-                        self.document.words().div_ceil(200).max(1)
-                    ))
-                    .size(11)
-                    .color(tokens.faint),
-                );
-            }
-            if self.footnotes.can_return() {
-                status = status.push(self.small_button(
-                    "Back to reference",
-                    Message::Footnote(footnotes::Message::Back),
-                    false,
-                ));
-            }
-            status = status.push(space::horizontal()).push(
-                text(if self.busy {
-                    "Working…"
-                } else if self.dirty {
-                    "Unsaved"
-                } else if self.path.is_some() {
-                    "Saved"
-                } else {
-                    "Local file"
-                })
-                .size(11)
-                .color(tokens.faint),
-            );
-            if !compact {
-                status = status.push(self.small_button(
-                    &self.resolved_theme.name,
-                    Message::ShowSettings,
-                    false,
-                ));
-            }
-            container(status).padding([8, 22]).into()
-        })
-        .height(46)
-        .into()
     }
 
     fn search_bar(&self) -> Element<'_, Message> {
@@ -2934,6 +2875,7 @@ impl App {
         let mut shortcuts = column![].spacing(10);
         for (label, keys) in [
             ("New / Open / Save", "⌘/Ctrl N / O / S"),
+            ("Quick Open", "⌘/Ctrl P"),
             ("Save as", "⌘/Ctrl Shift S"),
             ("Find & replace", "⌘/Ctrl F"),
             ("Bold / Italic", "⌘/Ctrl B / I"),
@@ -2943,9 +2885,9 @@ impl App {
             ("Create / edit footnote", "⌘/Ctrl Shift N"),
             ("Table row / column controls", "⌘/Ctrl Shift T"),
             ("Live preview / source", "⌘/Ctrl Shift M"),
-            ("Focus mode", "⌘/Ctrl Shift F"),
+            ("Hide / show sidebars", "⌘/Ctrl Shift F"),
             ("Previous / next block", "Alt ↑ / ↓"),
-            ("Quick jump to heading", "⌘/Ctrl Shift J"),
+            ("Filter outline", "⌘/Ctrl Shift J"),
             ("Move section up / down", "⌘/Ctrl Alt ↑ / ↓"),
             ("Collapse / expand section", "⌘/Ctrl Alt ← / →"),
             ("Close find or dialog", "Escape"),
@@ -2982,6 +2924,43 @@ impl App {
             ]
             .spacing(8)
             .align_y(Alignment::Center),
+            space().height(8),
+            text("WRITING").size(10).color(tokens.faint),
+            row![
+                text("Typeface").size(13),
+                space::horizontal(),
+                pick_list(
+                    WritingFont::ALL,
+                    Some(self.preferences.writing_font),
+                    Message::WritingFont,
+                )
+                .text_size(13)
+                .style(styles::typeface_picker(tokens))
+                .menu_style(styles::typeface_menu(tokens)),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+            checkbox(self.preferences.show_word_count)
+                .label("Show word count")
+                .on_toggle(|value| Message::Chrome(chrome::Message::Preference(
+                    chrome::Preference::WordCount,
+                    value
+                )))
+                .size(16)
+                .text_size(13)
+                .style(styles::checkbox_style(tokens)),
+            checkbox(self.preferences.show_reading_time)
+                .label("Show estimated reading time")
+                .on_toggle(|value| Message::Chrome(chrome::Message::Preference(
+                    chrome::Preference::ReadingTime,
+                    value
+                )))
+                .size(16)
+                .text_size(13)
+                .style(styles::checkbox_style(tokens)),
+            text("Reading time assumes about 200 words per minute.")
+                .size(11)
+                .color(tokens.muted),
             space().height(8),
             text("KEYBOARD SHORTCUTS").size(10).color(tokens.faint),
             shortcuts
@@ -3122,84 +3101,6 @@ impl App {
         ))
         .into()
     }
-
-    fn file_action<'a>(
-        &self,
-        label: &'a str,
-        message: Message,
-        selected: bool,
-    ) -> Element<'a, Message> {
-        let tokens = self.resolved_theme.tokens;
-        button(
-            row![
-                icon::view(
-                    if label == "Welcome" {
-                        Icon::Book
-                    } else {
-                        Icon::Document
-                    },
-                    if selected {
-                        tokens.on_accent_soft
-                    } else {
-                        tokens.faint
-                    }
-                ),
-                text(label).size(13)
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        )
-        .on_press(message)
-        .padding([11, 9])
-        .width(Fill)
-        .style(styles::button_style(
-            tokens,
-            if selected {
-                Button::Selected
-            } else {
-                Button::Quiet
-            },
-        ))
-        .into()
-    }
-
-    fn file_button(
-        &self,
-        name: &str,
-        path: Option<PathBuf>,
-        selected: bool,
-    ) -> Element<'static, Message> {
-        let tokens = self.resolved_theme.tokens;
-        let mut file = button(
-            row![
-                icon::view(
-                    Icon::Document,
-                    if selected {
-                        tokens.on_accent_soft
-                    } else {
-                        tokens.faint
-                    }
-                ),
-                text(name.trim_end_matches(".md").to_owned()).size(13)
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        )
-        .padding([11, 9])
-        .width(Fill)
-        .style(styles::button_style(
-            tokens,
-            if selected {
-                Button::Selected
-            } else {
-                Button::Quiet
-            },
-        ));
-        if let Some(path) = path {
-            file = file.on_press(Message::OpenPath(path));
-        }
-        file.into()
-    }
 }
 
 fn filename(path: &std::path::Path) -> String {
@@ -3317,21 +3218,11 @@ fn event_message(event: Event, status: iced::event::Status, id: window::Id) -> O
         Event::Keyboard(keyboard::Event::KeyPressed {
             key: Key::Named(key::Named::Escape),
             ..
-        }) if status == iced::event::Status::Captured => {
-            Some(Message::Outline(outline::Message::CancelQuickJump))
-        }
+        }) if status == iced::event::Status::Captured => Some(Message::EscapeCaptured),
         Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
             if status == iced::event::Status::Ignored =>
         {
-            shortcut(&key, modifiers).or_else(|| match key {
-                Key::Named(key::Named::ArrowUp) if modifiers.is_empty() => {
-                    Some(Message::Outline(outline::Message::Step(-1)))
-                }
-                Key::Named(key::Named::ArrowDown) if modifiers.is_empty() => {
-                    Some(Message::Outline(outline::Message::Step(1)))
-                }
-                _ => None,
-            })
+            shortcut(&key, modifiers)
         }
         Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
             Some(Message::Outline(outline::Message::CancelDrag))
@@ -3346,6 +3237,9 @@ fn event_message(event: Event, status: iced::event::Status, id: window::Id) -> O
 fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     match key.as_ref() {
         Key::Named(key::Named::Escape) => Some(Message::CloseOverlay),
+        Key::Named(key::Named::F10) if modifiers.is_empty() => {
+            Some(Message::Chrome(chrome::Message::Menu(chrome::Menu::File)))
+        }
         Key::Named(key::Named::Enter)
             if modifiers.command() && !modifiers.alt() && !modifiers.shift() =>
         {
@@ -3370,22 +3264,28 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 "n" if modifiers.shift() => Some(Message::Footnote(footnotes::Message::Details)),
                 "t" if modifiers.shift() => Some(Message::Table(table::Message::OpenMenu)),
                 "n" => Some(Message::New),
+                "o" if modifiers.alt() => Some(Message::ToggleSidebar(Sidebar::Outline)),
+                "o" if modifiers.shift() => Some(Message::Folder(folder::Message::Pick)),
                 "o" => Some(Message::Open),
+                "p" if !modifiers.shift() && !modifiers.alt() => {
+                    Some(Message::QuickOpen(quick_open::Message::Open))
+                }
                 "s" => Some(if modifiers.shift() {
                     Message::SaveAs
                 } else {
                     Message::Save
                 }),
                 "f" => Some(if modifiers.shift() {
-                    Message::ToggleFocus
+                    Message::HideSidebars
                 } else {
                     Message::ToggleSearch
                 }),
+                "b" if modifiers.shift() => Some(Message::ToggleSidebar(Sidebar::Files)),
                 "b" => Some(Message::Format(Format::Bold)),
                 "i" => Some(Message::Format(Format::Italic)),
                 "x" if modifiers.shift() => Some(Message::Format(Format::Strikethrough)),
                 "k" => Some(Message::Format(Format::Link)),
-                "j" if modifiers.shift() => Some(Message::Outline(outline::Message::QuickJump)),
+                "j" if modifiers.shift() => Some(Message::Outline(outline::Message::Filter)),
                 "m" if modifiers.shift() => Some(Message::ToggleSource),
                 "z" => Some(if modifiers.shift() {
                     Message::Redo

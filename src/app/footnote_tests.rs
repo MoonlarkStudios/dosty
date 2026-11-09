@@ -537,8 +537,7 @@ fn footnote_ui_previews() {
     std::fs::create_dir_all("target/footnote-validation").unwrap();
     let source = include_str!("../../tests/fixtures/footnotes.md");
     let mut app = app(source);
-    app.sidebar = false;
-    app.preferences.recent.clear();
+    app.chrome.files.open = false;
     app.preferences.custom_theme = None;
     app.notification = None;
     for preset in Preset::ALL {

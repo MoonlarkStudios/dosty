@@ -19,7 +19,7 @@ use crate::document::projection::{
 use crate::document::selection::Selection;
 use crate::io::image_store::{Asset, ImageStore};
 use crate::theme::styles;
-use crate::theme::{ResolvedTheme, Tokens, Typography};
+use crate::theme::{ResolvedTheme, Tokens, Typography, WritingFont};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParagraphKey {
@@ -31,6 +31,7 @@ struct ParagraphKey {
     alignment: u8,
     bold: bool,
     code: bool,
+    font: WritingFont,
     syntax: Vec<code_highlight::Run>,
 }
 
@@ -298,6 +299,7 @@ impl RichLayout {
             previous,
             projection,
             tokens: theme.tokens,
+            font: theme.typography.font,
             size: theme.typography.body_size * zoom,
             line_height: theme.typography.line_height,
             width: width.max(1.0),
@@ -373,6 +375,7 @@ impl RichLayout {
             previous,
             projection,
             tokens: theme.tokens,
+            font: theme.typography.font,
             size: theme.typography.body_size * zoom,
             line_height: theme.typography.line_height,
             width: width.max(1.0),
@@ -566,6 +569,7 @@ impl RichLayout {
             previous: HashMap::new(),
             projection,
             tokens: theme.tokens,
+            font: theme.typography.font,
             size: theme.typography.body_size * metrics.zoom,
             line_height: theme.typography.line_height,
             width: bounds.width,
@@ -1025,6 +1029,7 @@ struct Builder<'a> {
     previous: HashMap<ParagraphKey, Arc<CachedParagraph>>,
     projection: &'a Projection,
     tokens: Tokens,
+    font: WritingFont,
     size: f32,
     line_height: f32,
     width: f32,
@@ -1249,6 +1254,7 @@ impl Builder<'_> {
             alignment,
             bold,
             code,
+            font: self.font,
             syntax,
         };
         let cached = self
@@ -1278,6 +1284,7 @@ impl Builder<'_> {
                     let format = styles::inline_format(
                         Style(style.0 | if bold { Style::BOLD } else { 0 }),
                         self.tokens,
+                        self.font.font(),
                     );
                     if style.contains(Style::CODE) && !style.contains(Style::SYNTAX) {
                         inline_spans.push(spans.len());
@@ -1320,7 +1327,7 @@ impl Builder<'_> {
                         ..if code {
                             Font::MONOSPACE
                         } else {
-                            styles::BODY_FONT
+                            self.font.font()
                         }
                     },
                     align_x: match alignment {
@@ -1549,6 +1556,48 @@ mod tests {
     use crate::theme::Preset;
 
     #[test]
+    fn font_switches_reshape_cached_text_and_preserve_source_geometry() {
+        let mut fonts = iced::advanced::graphics::text::font_system()
+            .write()
+            .unwrap();
+        for font in [
+            include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
+            include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
+            include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
+        ] {
+            fonts.load_font(std::borrow::Cow::Borrowed(font));
+        }
+        drop(fonts);
+        let source = "# A clear thought\n\ncafé **words** and *ideas* beside `code`.\n\n| Draft | Next |\n|---|---|\n| Quiet words | Read it aloud |\n\nA final paragraph to make room for another thought.";
+        let projection = Projection::new(source);
+        let mut theme = Preset::Paper.resolve();
+        let images = ImageStore::default();
+        let mut actual = RichLayout::default();
+        actual.rebuild(&projection, &theme, 1.0, 320.0, None, &images);
+        let sans_end = actual.source_caret(source.len(), None);
+        for font in [
+            WritingFont::Serif,
+            WritingFont::SansSerif,
+            WritingFont::Serif,
+        ] {
+            theme.typography.font = font;
+            actual.rebuild(&projection, &theme, 1.0, 320.0, None, &images);
+            let mut fresh = RichLayout::default();
+            fresh.rebuild(&projection, &theme, 1.0, 320.0, None, &images);
+            for at in source
+                .char_indices()
+                .map(|(at, _)| at)
+                .chain([source.len()])
+            {
+                assert_eq!(actual.source_caret(at, None), fresh.source_caret(at, None));
+            }
+            if font == WritingFont::Serif {
+                assert_ne!(actual.source_caret(source.len(), None), sans_end);
+            }
+        }
+    }
+
+    #[test]
     fn code_rows_keep_blank_line_height_wrapping_and_source_hits() {
         let source = "Before `inline`\n\n```rust\nlet café = \"a long string that wraps over several rows\";\n\nnext();\n```\n\nAfter";
         let (projection, layout) = layout(source, 210.0);
@@ -1565,7 +1614,13 @@ mod tests {
         let blank = layout.source_caret(blank, None);
         let next = layout.source_caret(source.find("next").unwrap(), None);
         assert!((blank.height - next.height).abs() < 0.01);
-        assert!((blank.height - styles::code_size(18.0) * styles::CODE_LINE_HEIGHT).abs() < 0.01);
+        assert!(
+            (blank.height
+                - styles::code_size(Preset::Paper.resolve().typography.body_size)
+                    * styles::CODE_LINE_HEIGHT)
+                .abs()
+                < 0.01
+        );
         assert!(
             layout
                 .rows
@@ -1615,7 +1670,11 @@ mod tests {
             .find(|row| row.display_range.start == block.body.start)
             .unwrap();
         assert!(
-            (row.bounds.height - styles::code_size(18.0) * styles::CODE_LINE_HEIGHT).abs() < 0.01
+            (row.bounds.height
+                - styles::code_size(Preset::Paper.resolve().typography.body_size)
+                    * styles::CODE_LINE_HEIGHT)
+                .abs()
+                < 0.01
         );
         assert!(layout.decorations.iter().any(|(bounds, kind)| matches!(
             kind,

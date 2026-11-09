@@ -34,7 +34,7 @@ impl<'a> markdown::Viewer<'a, Message> for MarkdownView {
     ) -> Element<'a, Message> {
         settings.style.font = Font {
             weight: iced::font::Weight::Bold,
-            ..styles::BODY_FONT
+            ..settings.style.font
         };
         markdown::heading(settings, level, content, index, Message::Link)
     }
@@ -218,7 +218,7 @@ impl MarkdownView {
                             || "•".into(),
                             |start| format!("{}.", start + index as u64),
                         ))
-                        .font(styles::BODY_FONT)
+                        .font(settings.style.font)
                         .size(settings.text_size)
                         .width(20)
                         .into(),

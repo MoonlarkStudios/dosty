@@ -42,6 +42,15 @@ Its provenance and removal criteria remain in the vendor policy. The bridge's
 macOS dependencies do not enable Windows accessibility or Unix adapter runtime
 features; the lockfile still records AccessKit's declared Windows dependencies.
 
+## Native menu dependency
+
+macOS native menus use `muda` with default features disabled. AppKit calls stay
+on the main thread through its safe API; the Linux GTK and Windows menu backends
+are not enabled by this application dependency. Menu events use a bounded
+nonblocking bridge into Iced. Full-platform audits still include Iced's
+WebAssembly timer path, even though native builds do not compile it. The locked
+compatible `wasmtimer` patch release removes the unmaintained `pin-utils` path.
+
 ## Evidence
 
 The [2026-11-03 parser audit](validation/dependencies/pulldown-cmark-0.13.6-audit.txt)

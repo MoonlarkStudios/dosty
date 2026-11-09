@@ -2282,7 +2282,7 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         content: "Begin anywhere…".into(),
                         bounds: bounds.size(),
                         size: (self.theme.typography.body_size * self.zoom).into(),
-                        font: crate::theme::styles::BODY_FONT,
+                        font: self.theme.typography.font.font(),
                         line_height: text::LineHeight::Relative(self.theme.typography.line_height),
                         align_x: text::Alignment::Default,
                         align_y: iced::alignment::Vertical::Top,

@@ -14,6 +14,51 @@ const MAGIC: &[u8; 8] = b"STILCR01";
 const JOURNAL: &[u8; 8] = b"STILJR01";
 const HEADER: usize = 64;
 
+/// Directory mutations and saves share this lock. It is separate from the
+/// checkpoint lock so organizing an ordinary Markdown file does not imply that
+/// the file already has collaboration metadata. Locks remain as stable inodes.
+pub(super) fn directory_write_lock(directory: &Path) -> Result<File, FileError> {
+    let path = directory.join(".dosty-folder-lock");
+    if path.is_symlink() {
+        return Err(invalid("The folder lock must not be a symlink"));
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    file.lock()?;
+    Ok(file)
+}
+
+fn directory_read_lock(directory: &Path) -> Result<Option<File>, FileError> {
+    let path = directory.join(".dosty-folder-lock");
+    if path.is_symlink() {
+        return Err(invalid("The folder lock must not be a symlink"));
+    }
+    match File::open(path) {
+        Ok(file) => {
+            file.lock_shared()?;
+            Ok(Some(file))
+        }
+        // A directory lock may belong to another user while this ordinary
+        // Markdown file remains readable. Read-only opens must not require
+        // access to an unrelated writer's private coordination file.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn version(state: &ReplicaState) -> String {
     blake3::hash(&state.update).to_hex().to_string()
 }
@@ -185,6 +230,7 @@ impl Paths {
 
 pub fn load(path: &Path) -> Result<(String, Option<ReplicaState>), FileError> {
     let paths = Paths::new(path)?;
+    let _directory = directory_read_lock(paths.markdown.parent().unwrap_or(Path::new(".")))?;
     // Ordinary/read-only Markdown opens need no directory write permission.
     // A journal needs an exclusive writer lock to perform recovery.
     let _lock = if paths.journal.try_exists()? {
@@ -194,6 +240,13 @@ pub fn load(path: &Path) -> Result<(String, Option<ReplicaState>), FileError> {
     } else {
         paths.read_lock()?
     };
+    read_contents(&paths, _lock.is_some())
+}
+
+fn read_contents(
+    paths: &Paths,
+    known_checkpoint: bool,
+) -> Result<(String, Option<ReplicaState>), FileError> {
     if paths.journal.try_exists()? {
         return Err(FileError::RecoveryConflict);
     }
@@ -202,7 +255,7 @@ pub fn load(path: &Path) -> Result<(String, Option<ReplicaState>), FileError> {
     let state = optional_read(&paths.state, MAX_STATE_BYTES as u64 + HEADER as u64)?
         .map(|bytes| decode(&bytes))
         .transpose()?;
-    if state.is_none() && _lock.is_some() {
+    if state.is_none() && known_checkpoint {
         return Err(FileError::MissingCheckpoint);
     }
     if let Some(state) = &state {
@@ -218,6 +271,48 @@ pub fn load(path: &Path) -> Result<(String, Option<ReplicaState>), FileError> {
     Ok((source, state))
 }
 
+pub(super) struct MoveSnapshot {
+    pub source: String,
+    pub version: Option<String>,
+    pub checkpoint: Option<PathBuf>,
+    pub checkpoint_hash: Option<blake3::Hash>,
+    pub lock: Option<PathBuf>,
+    _guard: Option<File>,
+}
+
+/// The caller already holds the parent directory's write lock. Retain the
+/// document lock too, including compatibility with existing checkpoint writers.
+pub(super) fn snapshot_for_move(path: &Path) -> Result<MoveSnapshot, FileError> {
+    let paths = Paths::new(path)?;
+    let has_metadata =
+        paths.state.try_exists()? || paths.lock.try_exists()? || paths.journal.try_exists()?;
+    let guard = if has_metadata {
+        let guard = paths.acquire()?;
+        paths.recover()?;
+        Some(guard)
+    } else {
+        None
+    };
+    let (source, state) = read_contents(&paths, guard.is_some())?;
+    let checkpoint_hash = state
+        .as_ref()
+        .map(|state| encode(state).map(|bytes| blake3::hash(&bytes)))
+        .transpose()?;
+    Ok(MoveSnapshot {
+        source,
+        version: state.as_ref().map(version),
+        checkpoint: state.as_ref().map(|_| paths.state),
+        checkpoint_hash,
+        lock: guard.as_ref().map(|_| paths.lock),
+        _guard: guard,
+    })
+}
+
+pub(super) fn move_metadata_paths(path: &Path) -> Result<[PathBuf; 3], FileError> {
+    let paths = Paths::new(path)?;
+    Ok([paths.state, paths.journal, paths.lock])
+}
+
 pub fn save(
     path: &Path,
     source: &str,
@@ -226,6 +321,7 @@ pub fn save(
     expected_version: Option<&str>,
 ) -> Result<(), FileError> {
     let paths = Paths::new(path)?;
+    let _directory = directory_write_lock(paths.markdown.parent().unwrap_or(Path::new(".")))?;
     let _lock = paths.acquire()?;
     paths.recover()?;
     let current = optional_read(&paths.markdown, MAX_FILE_BYTES)?;

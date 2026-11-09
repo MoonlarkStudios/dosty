@@ -8,6 +8,10 @@ Raw logs, captures, fixtures, and source/executable digests remain byte-exact.
 
 ## Native observations
 
+- [Files, organization, and writing-only layout](file-navigation/README.md):
+  isolated macOS native folder navigation, drag/drop, undo, guarded switching,
+  rename/create, and footer/focus observations on 2026-11-04, with a Native quiet
+  titlebar/navigation/save/preferences follow-up on 2026-11-06.
 - [Clipboard, image drop, file dialogs, and input methods](native-writing.md):
   macOS sessions on 2026-10-23, including actual PNG drop and accented input;
   real CJK candidate-window behavior remains unverified.

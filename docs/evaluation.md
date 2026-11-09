@@ -13,6 +13,7 @@ accessibility or complete desktop compatibility.
 | Performance | Global Markdown dependencies, uncertain parse boundaries, contiguous buffers, suffix rebasing, outline construction, and very long paragraphs/table rows retain document-size costs. Native input/GPU presentation latency is not established by software profiles. |
 | Durability | Recovery can lose edits since the last checkpoint. Undo stacks are session-local. Multiwindow session management and filesystem/power-loss behavior need broader testing. |
 | Desktop integration | Native menus, document associations, trusted signing, and macOS notarization are incomplete. |
+| File organization | Folder discovery and moves are bounded; there is no filesystem watcher, delete, multi-selection, recent-file history, or persisted folder session. Moves stay on one filesystem and can be blocked by references or metadata conflicts. Native dragging, hover expansion, cancellation, and filesystem failure behavior need broader platform validation. |
 | Markdown and export | Mathematics, diagrams, PDF/office export, merged cells, saved table widths, image cropping/resizing, SVG, and animated-image playback are unsupported. GIFs display their first frame. |
 
 CommonMark delimiter rules cannot represent every rich-text join. Some punctuation

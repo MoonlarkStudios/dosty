@@ -3,4 +3,4 @@
 mod definition;
 pub(crate) mod styles;
 
-pub(crate) use definition::{Preset, ResolvedTheme, Tokens, Typography};
+pub(crate) use definition::{Preset, ResolvedTheme, Tokens, Typography, WritingFont};

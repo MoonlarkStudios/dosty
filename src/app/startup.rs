@@ -27,11 +27,23 @@ pub fn run() -> iced::Result {
     #[cfg(target_os = "macos")]
     let accessibility = bootstrap.as_ref().map(|bootstrap| bootstrap.config.clone());
     #[cfg(target_os = "macos")]
-    let boot = move || App::new_with_accessibility(bootstrap.as_ref());
+    let boot = move || {
+        let (mut app, task) = App::new_with_accessibility(bootstrap.as_ref());
+        let menus = app.install_native_menus();
+        (
+            app,
+            iced::Task::batch([
+                task,
+                menus,
+                iced::Task::done(crate::app::Message::NativeMenusReady),
+            ]),
+        )
+    };
     #[cfg(not(target_os = "macos"))]
     let boot = App::new;
 
     let application = iced::application(boot, App::update, App::view)
+        .default_font(crate::theme::styles::BODY_FONT)
         .font(include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice())
         .font(include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice())
@@ -45,6 +57,12 @@ pub fn run() -> iced::Result {
             min_size: Some(Size::new(760.0, 520.0)),
             icon: Some(icon),
             exit_on_close_request: false,
+            #[cfg(target_os = "macos")]
+            platform_specific: window::settings::PlatformSpecific {
+                title_hidden: true,
+                titlebar_transparent: true,
+                fullsize_content_view: true,
+            },
             ..window::Settings::default()
         });
     #[cfg(target_os = "macos")]

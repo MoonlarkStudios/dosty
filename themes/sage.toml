@@ -19,6 +19,6 @@ brand_ink = "#47644D"
 brand_paper = "#B7C5AD"
 
 [typography]
-body_size = 18
+body_size = 17
 line_height = 1.65
-content_width = 720
+content_width = 610

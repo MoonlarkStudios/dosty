@@ -215,6 +215,10 @@ fn rebase_rich(rich: &mut RichDocument, edit: &Range<usize>, inserted: usize, di
     for image in &mut rich.images[first..] {
         rebase(&mut image.range, edit, inserted);
     }
+    let first = rich.links.partition_point(|link| link.range.end < edit.end);
+    for link in &mut rich.links[first..] {
+        rebase(&mut link.range, edit, inserted);
+    }
     let first = rich.tables.partition_point(|t| t.range.end < edit.end);
     for table in &mut rich.tables[first..] {
         rebase(&mut table.range, edit, inserted);

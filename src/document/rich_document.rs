@@ -61,6 +61,12 @@ pub struct Image {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Link {
+    pub range: Range<usize>,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CodeBlock {
     pub range: Range<usize>,
     pub source_range: Range<usize>,
@@ -111,6 +117,7 @@ pub struct RichDocument {
     pub headings: Vec<Heading>,
     pub tables: Vec<Table>,
     pub images: Vec<Image>,
+    pub links: Vec<Link>,
     pub code_blocks: Vec<CodeBlock>,
     image_depth: usize,
     in_table: bool,
@@ -166,6 +173,10 @@ impl RichDocument {
                 }
             }
             Event::End(TagEnd::Table) => self.in_table = false,
+            Event::Start(Tag::Link { dest_url, .. }) => self.links.push(Link {
+                range,
+                url: dest_url.to_string(),
+            }),
             // An image is one selectable object in the editing buffer. Its
             // source, including the alt text and destination, stays lossless.
             Event::Start(Tag::Image { dest_url, .. }) => {
@@ -246,6 +257,9 @@ impl RichDocument {
         }
         for image in &mut self.images {
             range(&mut image.range);
+        }
+        for link in &mut self.links {
+            range(&mut link.range);
         }
         for block in &mut self.code_blocks {
             range(&mut block.range);

@@ -1,8 +1,8 @@
 //! Declarative themes resolve once into semantic colors and an Iced palette.
 
 use iced::theme::Palette;
-use iced::{Color, Theme};
-use serde::Deserialize;
+use iced::{Color, Font, Theme};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Values describe roles, never particular widgets or color names.
@@ -48,14 +48,60 @@ pub struct Typography {
     pub body_size: f32,
     pub line_height: f32,
     pub content_width: f32,
+    /// A writing preference, independent of the selected color theme.
+    #[serde(skip)]
+    pub font: WritingFont,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WritingFont {
+    #[default]
+    SansSerif,
+    Serif,
+}
+
+impl WritingFont {
+    pub const ALL: [Self; 2] = [Self::SansSerif, Self::Serif];
+
+    pub const fn font(self) -> Font {
+        match self {
+            Self::SansSerif => Font {
+                // Resolve bold/italic within the platform's UI family instead
+                // of letting generic-family fallback choose a different face.
+                family: if cfg!(target_os = "macos") {
+                    iced::font::Family::Name("Helvetica Neue")
+                } else if cfg!(target_os = "windows") {
+                    iced::font::Family::Name("Segoe UI")
+                } else {
+                    iced::font::Family::SansSerif
+                },
+                ..Font::DEFAULT
+            },
+            Self::Serif => Font {
+                family: iced::font::Family::Name("Newsreader"),
+                ..Font::DEFAULT
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for WritingFont {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::SansSerif => "Sans-serif",
+            Self::Serif => "Serif",
+        })
+    }
 }
 
 impl Default for Typography {
     fn default() -> Self {
         Self {
-            body_size: 18.0,
+            body_size: 17.0,
             line_height: 1.65,
-            content_width: 720.0,
+            content_width: 610.0,
+            font: WritingFont::default(),
         }
     }
 }
@@ -313,7 +359,7 @@ mod tests {
         let paper = include_str!("../../themes/paper.toml");
         for malformed in [
             paper.replace("#F3EFE4", "red"),
-            paper.replace("body_size = 18", "body_size = 900"),
+            paper.replace("body_size = 17", "body_size = 900"),
             paper.replace("canvas =", "typo ="),
         ] {
             assert!(ResolvedTheme::from_toml(&malformed).is_err());

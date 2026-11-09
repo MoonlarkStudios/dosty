@@ -7,6 +7,7 @@ use iced::{Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector};
 use crate::app::{Message, OutlineMessage};
 use crate::document::outline::DropTarget;
 use crate::theme::Tokens;
+use crate::theme::styles;
 
 pub(crate) struct OutlineRow<'a> {
     child: Element<'a, Message>,
@@ -15,6 +16,8 @@ pub(crate) struct OutlineRow<'a> {
     hover: Option<DropTarget>,
     indicator: Option<bool>,
     tokens: Tokens,
+    active: bool,
+    draggable: bool,
 }
 
 impl<'a> OutlineRow<'a> {
@@ -32,11 +35,23 @@ impl<'a> OutlineRow<'a> {
             hover,
             indicator: None,
             tokens,
+            active: false,
+            draggable: true,
         }
     }
 
     pub fn indicator(mut self, after: Option<bool>) -> Self {
         self.indicator = after;
+        self
+    }
+
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    pub fn draggable(mut self, draggable: bool) -> Self {
+        self.draggable = draggable;
         self
     }
 }
@@ -96,7 +111,7 @@ impl Widget<Message, Theme, Renderer> for OutlineRow<'_> {
         });
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-                if over && cursor.is_over(handle) =>
+                if self.draggable && over && cursor.is_over(handle) =>
             {
                 shell.publish(Message::Outline(OutlineMessage::BeginDrag(self.index)));
                 shell.capture_event();
@@ -146,6 +161,20 @@ impl Widget<Message, Theme, Renderer> for OutlineRow<'_> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        use iced::advanced::Renderer as _;
+        let bounds = layout.bounds();
+        let hovered = cursor.is_over(bounds) && cursor.is_over(*viewport);
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                border: iced::Border {
+                    radius: styles::SIDEBAR_RADIUS.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            styles::sidebar_fill(self.tokens, self.active, hovered),
+        );
         self.child.as_widget().draw(
             &tree.children[0],
             renderer,
@@ -155,8 +184,30 @@ impl Widget<Message, Theme, Renderer> for OutlineRow<'_> {
             cursor,
             viewport,
         );
+        if self.draggable && (hovered || self.dragging) {
+            for x in [
+                bounds.x + bounds.width - 15.0,
+                bounds.x + bounds.width - 10.0,
+            ] {
+                for y in [-4.0, 0.0, 4.0] {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: Rectangle::new(
+                                iced::Point::new(x, bounds.center_y() + y - 1.0),
+                                Size::new(2.0, 2.0),
+                            ),
+                            border: iced::Border {
+                                radius: 1.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        self.tokens.faint,
+                    );
+                }
+            }
+        }
         if let Some(after) = self.indicator {
-            use iced::advanced::Renderer as _;
             let bounds = layout.bounds();
             let indicator = Rectangle {
                 y: if after {
@@ -190,7 +241,8 @@ impl Widget<Message, Theme, Renderer> for OutlineRow<'_> {
         if self.dragging {
             return mouse::Interaction::Grabbing;
         }
-        if cursor.is_over(*viewport)
+        if self.draggable
+            && cursor.is_over(*viewport)
             && cursor.is_over(Rectangle {
                 x: bounds.x + bounds.width - 22.0,
                 width: 22.0,
