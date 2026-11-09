@@ -135,11 +135,21 @@ without adding a second source mutation path. Other platforms retain the
 in-window command menu. The macOS content extends into the transparent native
 titlebar while retaining system window buttons.
 
-Startup creates one blank document. Preferences retain appearance, independent
+Startup creates one blank document, then reopens the last workspace unless a
+document or folder argument was given. Preferences retain appearance, independent
 statistics visibility, and writing typeface. The typeface is applied to the stored
 resolved typography on startup, appearance changes, and preference changes;
-layout/cache metrics include it so text is reshaped on a switch. Panel state is
-session-local; there is no recent-file history or persisted folder session.
+layout/cache metrics include it so text is reshaped on a switch.
+
+`app/workspace.rs` owns remembered workspaces; `io/workspace_state.rs` stores them
+in the data directory. A successful scan of a new root adopts it as the current
+workspace and applies state read before the scan. Replacing a document first
+records the outgoing selection; loading one restores its clamped selection through
+the ordinary sync path. Writes coalesce so an older snapshot cannot land after a
+newer one, wait for the stored registry so an early write cannot erase it, and
+complete before a confirmed window close. Workspace state is a cache: write
+failures are logged, never shown, and every remembered path is revalidated against
+the current scan before use.
 
 Quick Open owns an ephemeral filename/path index derived from the existing bounded
 workspace snapshot. Its focused query intercepts result navigation locally.
