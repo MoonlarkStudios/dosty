@@ -17,12 +17,14 @@ const MAX_DECODED: u64 = 64 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct History {
     pub references: Vec<String>,
+    pub links: Vec<String>,
     pub complete: bool,
 }
 impl Default for History {
     fn default() -> Self {
         Self {
             references: Vec::new(),
+            links: Vec::new(),
             complete: true,
         }
     }
@@ -162,15 +164,43 @@ pub fn local_path(destination: &str, base: Option<&Path>) -> Result<Option<PathB
     let decoded = percent_encoding::percent_decode_str(destination)
         .decode_utf8()
         .map_err(|e| error(&e.to_string()))?;
-    let path = PathBuf::from(decoded.as_ref());
-    if path.is_absolute() {
-        Ok(Some(path))
+    // Markdown separates path segments with `/`. Canonical Windows bases use the
+    // verbatim `\\?\` form, where only `\` separates components.
+    #[cfg(windows)]
+    let decoded = decoded.replace('/', "\\");
+    let path = PathBuf::from(&*decoded);
+    let path = if path.is_absolute() {
+        path
     } else {
-        Ok(Some(
-            base.ok_or_else(|| error("Save the document to resolve relative images."))?
-                .join(path),
-        ))
+        base.ok_or_else(|| error("Save the document to resolve relative images."))?
+            .join(path)
+    };
+    #[cfg(windows)]
+    let path = lexically_normalized(&path);
+    Ok(Some(path))
+}
+
+/// Win32 resolves `.` and `..` lexically, but a verbatim `\\?\` path passes
+/// them to the filesystem unchanged. Apply the Win32 rule so references resolve
+/// the same way below canonical bases as anywhere else on Windows.
+#[cfg(any(windows, test))]
+fn lexically_normalized(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                }
+            }
+            component => normalized.push(component.as_os_str()),
+        }
     }
+    normalized
 }
 
 /// Create without replacing existing bytes, and refuse symlink components in the
@@ -258,6 +288,17 @@ pub fn relocate(
     new: &Path,
     history: &History,
 ) -> Result<(), FileError> {
+    relocate_sources(&[source], old, new, history)
+}
+
+/// A move must retain both the saved file and the active unsaved source without
+/// publishing the latter. Their relative assets share one bounded copy budget.
+pub(super) fn relocate_sources(
+    sources: &[&str],
+    old: Option<&Path>,
+    new: &Path,
+    history: &History,
+) -> Result<(), FileError> {
     // First save establishes the base of manually written relative references.
     // There is no earlier location to copy from; queued imports run after save.
     let Some(old) = old else {
@@ -268,7 +309,9 @@ pub fn relocate(
     if old_base.as_ref() == Some(&new_base) {
         return Ok(());
     }
-    let required = Parser::new_ext(source, MARKDOWN_OPTIONS)
+    let required = sources
+        .iter()
+        .flat_map(|source| Parser::new_ext(source, MARKDOWN_OPTIONS))
         .filter_map(|event| match event {
             Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
             _ => None,
@@ -280,7 +323,7 @@ pub fn relocate(
     references.sort_unstable();
     if !history.complete {
         return Err(error(
-            "Image reference history exceeds 16 MiB or 65,536 entries. Save and reopen the document to begin a new undo session before moving it to another folder.",
+            "Local reference history exceeds 16 MiB or 65,536 entries. Save and reopen the document to begin a new undo session before moving it to another folder.",
         ));
     }
     let mut total = 0;
@@ -323,6 +366,20 @@ fn error(message: &str) -> FileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dot_segments_normalize_lexically_without_leaving_the_root() {
+        for (path, expected) in [
+            (
+                "/notes/drafts/../media/./figure.png",
+                "/notes/media/figure.png",
+            ),
+            ("/notes/a/b/../../c.png", "/notes/c.png"),
+            ("/../figure.png", "/figure.png"),
+        ] {
+            assert_eq!(lexically_normalized(Path::new(path)), Path::new(expected));
+        }
+    }
     fn png() -> Vec<u8> {
         let mut bytes = Cursor::new(Vec::new());
         image::RgbaImage::new(4, 3)

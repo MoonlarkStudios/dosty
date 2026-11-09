@@ -1,6 +1,6 @@
 //! Exercise section commands through the document, native buffer, and real UI.
 
-use super::super::{SidebarTab, event_message};
+use super::super::{Overlay, event_message};
 use super::*;
 use crate::document::{Document, projection::Projection};
 use iced::advanced::{Layout, Shell, clipboard, layout, mouse, widget};
@@ -10,7 +10,7 @@ use iced::{Event, Point, Rectangle, Renderer, Size};
 fn app(source: &str) -> App {
     let (mut app, _) = App::new();
     app.set_document(source.into(), None, "Outline.md".into());
-    app.sidebar_tab = SidebarTab::Outline;
+    app.chrome.outline.open = true;
     app
 }
 
@@ -118,26 +118,103 @@ fn outline_search_includes_folded_duplicate_headings_and_parent_context() {
     let mut app = app(source);
     command(&mut app, Message::FoldAll(true));
     let original_selection = app.selection;
-    command(&mut app, Message::QuickJump);
+    command(&mut app, Message::Filter);
     command(&mut app, Message::Query("REPEATED".into()));
-    assert_eq!(app.outline.results, vec![1, 5, 2]);
+    assert_eq!(app.outline.results, vec![1, 2, 5]);
+    command(&mut app, Message::Step(1));
     command(&mut app, Message::Step(1));
     command(&mut app, Message::Accept);
     assert_eq!(app.selection.head, source.rfind("## Repeated").unwrap());
     assert!(app.overlay.is_none());
     assert!(!app.outline.folded[4]);
-    command(&mut app, Message::QuickJump);
+    command(&mut app, Message::Filter);
     command(&mut app, Message::Query("first repeated".into()));
     assert_eq!(app.outline.results, vec![1, 2]);
     command(&mut app, Message::Query("absent".into()));
     command(&mut app, Message::Accept);
-    assert!(matches!(app.overlay, Some(Overlay::QuickJump)));
-    command(&mut app, Message::CancelQuickJump);
+    assert!(app.outline.filter_open && app.overlay.is_none());
+    command(&mut app, Message::CancelFilter);
     assert!(app.overlay.is_none());
     assert_ne!(app.selection, original_selection);
     assert_eq!(app.document.source(), source);
     assert!(!app.dirty);
     assert!(!app.document.can_undo());
+}
+
+#[test]
+fn inline_filter_preserves_reverse_selection_folds_and_history() {
+    let source = "### Chapter\n\n##### Loomings\n\ncafé and 🦀\n\n### Other\n";
+    for mode in [EditorMode::Live, EditorMode::Source, EditorMode::Read] {
+        let mut app = app(source);
+        app.mode = mode;
+        let selection = Selection {
+            anchor: source.find("🦀").unwrap() + "🦀".len(),
+            head: source.find("café").unwrap(),
+        };
+        app.selection = selection;
+        app.sync_editor();
+        let generation = app.document.collaboration().generation();
+        command(&mut app, Message::FoldAll(true));
+        assert_eq!(app.outline.visible(), vec![0, 2]);
+        app.chrome.outline.open = false;
+        app.chrome.sidebars_hidden = true;
+        command(&mut app, Message::Filter);
+        command(&mut app, Message::Query("LOOM".into()));
+        assert!(app.outline.filter_open && app.chrome.outline.open);
+        assert!(!app.chrome.sidebars_hidden && app.overlay.is_none());
+        assert_eq!(app.outline.results, vec![1]);
+        assert_eq!(app.outline.visible(), vec![0, 1]);
+        assert_eq!(app.selection, selection);
+        assert_eq!(app.document.collaboration().generation(), generation);
+        command(&mut app, Message::Query("absent".into()));
+        assert!(app.outline.visible().is_empty());
+        command(&mut app, Message::CancelFilter);
+        assert!(!app.outline.filter_open);
+        assert_eq!(app.outline.visible(), vec![0, 2]);
+        assert_eq!(app.selection, selection);
+        assert_eq!(app.document.source(), source);
+        assert!(!app.dirty && !app.document.can_undo());
+    }
+}
+
+#[test]
+fn outline_tools_exist_only_when_the_document_has_headings() {
+    #[derive(Default)]
+    struct Tools(Vec<widget::Id>);
+    impl widget::Operation for Tools {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+            operate(self);
+        }
+        fn container(&mut self, id: Option<&widget::Id>, _: Rectangle) {
+            if let Some(id) = id {
+                self.0.push(id.clone());
+            }
+        }
+    }
+    let mut harness = Harness::new("A plain paragraph.", Size::new(1180.0, 820.0));
+    command(&mut harness.app, Message::Filter);
+    assert!(!harness.app.outline.filter_open);
+    for source in [
+        "A plain paragraph.",
+        "### Chapter\n\n##### Loomings\n",
+        "Plain again.",
+    ] {
+        harness
+            .app
+            .set_document(source.into(), None, "Draft.md".into());
+        let mut tools = Tools::default();
+        harness.operate(&mut tools);
+        for id in [
+            "outline-filter-control",
+            "outline-collapse-control",
+            "outline-expand-control",
+        ] {
+            assert_eq!(
+                tools.0.contains(&widget::Id::from(id)),
+                source.contains('#')
+            );
+        }
+    }
 }
 
 #[test]
@@ -186,7 +263,7 @@ fn outline_commands_obey_loading_and_modal_guards_and_cancel_cleanly() {
         for message in [
             Message::Move(1),
             Message::Toggle(0),
-            Message::QuickJump,
+            Message::Filter,
             Message::BeginDrag(0),
         ] {
             command(&mut app, message);
@@ -202,7 +279,7 @@ fn outline_commands_obey_loading_and_modal_guards_and_cancel_cleanly() {
     assert!(app.outline.drag.is_none());
     command(&mut app, Message::BeginDrag(0));
     // A focused text input can capture Escape before the global shortcut.
-    command(&mut app, Message::CancelQuickJump);
+    command(&mut app, Message::CancelFilter);
     assert!(app.outline.drag.is_none());
     command(&mut app, Message::FoldCurrent(true));
     assert!(app.outline.folded[0]);
@@ -216,7 +293,7 @@ fn outline_read_jump_updates_current_section_without_leaving_read_mode() {
     let source = "# A\n\ntext\n\n# B\n\ntext\n\n";
     let mut app = app(source);
     app.mode = EditorMode::Read;
-    command(&mut app, Message::QuickJump);
+    command(&mut app, Message::Filter);
     command(&mut app, Message::Query("B".into()));
     command(&mut app, Message::Accept);
     assert_eq!(app.mode, EditorMode::Read);
@@ -347,6 +424,19 @@ impl Harness {
             &self.renderer,
             &layout::Limits::new(Size::ZERO, self.size),
         );
+        let mut messages = Vec::new();
+        root.as_widget_mut().update(
+            &mut self.tree,
+            &Event::Window(iced::window::Event::RedrawRequested(
+                iced::time::Instant::now(),
+            )),
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &self.renderer,
+            &mut clipboard::Null,
+            &mut Shell::new(&mut messages),
+            &clip,
+        );
         self.renderer.reset(clip);
         root.as_widget().draw(
             &self.tree,
@@ -371,9 +461,13 @@ impl Harness {
                 self.app.resolved_theme.tokens.canvas,
             );
         }
+        let mut rgba = pixels.take();
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
         image::save_buffer(
             path,
-            pixels.data(),
+            &rgba,
             size.width,
             size.height,
             image::ColorType::Rgba8,
@@ -383,7 +477,7 @@ impl Harness {
 }
 
 #[test]
-#[ignore = "render the full outline and picker UI for visual inspection"]
+#[ignore = "render the outline and inline filter for visual inspection"]
 fn outline_ui_previews() {
     let mut fonts = iced_tiny_skia::graphics::text::font_system()
         .write()
@@ -406,12 +500,17 @@ fn outline_ui_previews() {
         }),
     );
     harness.render("target/outline-validation/outline.png");
-    command(&mut harness.app, Message::QuickJump);
-    harness.focus(QUICK_JUMP);
+    command(&mut harness.app, Message::Filter);
+    command(&mut harness.app, Message::Query("repeated".into()));
+    harness.focus(FILTER);
     harness.size = Size::new(760.0, 520.0);
-    harness.render("target/outline-validation/quick-jump.png");
+    harness.render("target/outline-validation/filter.png");
     harness.app.resolved_theme = crate::theme::Preset::Midnight.resolve();
-    harness.render("target/outline-validation/quick-jump-dark.png");
+    harness.render("target/outline-validation/filter-dark.png");
+    harness
+        .app
+        .set_document("A plain paragraph.".into(), None, "Empty.md".into());
+    harness.render("target/outline-validation/empty-dark.png");
 }
 
 #[test]
@@ -461,7 +560,7 @@ fn performance_outline_sections() {
             "expand-all",
             vec![AppMessage::Outline(Message::FoldAll(false))],
         );
-        command(&mut app, Message::QuickJump);
+        command(&mut app, Message::Filter);
         measure(
             &mut app,
             "quick-query",
@@ -469,7 +568,7 @@ fn performance_outline_sections() {
                 .map(|i| AppMessage::Outline(Message::Query(format!("Details {i}"))))
                 .collect(),
         );
-        command(&mut app, Message::CancelQuickJump);
+        command(&mut app, Message::CancelFilter);
         let mut moves = Vec::new();
         let mut undos = Vec::new();
         for _ in 0..5 {
@@ -543,7 +642,7 @@ fn outline_real_drag_moves_a_folded_subtree_and_outside_release_cancels() {
 }
 
 #[test]
-fn outline_real_keyboard_picker_navigation_escape_and_source_shortcuts() {
+fn outline_real_keyboard_filter_navigation_escape_and_source_shortcuts() {
     let source = "# A\n\nfirst\n\n# B\n\nsecond\n\n";
     let command_key = if cfg!(target_os = "macos") {
         keyboard::Modifiers::LOGO
@@ -561,8 +660,8 @@ fn outline_real_keyboard_picker_navigation_escape_and_source_shortcuts() {
                 Key::Character("j".into()),
                 command_key | keyboard::Modifiers::SHIFT,
             );
-            assert!(matches!(harness.app.overlay, Some(Overlay::QuickJump)));
-            harness.focus(QUICK_JUMP);
+            assert!(harness.app.outline.filter_open && harness.app.overlay.is_none());
+            harness.focus(FILTER);
             harness.key(
                 Key::Named(key::Named::ArrowDown),
                 keyboard::Modifiers::empty(),
@@ -581,8 +680,8 @@ fn outline_real_keyboard_picker_navigation_escape_and_source_shortcuts() {
             harness.key(Key::Character("z".into()), command_key);
             assert_eq!(harness.app.document.source(), source);
             let selection = harness.app.selection;
-            command(&mut harness.app, Message::QuickJump);
-            harness.focus(QUICK_JUMP);
+            command(&mut harness.app, Message::Filter);
+            harness.focus(FILTER);
             harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
             assert!(harness.app.overlay.is_none());
             assert_eq!(harness.app.selection, selection);

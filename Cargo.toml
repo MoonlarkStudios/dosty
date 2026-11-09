@@ -36,6 +36,7 @@ arboard = { version = "=3.7.0", features = ["wayland-data-control"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit = "=0.21.1"
 iced_winit = { version = "=0.14.1", default-features = false }
+muda = { version = "=0.21.2", default-features = false }
 
 [dev-dependencies]
 # Drive real asynchronous import tasks in application workflow tests.

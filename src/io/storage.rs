@@ -45,12 +45,26 @@ pub struct LoadedFile {
     pub collaboration: Option<crate::document::collaboration::ReplicaState>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub theme: String,
     pub custom_theme: Option<PathBuf>,
-    pub recent: Vec<PathBuf>,
+    pub show_word_count: bool,
+    pub show_reading_time: bool,
+    pub writing_font: crate::theme::WritingFont,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            theme: String::new(),
+            custom_theme: None,
+            show_word_count: true,
+            show_reading_time: true,
+            writing_font: crate::theme::WritingFont::default(),
+        }
+    }
 }
 
 pub fn preferences_path() -> Option<PathBuf> {
@@ -66,11 +80,17 @@ pub fn preferences_path() -> Option<PathBuf> {
         .map(|dirs| dirs.config_dir().join("preferences.toml"))
 }
 
-pub fn load_preferences() -> Preferences {
-    preferences_path()
+pub fn load_preferences() -> (Preferences, bool) {
+    let Some(value) = preferences_path()
         .and_then(|path| fs::read_to_string(path).ok())
-        .and_then(|text| toml::from_str(&text).ok())
-        .unwrap_or_default()
+        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+    else {
+        return (Preferences::default(), false);
+    };
+    // Read old appearance settings, then remove obsolete history on a worker.
+    // New preferences never retain paths to previously opened documents.
+    let legacy_history = value.get("recent").is_some();
+    (value.try_into().unwrap_or_default(), legacy_history)
 }
 
 pub async fn save_preferences(preferences: Preferences) -> Result<(), FileError> {

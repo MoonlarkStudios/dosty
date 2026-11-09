@@ -102,10 +102,12 @@ impl Projection {
                 && local.rich.code_blocks.is_empty()
                 && local.rich.tables.is_empty()
                 && local.rich.images.is_empty()
+                && local.rich.links.is_empty()
                 && parsed.rich.headings.is_empty()
                 && parsed.rich.code_blocks.is_empty()
                 && parsed.rich.tables.is_empty()
                 && parsed.rich.images.is_empty()
+                && parsed.rich.links.is_empty()
                 && self.text[display.clone()].ends_with('\n')
                 && local.text.ends_with('\n')
             {

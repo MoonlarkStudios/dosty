@@ -110,6 +110,53 @@ Blocking file work, native rich clipboard access, and image decoding run off the
 UI event path with explicit limits. Opening guards against edits until completion.
 Saving captures a source/state snapshot; subsequent edits remain dirty.
 
+Application chrome owns independent Files/Outline panel states and a
+Hide Sidebars override. Files occupies the left edge only after a workspace scan
+succeeds; Outline occupies the right. Its inline heading filter retains document order, ancestor context,
+and fold state without creating an application overlay.
+Responsive layout docks open panels while preserving a usable writing column,
+then uses overlays when space is limited. Formatting is transient. Editing modes
+live in document actions. The fixed-height titlebar keeps navigation, document
+identity, and the snapshot-aware save indicator continuously visible.
+Configurable statistics occupy a small fixed-height gutter below the writing
+column. Presentation changes retain source selection and viewport anchoring. Shared sidebar metrics
+and semantic surfaces keep the canvas file tree and widget outline consistent.
+The workspace name belongs to the sidebar header; the tree renders its children.
+
+On macOS a main-thread `muda` menu owner retains the application menu bar and
+attaches it after the first window opens, then synchronizes enabled/checked state.
+Its bounded event channel wakes Iced without polling or blocking. Application
+commands reuse existing guards; native Edit commands are queued and delivered
+once through the focused widget's normal key
+bindings. Later native commands wait for those edits before taking actions such
+as saving a snapshot. Replacing a document drops undelivered menu requests. This
+preserves native editor selection, table drafts, clipboard handling, and modal text fields
+without adding a second source mutation path. Other platforms retain the
+in-window command menu. The macOS content extends into the transparent native
+titlebar while retaining system window buttons.
+
+Startup creates one blank document. Preferences retain appearance, independent
+statistics visibility, and writing typeface. The typeface is applied to the stored
+resolved typography on startup, appearance changes, and preference changes;
+layout/cache metrics include it so text is reshaped on a switch. Panel state is
+session-local; there is no recent-file history or persisted folder session.
+
+Quick Open owns an ephemeral filename/path index derived from the existing bounded
+workspace snapshot. Its focused query intercepts result navigation locally.
+Acceptance reuses guarded file loading; cancellation restores the previous widget
+focus without committing a table draft or editing the source. Workspace changes
+invalidate it, refreshes update it, and closing discards its index and query.
+
+The folder workflow owns navigation, expanded paths, bounded scan generations,
+and operation identities. Folder discovery returns path-only snapshots from a
+worker; stale completions cannot replace a newer scan. The native file-tree
+widget owns pointer/keyboard interaction, hover disclosure, and drag feedback,
+then emits application actions. File organization runs on blocking workers under
+ordered directory and checkpoint locks, with destination and reference guards.
+Moving an active file updates its path without reinstalling its document or
+discarding history. Recovery identities rotate when that path changes. See
+[files and folders](writing-workflows.md#files-and-folders) for limits and behavior.
+
 Markdown/checkpoint publication uses cooperative locks, checked baselines, atomic
 writes, and a recovery journal. Conflicts preserve files and surface an error.
 Each reopen uses a fresh writer identity. See [persistence and recovery](collaboration.md#persistence-and-recovery)
