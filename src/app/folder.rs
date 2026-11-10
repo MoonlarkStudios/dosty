@@ -209,6 +209,44 @@ impl State {
     pub(super) fn is_menu(&self) -> bool {
         matches!(self.dialog, Some(Dialog::Menu { .. }))
     }
+    pub(super) fn has_file(&self, path: &Path) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| !entry.is_directory && entry.path == path)
+    }
+    /// Whether Files opens when the next scan succeeds.
+    pub(super) fn prepare_reveal(&mut self, reveal: bool) {
+        self.reveal_after_scan = reveal;
+    }
+    /// Expanded folders below `root`, relative to it.
+    pub(super) fn expanded_below(&self, root: &Path) -> Vec<PathBuf> {
+        let mut expanded: Vec<_> = self
+            .expanded
+            .iter()
+            .filter_map(|path| path.strip_prefix(root).ok())
+            .filter(|relative| !relative.as_os_str().is_empty())
+            .map(Path::to_owned)
+            .collect();
+        expanded.sort();
+        expanded
+    }
+    /// Expand remembered folders that still exist in the current snapshot.
+    pub(super) fn restore_expanded(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for path in paths {
+            if self
+                .entries
+                .iter()
+                .any(|entry| entry.is_directory && entry.path == path)
+            {
+                self.expanded.insert(path);
+            }
+        }
+        self.refresh_visible();
+    }
+    #[cfg(test)]
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
 
     fn next_navigation(&mut self) -> u64 {
         self.navigation = self.navigation.wrapping_add(1);
@@ -327,7 +365,9 @@ impl App {
                         if reveal {
                             self.reveal_navigation();
                         }
-                        return self.refresh_quick_open();
+                        let root = self.folder.root.clone().expect("root was just set");
+                        let workspace = self.workspace_scanned(&root);
+                        return Task::batch([workspace, self.refresh_quick_open()]);
                     }
                     Err(error) => {
                         let error = error.to_string();
@@ -348,8 +388,7 @@ impl App {
                     return Task::none();
                 }
                 if let Some(path) = path {
-                    self.folder.reveal_after_scan = true;
-                    return self.scan_folder(path);
+                    return self.open_workspace(path);
                 }
                 return Task::none();
             }
@@ -365,10 +404,7 @@ impl App {
                     return Task::none();
                 }
                 match result {
-                    Ok(PathKind::Directory) => {
-                        self.folder.reveal_after_scan = true;
-                        return self.scan_folder(path);
-                    }
+                    Ok(PathKind::Directory) => return self.open_workspace(path),
                     Ok(PathKind::File) if !self.busy => {
                         if self.path.as_ref() == Some(&path) {
                             return Task::none();
@@ -525,8 +561,9 @@ impl App {
                 self.folder.dialog = None;
                 self.folder.error = None;
                 self.overlay = None;
+                let workspace = self.workspace_closed();
                 self.chrome.files.open = false;
-                return operation::focus(EDITOR);
+                return Task::batch([workspace, operation::focus(EDITOR)]);
             }
             Message::Tree(action) if !self.busy => return self.folder_tree_action(action),
             Message::NewDocument(parent) if !self.busy => {
@@ -681,10 +718,12 @@ impl App {
                     self.folder.expanded.insert(path);
                 }
                 self.folder.refresh_visible();
+                return self.persist_workspace();
             }
             file_tree::Action::Expand(path) => {
                 self.folder.expanded.insert(path);
                 self.folder.refresh_visible();
+                return self.persist_workspace();
             }
             file_tree::Action::Menu { path, position } => {
                 self.folder.dialog = Some(Dialog::Menu { path, position });
@@ -706,7 +745,7 @@ impl App {
         Task::none()
     }
 
-    fn scan_folder(&mut self, root: PathBuf) -> Task<AppMessage> {
+    pub(super) fn scan_folder(&mut self, root: PathBuf) -> Task<AppMessage> {
         self.folder.cancel_scan();
         let generation = self.folder.generation;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -912,6 +951,7 @@ impl App {
             }
         };
         let mut open = None;
+        let mut remembered = Task::none();
         let highlighted = match outcome {
             Outcome::Document(path) => {
                 if !self.folder.entries.iter().any(|entry| entry.path == path) {
@@ -942,6 +982,7 @@ impl App {
                     self.notification = Some(warning);
                 }
                 self.folder.remap(&result.from, &result.to);
+                remembered = self.workspace_moved(&result.from, &result.to);
                 if self.document.collaboration().id() == inflight.document
                     && self.document.collaboration().replica_id() == inflight.replica
                     && let Some(path) = result.active_path
@@ -979,9 +1020,14 @@ impl App {
             move |_| AppMessage::Folder(Message::Settled(operation)),
         );
         if let Some(path) = open {
-            return Task::batch([refresh, settle, self.request(Pending::Open(Some(path)))]);
+            return Task::batch([
+                refresh,
+                settle,
+                remembered,
+                self.request(Pending::Open(Some(path))),
+            ]);
         }
-        Task::batch([refresh, settle])
+        Task::batch([refresh, settle, remembered])
     }
 
     fn folder_error(&mut self, error: String) {

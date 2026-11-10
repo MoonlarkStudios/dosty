@@ -57,6 +57,7 @@ fn filename_and_relative_path_terms_rank_exact_and_prefix_matches_first() {
         ]
         .into_iter()
         .map(Path::new),
+        &[],
     );
     state.query = "DRAFT.md".into();
     state.search();
@@ -75,6 +76,38 @@ fn filename_and_relative_path_terms_rank_exact_and_prefix_matches_first() {
     state.query = "missing".into();
     state.search();
     assert!(state.selected_path().is_none());
+}
+
+#[test]
+fn recently_active_documents_lead_and_break_ties_without_overriding_rank() {
+    let root = Path::new("/writing");
+    let files = [
+        "/writing/A.md",
+        "/writing/B.md",
+        "/writing/Notes/C.md",
+        "/writing/C draft.md",
+    ];
+    let recent = [PathBuf::from("/writing/Notes/C.md"), "/writing/B.md".into()];
+    let mut state = State::default();
+    state.index(root, files.into_iter().map(Path::new), &recent);
+    let relative = |state: &State| -> Vec<String> {
+        state
+            .results
+            .iter()
+            .map(|&index| state.candidates[index].relative.clone())
+            .collect()
+    };
+    assert_eq!(
+        relative(&state),
+        ["Notes/C.md", "B.md", "A.md", "C draft.md"]
+    );
+    // An exact filename still outranks a recent partial match.
+    state.query = "a.md".into();
+    state.search();
+    assert_eq!(relative(&state)[0], "A.md");
+    state.query = "c".into();
+    state.search();
+    assert_eq!(relative(&state), ["Notes/C.md", "C draft.md"]);
 }
 
 #[test]

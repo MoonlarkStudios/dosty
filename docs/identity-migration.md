@@ -12,7 +12,8 @@ The Dosty rename needs no data migration. Preferences deliberately continue usin
 `~/Library/Application Support/app.Daytrip.Daytrip` on macOS,
 `$XDG_CONFIG_HOME/daytrip` or `~/.config/daytrip` on Linux, and
 `%APPDATA%\Daytrip\Daytrip\config` on Windows. The complete directory includes
-preferences, recovery entries, bundled samples and their assets.
+preferences, recovery entries, remembered workspaces, bundled samples and their
+assets.
 
 `DOSTY_CONFIG_DIR` overrides that directory. `KOAN_CONFIG_DIR` and then
 `DAYTRIP_CONFIG_DIR` remain fallbacks when the Dosty override is unset. An explicit override selects one complete

@@ -33,3 +33,8 @@ Source: "{#DostyRoot}\target\windows-licenses\*"; DestDir: "{app}\licenses"; Fla
 
 [Icons]
 Name: "{group}\Dosty"; Filename: "{app}\dosty.exe"; IconFilename: "{app}\dosty.ico"
+
+[UninstallDelete]
+; Remembered workspaces are a disposable cache. Preferences and recovery copies,
+; which may hold unsaved writing, remain in the data directory.
+Type: filesandordirs; Name: "{userappdata}\Daytrip\Daytrip\config\workspaces"

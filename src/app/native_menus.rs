@@ -1,5 +1,6 @@
 //! Main-thread macOS menus. Commands return through the application's guarded paths.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use iced::futures::{StreamExt, channel::mpsc};
@@ -7,7 +8,8 @@ use iced::{Task, window};
 use muda::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
 use super::{
-    App, EditorMode, Format, Message, Overlay, Sidebar, chrome, folder, recovery, writing,
+    App, EditorMode, Format, Message, Overlay, Sidebar, chrome, folder, recovery, workspace,
+    writing,
 };
 use crate::editor::menu_input;
 use crate::theme::WritingFont;
@@ -18,6 +20,8 @@ pub enum Command {
     Open,
     QuickOpen,
     OpenFolder,
+    OpenRecent(usize),
+    ClearRecent,
     Save,
     SaveAs,
     Rename,
@@ -76,6 +80,14 @@ pub(super) struct State {
     help: Submenu,
     entries: Vec<Entry>,
     hidden: bool,
+    /// File → Open Recent is rebuilt from fixed command items whenever the
+    /// remembered folders change, so menu identifiers stay stable.
+    recent: Submenu,
+    recent_items: Vec<MenuItem>,
+    recent_clear: MenuItem,
+    recent_empty: MenuItem,
+    recent_separator: PredefinedMenuItem,
+    recent_shown: Option<Vec<PathBuf>>,
 }
 
 impl State {
@@ -112,13 +124,38 @@ impl State {
 
     fn new() -> muda::Result<(Self, Task<Message>)> {
         let root = Menu::new();
+        let command_item = |command: Command, label: &str| {
+            MenuItem::with_id(format!("dosty.{command:?}"), label, true, None)
+        };
         let mut state = Self {
             root,
             window: Submenu::new("Window", true),
             help: Submenu::new("Help", true),
             entries: Vec::new(),
             hidden: false,
+            recent: Submenu::new("Open Recent", true),
+            recent_items: (0..crate::io::workspace_state::MAX_RECENT_WORKSPACES)
+                .map(|index| command_item(Command::OpenRecent(index), ""))
+                .collect(),
+            recent_clear: command_item(Command::ClearRecent, "Clear Menu"),
+            recent_empty: MenuItem::new("No Recent Folders", false, None),
+            recent_separator: PredefinedMenuItem::separator(),
+            recent_shown: None,
         };
+        let recent_entries: Vec<_> = state
+            .recent_items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (Command::OpenRecent(index), item.clone()))
+            .chain([(Command::ClearRecent, state.recent_clear.clone())])
+            .collect();
+        state
+            .entries
+            .extend(recent_entries.into_iter().map(|(command, item)| Entry {
+                command,
+                item: Item::Action(item),
+                enabled: true,
+            }));
         let application = Submenu::new("Dosty", true);
         application.append(&PredefinedMenuItem::about(
             Some("About Dosty"),
@@ -160,6 +197,11 @@ impl State {
             ("Open…", Command::Open, Some("Meta+o")),
             ("Quick Open…", Command::QuickOpen, Some("Meta+p")),
             ("Open Folder…", Command::OpenFolder, Some("Meta+Shift+o")),
+        ] {
+            state.add(&file, label, command, shortcut, false)?;
+        }
+        file.append(&state.recent)?;
+        for (label, command, shortcut) in [
             ("Save", Command::Save, Some("Meta+s")),
             ("Save As…", Command::SaveAs, Some("Meta+Shift+s")),
             ("Export HTML…", Command::Export, None),
@@ -309,7 +351,36 @@ impl State {
         ))
     }
 
+    fn sync_recent(&mut self, recent: &[PathBuf]) {
+        if self.recent_shown.as_deref() == Some(recent) {
+            return;
+        }
+        while self.recent.remove_at(0).is_some() {}
+        let result = if recent.is_empty() {
+            self.recent.append(&self.recent_empty)
+        } else {
+            self.recent_items
+                .iter()
+                .zip(recent)
+                .try_for_each(|(item, root)| {
+                    item.set_text(workspace::recent_label(root, recent));
+                    self.recent.append(item)
+                })
+                .and_then(|()| {
+                    self.recent.append_items(&[
+                        &self.recent_separator as &dyn IsMenuItem,
+                        &self.recent_clear,
+                    ])
+                })
+        };
+        if let Err(error) = result {
+            tracing::warn!("could not update Open Recent: {error}");
+        }
+        self.recent_shown = Some(recent.to_vec());
+    }
+
     fn sync(&mut self, app: &App) {
+        self.sync_recent(app.workspace.recent());
         for entry in &mut self.entries {
             let (enabled, checked) = availability(app, entry.command);
             if enabled != entry.enabled {
@@ -340,6 +411,8 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
     match command {
         Command::QuickOpen => (ready && app.folder.root().is_some(), false),
+        Command::OpenRecent(index) => (ready && index < app.workspace.recent().len(), false),
+        Command::ClearRecent => (!app.workspace.recent().is_empty(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),
         Command::Mode(mode) => (ready, app.mode == mode),
         Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
@@ -432,6 +505,8 @@ impl App {
             Command::Open => Message::Open,
             Command::QuickOpen => Message::QuickOpen(super::quick_open::Message::Open),
             Command::OpenFolder => Message::Folder(folder::Message::Pick),
+            Command::OpenRecent(index) => Message::Workspace(workspace::Message::OpenRecent(index)),
+            Command::ClearRecent => Message::Workspace(workspace::Message::ClearRecent),
             Command::Save => Message::Save,
             Command::SaveAs => Message::SaveAs,
             Command::Export => Message::Export,

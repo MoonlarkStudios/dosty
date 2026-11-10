@@ -1,5 +1,7 @@
 //! Native quiet titlebar, independent sidebars, and document commands.
 
+use std::borrow::Cow;
+
 use iced::advanced::widget;
 use iced::keyboard::{self, Key, key};
 use iced::widget::{
@@ -114,6 +116,7 @@ pub enum Menu {
     Help,
     Navigation,
     Preferences,
+    Recent,
     Workspace,
 }
 
@@ -191,16 +194,21 @@ enum SaveState {
 }
 
 struct Command {
-    label: &'static str,
+    label: Cow<'static, str>,
     icon: Icon,
     action: Message,
     enabled: bool,
 }
 
 impl Command {
-    fn action(label: &'static str, icon: Icon, action: AppMessage, enabled: bool) -> Self {
+    fn action(
+        label: impl Into<Cow<'static, str>>,
+        icon: Icon,
+        action: AppMessage,
+        enabled: bool,
+    ) -> Self {
         Self {
-            label,
+            label: label.into(),
             icon,
             action: Message::Run(Box::new(action)),
             enabled,
@@ -208,7 +216,7 @@ impl Command {
     }
     fn menu(label: &'static str, icon: Icon, menu: Menu) -> Self {
         Self {
-            label,
+            label: label.into(),
             icon,
             action: Message::Menu(menu),
             enabled: true,
@@ -407,6 +415,7 @@ impl App {
                             | Menu::Format
                             | Menu::Navigation
                             | Menu::Preferences
+                            | Menu::Recent
                             | Menu::Workspace
                     )
                 ) {
@@ -806,6 +815,7 @@ impl App {
                         AppMessage::Folder(folder::Message::Pick),
                         ready,
                     ),
+                    Command::menu("Open recent…", Icon::Folder, Menu::Recent),
                     Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                     Command::menu("Document actions…", Icon::Document, Menu::Document),
                     Command::action("Export HTML…", Icon::Export, AppMessage::Export, ready),
@@ -931,6 +941,41 @@ impl App {
                     self.chrome.files.open || self.chrome.outline.open,
                 ),
             ],
+            Menu::Recent => {
+                let recent = self.workspace.recent();
+                let mut commands: Vec<_> = recent
+                    .iter()
+                    .enumerate()
+                    .map(|(index, root)| {
+                        Command::action(
+                            super::workspace::recent_label(root, recent),
+                            if self.folder.root() == Some(root.as_path()) {
+                                Icon::Check
+                            } else {
+                                Icon::Folder
+                            },
+                            AppMessage::Workspace(super::workspace::Message::OpenRecent(index)),
+                            ready,
+                        )
+                    })
+                    .collect();
+                if commands.is_empty() {
+                    commands.push(Command::action(
+                        "No recent folders",
+                        Icon::Folder,
+                        AppMessage::Dismiss,
+                        false,
+                    ));
+                } else {
+                    commands.push(Command::action(
+                        "Clear recent folders",
+                        Icon::Close,
+                        AppMessage::Workspace(super::workspace::Message::ClearRecent),
+                        true,
+                    ));
+                }
+                commands
+            }
             Menu::Workspace => {
                 let mut commands = vec![Command::action(
                     if self.folder.root().is_some() {
@@ -942,6 +987,9 @@ impl App {
                     AppMessage::Folder(folder::Message::Pick),
                     ready,
                 )];
+                if self.workspace.recent().len() > 1 {
+                    commands.push(Command::menu("Open recent…", Icon::Folder, Menu::Recent));
+                }
                 if let Some(root) = self.folder.root() {
                     commands.extend([
                         Command::action(

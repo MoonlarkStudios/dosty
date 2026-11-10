@@ -463,6 +463,15 @@ fn native_quiet_previews() {
     drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Workspace)));
     render(&app, Size::new(1180.0, 820.0), "workspace-menu");
     drop(app.update_message(Message::CloseOverlay));
+    app.workspace.remember_for_preview(&[
+        "/writing/Field notes",
+        "/Users/writer/Essays",
+        "/Volumes/Archive/Essays",
+        "/Users/writer/Letters",
+    ]);
+    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Recent)));
+    render(&app, Size::new(1180.0, 820.0), "workspace-recent-menu");
+    drop(app.update_message(Message::CloseOverlay));
     for font in WritingFont::ALL {
         app.resolved_theme.typography.font = font;
         app.preferences.writing_font = font;
