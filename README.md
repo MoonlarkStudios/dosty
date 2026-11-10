@@ -18,8 +18,9 @@ The folder-name menu manages the workspace. Quick Open (Cmd/Ctrl+P) finds files
 by name or relative path, including files in collapsed folders.
 An always-visible titlebar offers formatting on demand and a document menu for editing
 modes. Writing uses sans-serif text by default, with serif available in Settings. macOS uses native application menus. Configurable word count and reading
-time sit below the writing area. Dosty keeps no recent-file history or saved
-folder sessions.
+time sit below the writing area. A folder is a remembered workspace: Dosty reopens
+the last one with its document, caret, expanded folders and sidebars, and lists
+recent folders under Open Recent.
 
 See the [writing guide](assets/guide.md) for everyday editing and
 [table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.

@@ -48,6 +48,8 @@ mod recovery;
 pub(super) mod table;
 #[path = "table_grid.rs"]
 pub(super) mod table_grid;
+#[path = "workspace.rs"]
+pub(super) mod workspace;
 #[path = "writing.rs"]
 pub(super) mod writing;
 
@@ -112,6 +114,7 @@ pub struct App {
     #[cfg(target_os = "macos")]
     native_menu_queue: std::collections::VecDeque<native_menus::Command>,
     folder: folder::State,
+    workspace: workspace::State,
     quick_open: quick_open::State,
     overlay: Option<Overlay>,
     pending: Option<Pending>,
@@ -144,6 +147,7 @@ pub enum Message {
     NativeMenusReady,
     Chrome(chrome::Message),
     Folder(folder::Message),
+    Workspace(workspace::Message),
     QuickOpen(quick_open::Message),
     #[cfg(target_os = "macos")]
     Accessibility(accesskit::ActionRequest),
@@ -362,6 +366,7 @@ impl App {
             #[cfg(target_os = "macos")]
             native_menu_queue: std::collections::VecDeque::new(),
             folder: folder::State::default(),
+            workspace: workspace::State::default(),
             quick_open: quick_open::State::default(),
             overlay: None,
             pending: None,
@@ -398,9 +403,10 @@ impl App {
         } else {
             Task::none()
         };
-        let open_task = std::env::args_os()
-            .nth(1)
-            .map(PathBuf::from)
+        let argument = std::env::args_os().nth(1).map(PathBuf::from);
+        // An explicit document or folder replaces reopening the last workspace.
+        let workspace_task = app.workspace_launch(argument.is_none());
+        let open_task = argument
             .map(|path| Task::done(Message::OpenPath(path)))
             .unwrap_or_else(Task::none);
         let image_task = app.image_tasks();
@@ -415,6 +421,7 @@ impl App {
             Task::batch([
                 operation::focus(EDITOR),
                 theme_task,
+                workspace_task,
                 open_task,
                 image_task,
                 recovery_task,
@@ -758,6 +765,7 @@ impl App {
             Message::NativeMenusReady => self.attach_native_menus(),
             Message::Chrome(message) => return self.update_chrome(message),
             Message::Folder(message) => return self.update_folder(message),
+            Message::Workspace(message) => return self.update_workspace(message),
             Message::QuickOpen(message) => return self.update_quick_open(message),
             #[cfg(target_os = "macos")]
             Message::Accessibility(request) => return self.accessibility_action(request),
@@ -1113,8 +1121,15 @@ impl App {
                         );
                         self.saved_version = version;
                         let folder_task = self.folder_document_changed();
+                        let focus = if self.restore_workspace_caret() {
+                            operation::focus(EDITOR)
+                        } else {
+                            Task::none()
+                        };
                         return Task::batch([
                             folder_task,
+                            self.persist_workspace(),
+                            focus,
                             operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
                         ]);
                     }
@@ -1243,7 +1258,10 @@ impl App {
                     }
                 }
             }
-            Message::ToggleSidebar(side) => return self.toggle_sidebar(side),
+            Message::ToggleSidebar(side) => {
+                let toggled = self.toggle_sidebar(side);
+                return Task::batch([toggled, self.persist_workspace()]);
+            }
             Message::ShowSidebar(side) => return self.show_sidebar(side),
             Message::HideSidebars => return self.toggle_hidden_sidebars(),
             Message::ShowSettings => {
@@ -2305,7 +2323,7 @@ impl App {
             }
             Pending::Close(id) => {
                 self.recovery.retire();
-                return window::close(id);
+                return self.close_after_workspace_save(id);
             }
         }
         operation::snap_to(SCROLL, scrollable::RelativeOffset::START)
@@ -2316,6 +2334,7 @@ impl App {
     }
 
     fn install_document(&mut self, document: Document, path: Option<PathBuf>, name: String) {
+        self.workspace_document_leaving();
         self.menu_input.clear();
         #[cfg(target_os = "macos")]
         self.native_menu_queue.clear();

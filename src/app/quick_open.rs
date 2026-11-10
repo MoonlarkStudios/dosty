@@ -35,6 +35,7 @@ pub enum Message {
 }
 
 struct Candidate {
+    recency: usize,
     path: PathBuf,
     name: String,
     relative: String,
@@ -63,7 +64,20 @@ impl State {
         };
     }
 
-    fn index(&mut self, root: &Path, files: impl Iterator<Item = impl AsRef<Path>>) {
+    /// Index workspace files. Documents in `recent` (most recent first) lead
+    /// the list and break ties within each match rank.
+    fn index(
+        &mut self,
+        root: &Path,
+        files: impl Iterator<Item = impl AsRef<Path>>,
+        recent: &[PathBuf],
+    ) {
+        let recency: std::collections::HashMap<&Path, usize> = recent
+            .iter()
+            .enumerate()
+            .map(|(rank, path)| (path.as_path(), rank))
+            .collect();
+        let recency = |path: &Path| recency.get(path).copied().unwrap_or(usize::MAX);
         self.candidates = files
             .filter_map(|path| {
                 let path = path.as_ref();
@@ -73,6 +87,7 @@ impl State {
                     .to_string_lossy()
                     .replace(std::path::MAIN_SEPARATOR, "/");
                 Some(Candidate {
+                    recency: recency(path),
                     path: path.to_owned(),
                     name_lower: name.to_lowercase(),
                     path_lower: relative.to_lowercase(),
@@ -82,8 +97,9 @@ impl State {
             })
             .collect();
         self.candidates.sort_by(|a, b| {
-            a.name_lower
-                .cmp(&b.name_lower)
+            a.recency
+                .cmp(&b.recency)
+                .then_with(|| a.name_lower.cmp(&b.name_lower))
                 .then_with(|| a.path_lower.cmp(&b.path_lower))
         });
         self.search();
@@ -136,7 +152,8 @@ impl App {
         }
         let selected = self.quick_open.selected_path().map(Path::to_owned);
         if let Some(root) = self.folder.root() {
-            self.quick_open.index(root, self.folder.files());
+            let recent = self.workspace.recent_documents();
+            self.quick_open.index(root, self.folder.files(), &recent);
         }
         self.quick_open.selected = self
             .quick_open
@@ -175,7 +192,15 @@ impl App {
             };
             self.quick_open.clear();
             self.quick_open.root = Some(root.to_owned());
-            self.quick_open.index(root, self.folder.files());
+            let recent = self.workspace.recent_documents();
+            self.quick_open.index(root, self.folder.files(), &recent);
+            // The active document leads the recent list; preselect the one
+            // before it so Quick Open then Enter switches back.
+            if self.quick_open.selected_path() == self.path.as_deref()
+                && self.quick_open.results.len() > 1
+            {
+                self.quick_open.selected = 1;
+            }
             self.chrome.menu = None;
             self.overlay = Some(Overlay::QuickOpen);
             self.preserve_viewport_generation = Some(self.document.collaboration().generation());
