@@ -47,6 +47,8 @@ pub enum Message {
         result: Result<folder::Snapshot, FileError>,
     },
     Refresh,
+    /// The window regained focus.
+    WindowFocused,
     /// Remove the open place from the library. Its files are untouched.
     Remove,
     /// Name the never-saved document on the page.
@@ -301,9 +303,10 @@ impl State {
         }
         for siblings in children.values_mut() {
             siblings.sort_by(|a, b| {
-                a.is_directory
-                    .cmp(&b.is_directory)
-                    .then_with(|| a.path.file_name().cmp(&b.path.file_name()))
+                // Folders lead, as they do in the switcher.
+                b.is_directory
+                    .cmp(&a.is_directory)
+                    .then_with(|| folder::natural_cmp(&name(&a.path), &name(&b.path)))
             });
         }
         let mut visible = Vec::new();
@@ -315,7 +318,11 @@ impl State {
             let expanded = self.expanded.contains(&entry.path);
             visible.push(file_tree::Entry {
                 path: entry.path.clone(),
-                label: name(&entry.path),
+                label: if entry.is_directory {
+                    name(&entry.path)
+                } else {
+                    title(&entry.path)
+                },
                 depth,
                 directory: entry.is_directory,
                 expanded,
@@ -553,6 +560,11 @@ impl App {
                 self.overlay = None;
                 self.folder.reveal_after_scan = true;
                 return self.scan_folder(path);
+            }
+            // Files changed by another program appear when the writer returns,
+            // without closing anything they had open.
+            Message::WindowFocused if !self.busy && self.overlay.is_none() => {
+                return self.folder_refresh();
             }
             Message::Refresh if !self.busy => {
                 self.folder.dialog = None;
@@ -1098,7 +1110,8 @@ impl App {
             .highlighted(self.folder.highlighted.as_deref())
             .enabled(!self.busy && self.overlay.is_none()),
         );
-        if self.folder.scanning {
+        // A rescan of a place already on show stays silent.
+        if self.folder.scanning && self.folder.entries.is_empty() {
             content = content.push(text("Finding Markdown files…").size(11).color(tokens.muted));
         }
         if self.folder.root.is_some()
@@ -1507,6 +1520,19 @@ impl App {
     }
 }
 
+/// A document's name as shown to the writer: without its Markdown extension.
+pub(super) fn title(path: &Path) -> String {
+    let shown = if folder::is_markdown(path) {
+        path.file_stem()
+    } else {
+        path.file_name()
+    };
+    shown.map_or_else(
+        || path.display().to_string(),
+        |shown| shown.to_string_lossy().into_owned(),
+    )
+}
+
 pub(super) fn name(path: &Path) -> String {
     path.file_name().map_or_else(
         || path.display().to_string(),
@@ -1691,6 +1717,48 @@ mod tests {
         );
         assert_eq!(app.session.selection, selection);
         assert!(app.session.dirty);
+    }
+
+    #[test]
+    fn rows_show_titles_in_reading_order_and_refocusing_rescans_quietly() {
+        let mut app = app();
+        let entry = |path: &str, is_directory| folder::Entry {
+            path: path.into(),
+            is_directory,
+        };
+        drop(app.update_folder(Message::Scanned {
+            generation: 0,
+            result: Ok(folder::Snapshot {
+                root: "/writing".into(),
+                entries: vec![
+                    entry("/writing/Chapter 10.md", false),
+                    entry("/writing/chapter 2.MARKDOWN", false),
+                    entry("/writing/note.md", false),
+                    entry("/writing/Part 2", true),
+                    entry("/writing/Part 10", true),
+                ],
+                limited: false,
+                warnings: Vec::new(),
+            }),
+        }));
+        let labels: Vec<_> = app
+            .folder
+            .visible
+            .iter()
+            .map(|row| row.label.as_str())
+            .collect();
+        assert_eq!(
+            labels,
+            ["Part 2", "Part 10", "chapter 2", "Chapter 10", "note"]
+        );
+
+        app.overlay = Some(Overlay::Settings);
+        drop(app.update_folder(Message::WindowFocused));
+        assert!(!app.folder.scanning, "nothing open is disturbed");
+        app.overlay = None;
+        drop(app.update_folder(Message::WindowFocused));
+        assert!(app.folder.scanning);
+        assert_eq!(app.folder.visible.len(), 5, "rows stay while rescanning");
     }
 
     #[test]

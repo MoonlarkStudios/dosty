@@ -21,6 +21,8 @@ use crate::theme::styles;
 pub(crate) const ID: &str = "folder-file-tree";
 const ROW_HEIGHT: f32 = styles::SIDEBAR_ROW_HEIGHT;
 const INDENT: f32 = styles::SIDEBAR_INDENT;
+/// Where a row's name starts, past the space its chevron may occupy.
+const LABEL_INSET: f32 = 18.0;
 const DRAG_THRESHOLD: f32 = 7.0;
 const HOVER_DELAY: Duration = Duration::from_millis(600);
 
@@ -648,12 +650,8 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
             // Retain a readable filename even in a deeply nested folder. The
             // tooltip and context menu keep the complete filesystem location.
             let x = 7.0 + (entry.depth as f32 * INDENT).min((row.width - 170.0).max(0.0));
-            draw_icon(
-                &mut frame,
-                Point::new(x + 14.0, row.center_y() - bounds.y - 7.0),
-                entry.directory,
-                muted,
-            );
+            // Names carry the tree. A chevron alone marks a folder; documents
+            // have no glyph, and both names start on the same line.
             if entry.directory {
                 draw_chevron(
                     &mut frame,
@@ -663,9 +661,9 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                 );
             }
             let label = Rectangle {
-                x: bounds.x + x + 36.0,
+                x: bounds.x + x + LABEL_INSET,
                 y: row.y,
-                width: (row.width - x - 67.0).max(1.0),
+                width: (row.width - x - LABEL_INSET - 31.0).max(1.0),
                 height: ROW_HEIGHT,
             };
             draw_label(
@@ -922,45 +920,6 @@ fn draw_label(
         Point::new(bounds.x, bounds.center_y()),
         color,
         clip,
-    );
-}
-fn draw_icon(frame: &mut Frame, point: Point, directory: bool, color: Color) {
-    let path = CanvasPath::new(|p| {
-        if directory {
-            p.move_to(point + Vector::new(0.0, 3.0));
-            p.line_to(point + Vector::new(5.0, 3.0));
-            p.line_to(point + Vector::new(7.0, 5.0));
-            p.line_to(point + Vector::new(14.0, 5.0));
-            p.line_to(point + Vector::new(13.0, 13.0));
-            p.line_to(point + Vector::new(0.0, 13.0));
-            p.close();
-            p.move_to(point + Vector::new(0.0, 3.0));
-            p.line_to(point);
-            p.line_to(point + Vector::new(5.0, 0.0));
-            p.line_to(point + Vector::new(7.0, 2.0));
-            p.line_to(point + Vector::new(13.0, 2.0));
-        } else {
-            p.move_to(point);
-            p.line_to(point + Vector::new(7.0, 0.0));
-            p.line_to(point + Vector::new(11.0, 4.0));
-            p.line_to(point + Vector::new(11.0, 14.0));
-            p.line_to(point + Vector::new(0.0, 14.0));
-            p.close();
-            p.move_to(point + Vector::new(7.0, 0.0));
-            p.line_to(point + Vector::new(7.0, 4.0));
-            p.line_to(point + Vector::new(11.0, 4.0));
-            p.move_to(point + Vector::new(3.0, 8.0));
-            p.line_to(point + Vector::new(8.0, 8.0));
-            p.move_to(point + Vector::new(3.0, 11.0));
-            p.line_to(point + Vector::new(8.0, 11.0));
-        }
-    });
-    frame.stroke(
-        &path,
-        Stroke::default()
-            .with_color(color)
-            .with_width(1.2)
-            .with_line_cap(LineCap::Round),
     );
 }
 fn draw_chevron(frame: &mut Frame, point: Point, expanded: bool, color: Color) {

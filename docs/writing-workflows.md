@@ -120,12 +120,19 @@ nothing else; the Windows uninstaller removes it while keeping preferences and
 recovery copies.
 
 The Files tree preserves the actual directory hierarchy, including empty folders.
+Folders come first, then documents, each in reading order: case-insensitive, with
+runs of digits compared as numbers, so `Chapter 2` precedes `Chapter 10`. Quick
+Open orders a folder's contents the same way. Documents are shown without their
+Markdown extension; a chevron marks a folder and documents carry no glyph.
 Discovery reads paths and file types on a worker, not document contents. It finds
 `.md` and `.markdown` case-insensitively, skips symlinks, hidden items, `target`,
 `node_modules`, and `*.assets` folders, and stops at 32,768 visited entries,
 48 levels, or 8 MiB of retained paths. Partial scans and unreadable subfolders
-surface a notice. **Refresh folder** discovers external changes; there is no
-filesystem watcher. Opening another folder cancels or invalidates an older scan.
+surface a notice. The open place is rescanned whenever the window regains focus
+with nothing else open over the page, so files changed in another program are
+there on return; the rows stay in place while it runs. **Refresh folder** does the
+same on demand. There is no filesystem watcher, so changes made while Dosty stays
+focused wait for one of those. Opening another folder cancels or invalidates an older scan.
 
 Hover or keyboard-focus a row to reveal its action button; right-click,
 Shift+F10, and the context-menu key offer the same actions. A delayed hover shows

@@ -120,19 +120,6 @@ pub(super) struct State {
     cancel_scan: Option<Arc<AtomicBool>>,
 }
 
-/// A document's name as shown to the writer: without its Markdown extension.
-pub(super) fn title(path: &Path) -> String {
-    let name = if discovery::is_markdown(path) {
-        path.file_stem()
-    } else {
-        path.file_name()
-    };
-    name.map_or_else(
-        || path.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    )
-}
-
 fn portable(path: &Path) -> String {
     path.to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
@@ -159,7 +146,7 @@ impl State {
         Some(Candidate {
             recency,
             path: path.to_owned(),
-            title: title(path),
+            title: super::folder::title(path),
             location: match (other, parent.is_empty()) {
                 (_, true) => place.clone(),
                 (false, false) => parent,
@@ -347,7 +334,7 @@ impl State {
                 heading: None,
             })
             .collect();
-        folders.sort_by_key(|row| row.title.to_lowercase());
+        folders.sort_by(|a, b| discovery::natural_cmp(&a.title, &b.title));
         let mut documents: Vec<_> = self
             .candidates
             .iter()
@@ -358,7 +345,7 @@ impl State {
                 ..candidate.row()
             })
             .collect();
-        documents.sort_by_key(|row| row.title.to_lowercase());
+        documents.sort_by(|a, b| discovery::natural_cmp(&a.title, &b.title));
         folders.append(&mut documents);
         self.push_section(heading, &mut folders);
     }
@@ -436,10 +423,10 @@ impl App {
             .dirty()
             .map(|session| Unsaved {
                 session: session.id(),
-                title: session
-                    .path
-                    .as_deref()
-                    .map_or_else(|| title(Path::new(&session.display_name)), title),
+                title: session.path.as_deref().map_or_else(
+                    || super::folder::title(Path::new(&session.display_name)),
+                    super::folder::title,
+                ),
                 location: match (session.path.as_deref(), session.folder.as_deref()) {
                     (Some(path), _) => path.parent().map(super::folder::name).unwrap_or_default(),
                     (None, Some(folder)) => format!("Draft in {}", super::folder::name(folder)),

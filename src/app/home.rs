@@ -70,7 +70,7 @@ impl App {
         for path in recent {
             let location = path.parent().map(folder::name).unwrap_or_default();
             content = content.push(choice(
-                quick_open::title(&path),
+                folder::title(&path),
                 location,
                 Message::Folder(folder::Message::Tree(file_tree::Action::Open(path))),
             ));

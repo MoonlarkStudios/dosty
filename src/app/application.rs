@@ -3549,6 +3549,9 @@ fn event_message(event: Event, status: iced::event::Status, id: window::Id) -> O
         Event::Window(window::Event::Unfocused) => {
             Some(Message::Outline(outline::Message::CancelDrag))
         }
+        Event::Window(window::Event::Focused) => {
+            Some(Message::Folder(folder::Message::WindowFocused))
+        }
         _ => None,
     }
 }
