@@ -4,7 +4,7 @@ The optional right Outline sidebar lists document headings as a hierarchy. Discl
 
 ## Navigation
 
-Open Outline with the right titlebar button, View → Outline on macOS, or Cmd/Ctrl+Alt+O. Files remains independently available on the left when a folder workspace is open. The toggle keeps Outline beside the writing surface until closed. In narrow windows it overlays the document to protect the writing column. A heading jump leaves Outline open. Hide Sidebars hides/restores the previous panel arrangement.
+Open Outline with the right titlebar button, View → Outline on macOS, or Cmd/Ctrl+Alt+O. Files remains independently available on the left. The toggle keeps Outline beside the writing surface until closed. In narrow windows it overlays the document to protect the writing column. A heading jump leaves Outline open. Hide Sidebars hides/restores the previous panel arrangement.
 
 - Click a heading to jump to it. Read view stays in Read mode; Live and Source retain their mode.
 - Click Search or press Cmd/Ctrl+Shift+J to reveal the inline heading filter, opening Outline if necessary. It matches case-insensitive terms in heading and ancestor titles. Results stay in document order with their ancestor context. Matching descendants remain visible through collapsed branches without changing fold state. There is no modal picker.

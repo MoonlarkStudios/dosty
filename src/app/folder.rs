@@ -5,14 +5,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use iced::keyboard::{self, Key, key::Named};
+use iced::keyboard::key::Named;
+use iced::keyboard::{self, Key};
 use iced::widget::{
-    button, column, container, mouse_area, opaque, operation, row, scrollable, space, text,
-    text_input,
+    button, column, container, mouse_area, opaque, operation, row, scrollable, text, text_input,
 };
-use iced::{Element, Event, Fill, Padding, Point, Size, Task, event, window};
+use iced::{Alignment, Element, Event, Fill, Padding, Point, Size, Task, event, window};
 
 use super::{App, EDITOR, Message as AppMessage, Overlay, Pending};
+use crate::app::icon::{self, Icon};
 use crate::editor::file_tree::{self, FileTree};
 use crate::io::assets::is_image;
 use crate::io::storage::FileError;
@@ -1113,12 +1114,104 @@ impl App {
         }
     }
 
-    pub(super) fn folder_view(&self) -> Element<'_, AppMessage> {
-        if self.folder.root.is_none() {
-            return space().into();
-        }
+    /// Unsaved documents that no row of the tree can stand for: drafts that
+    /// have never been saved, and documents outside the open place.
+    fn unsaved_elsewhere(&self) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let mut content = column![].spacing(10);
+        let page = self.session.dirty.then_some((&self.session, true));
+        let sessions = page
+            .into_iter()
+            .chain(self.background.dirty().map(|session| (session, false)))
+            .filter(|(session, _)| {
+                session
+                    .path
+                    .as_deref()
+                    .is_none_or(|path| !self.folder.has_file(path))
+            });
+        let mut group = column![].spacing(2);
+        for (index, (session, on_page)) in sessions.enumerate() {
+            if index == 0 {
+                group = group.push(
+                    container(text("Not saved yet").size(11).color(tokens.muted))
+                        .padding([0, styles::SIDEBAR_INSET as u16]),
+                );
+            }
+            let location = session
+                .path
+                .as_deref()
+                .and_then(Path::parent)
+                .or(session.folder.as_deref())
+                .map(name)
+                .unwrap_or_default();
+            // Titles and marks line up with the tree's rows below.
+            let label = row![
+                container(
+                    text(title(Path::new(&session.display_name)))
+                        .size(styles::SIDEBAR_TEXT_SIZE)
+                        .wrapping(text::Wrapping::None)
+                )
+                .clip(true)
+                .width(Fill),
+                text(location)
+                    .size(11)
+                    .color(tokens.muted)
+                    .wrapping(text::Wrapping::None),
+                icon::sized(Icon::Modified, tokens.accent, 16.0),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+            group = group.push(
+                button(label)
+                    .padding(Padding::new(6.0).left(25.0).right(6.0))
+                    .width(Fill)
+                    .on_press_maybe(
+                        (!on_page && !self.busy).then(|| AppMessage::Resume(session.id())),
+                    )
+                    .style(styles::button_style(
+                        tokens,
+                        if on_page {
+                            Button::Selected
+                        } else {
+                            Button::Quiet
+                        },
+                    )),
+            );
+        }
+        group.into()
+    }
+
+    pub(super) fn folder_view(&self) -> Element<'_, AppMessage> {
+        let tokens = self.resolved_theme.tokens;
+        let mut content = column![self.unsaved_elsewhere()].spacing(10);
+        let Some(root) = self.folder.root() else {
+            return content
+                .push(
+                    container(
+                        column![
+                            text("Add a place to see its folders and documents here.")
+                                .size(12)
+                                .color(tokens.muted),
+                            self.small_button(
+                                "Add place…",
+                                AppMessage::Folder(Message::Pick),
+                                false
+                            ),
+                        ]
+                        .spacing(10),
+                    )
+                    .padding([0, styles::SIDEBAR_INSET as u16]),
+                )
+                .height(Fill)
+                .into();
+        };
+        let unsaved = self
+            .session
+            .dirty
+            .then_some(&self.session)
+            .into_iter()
+            .chain(self.background.dirty())
+            .filter_map(|session| session.path.clone())
+            .collect();
         content = content.push(
             FileTree::new(
                 &self.folder.visible,
@@ -1126,11 +1219,8 @@ impl App {
                 tokens,
                 |action| AppMessage::Folder(Message::Tree(action)),
             )
-            .root(
-                self.folder
-                    .root()
-                    .expect("folder view requires a workspace"),
-            )
+            .root(root)
+            .unsaved(unsaved)
             .highlighted(self.folder.highlighted.as_deref())
             .enabled(!self.busy && self.overlay.is_none()),
         );

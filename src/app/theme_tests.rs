@@ -508,6 +508,62 @@ fn native_quiet_previews() {
     );
 }
 
+#[test]
+#[ignore = "render the sidebar without a place and with unsaved documents for visual inspection"]
+fn sidebar_unsaved_previews() {
+    let (mut app, _) = App::new();
+    app.set_document(
+        "# A thought\n\nUnfinished.".into(),
+        None,
+        "A thought.md".into(),
+    );
+    app.session.dirty = true;
+    drop(app.update(Message::New));
+    app.chrome.files.open = true;
+    render(&app, Size::new(1180.0, 820.0), "sidebar-library-empty");
+
+    let root = std::path::Path::new("/writing/Field notes");
+    drop(
+        app.update_folder(folder::Message::Scanned {
+            generation: 0,
+            result: Ok(crate::io::folder::Snapshot {
+                root: root.to_owned(),
+                entries: [
+                    ("The quiet hour.md", false),
+                    ("Launch notes.md", false),
+                    ("Research", true),
+                    ("Research/Source notes.md", false),
+                    ("Drafts", true),
+                    ("Drafts/Opening.md", false),
+                ]
+                .into_iter()
+                .map(|(name, is_directory)| crate::io::folder::Entry {
+                    path: root.join(name),
+                    is_directory,
+                })
+                .collect(),
+                limited: false,
+                warnings: Vec::new(),
+            }),
+        }),
+    );
+    for name in [
+        "Research/Source notes.md",
+        "Launch notes.md",
+        "The quiet hour.md",
+    ] {
+        app.set_document(
+            "Text".into(),
+            Some(root.join(name)),
+            name.rsplit('/').next().unwrap().into(),
+        );
+        app.session.dirty = true;
+    }
+    app.notification = None;
+    app.chrome.files.open = true;
+    render(&app, Size::new(1180.0, 820.0), "sidebar-unsaved");
+}
+
 #[tokio::test]
 #[ignore = "render the image preview and image rows for visual inspection"]
 async fn image_previews() {

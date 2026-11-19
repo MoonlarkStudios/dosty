@@ -414,10 +414,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
         Command::Move | Command::Location => (ready && app.session.path.is_some(), false),
         Command::UndoMove => (ready && app.folder.can_undo(), false),
         Command::BackToReference => (ready && app.footnotes.can_return(), false),
-        Command::Files => (
-            ready && app.folder.root().is_some(),
-            app.folder.root().is_some() && app.chrome.files.open && !app.chrome.sidebars_hidden,
-        ),
+        Command::Files => (ready, app.chrome.files.open && !app.chrome.sidebars_hidden),
         Command::Outline => (
             ready,
             app.chrome.outline.open && !app.chrome.sidebars_hidden,
@@ -594,7 +591,10 @@ mod tests {
         assert_eq!(app.session.document.source(), "café and 🦀");
         drop(app.native_menu_command(Command::Mode(EditorMode::Source)));
         assert!(availability(&app, Command::Mode(EditorMode::Source)).1);
-        assert!(!availability(&app, Command::Files).0);
+        assert!(
+            availability(&app, Command::Files).0,
+            "Files offers the library before any place is open"
+        );
         drop(app.update_folder(folder::Message::Scanned {
             generation: 0,
             result: Ok(crate::io::folder::Snapshot {

@@ -223,6 +223,8 @@ pub enum Message {
     Navigate(i32),
     /// Go back or forward through the documents visited in this window.
     Step(Direction),
+    /// Return an unsaved background document to the page.
+    Resume(session::SessionId),
     Format(Format),
     Undo,
     Redo,
@@ -1130,6 +1132,14 @@ impl App {
             Message::Guide => return self.request(Pending::Guide),
             Message::Welcome => return self.request(Pending::Welcome),
             Message::Step(direction) => return self.step(direction),
+            Message::Resume(session) => {
+                if self.busy || self.overlay.is_some() || !self.commit_cell() {
+                    return Task::none();
+                }
+                if let Some(parked) = self.background.take_unsaved(session) {
+                    return self.resume(parked);
+                }
+            }
             Message::Save | Message::SaveAs => {
                 let save_as = matches!(message, Message::SaveAs);
                 return self.save(save_as);
@@ -2817,12 +2827,13 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         let title: Element<'_, Message> = match side {
             Sidebar::Files => {
-                let root = self.folder.root().expect("Files requires a workspace");
+                // With no place open the header still leads to the library.
+                let root = self.folder.root();
                 tooltip(
                     button(
                         row![
                             container(
-                                text(folder::name(root))
+                                text(root.map_or_else(|| "Library".into(), folder::name))
                                     .size(styles::SIDEBAR_TEXT_SIZE)
                                     .wrapping(text::Wrapping::None)
                             )
@@ -2839,7 +2850,11 @@ impl App {
                     .padding([5, styles::SIDEBAR_INSET as u16])
                     .width(Fill)
                     .style(styles::button_style(tokens, Button::Quiet)),
-                    text(root.display().to_string()).size(11),
+                    text(root.map_or_else(
+                        || "No place is open".into(),
+                        |root| root.display().to_string(),
+                    ))
+                    .size(11),
                     tooltip::Position::Bottom,
                 )
                 .into()

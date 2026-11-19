@@ -111,8 +111,8 @@ UI event path with explicit limits. Opening guards against edits until completio
 Saving captures a source/state snapshot; subsequent edits remain dirty.
 
 Application chrome owns independent Files/Outline panel states and a
-Hide Sidebars override. Files occupies the left edge only after a workspace scan
-succeeds; Outline occupies the right. Its inline heading filter retains document order, ancestor context,
+Hide Sidebars override. Files occupies the left edge whenever it is open, with
+or without a place, and shows the tree only after a scan succeeds; Outline occupies the right. Its inline heading filter retains document order, ancestor context,
 and fold state without creating an application overlay.
 Responsive layout docks open panels while preserving a usable writing column,
 then uses overlays when space is limited. Formatting is transient. Editing modes

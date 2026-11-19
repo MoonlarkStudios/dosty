@@ -274,6 +274,36 @@ fn saving_on_close_brings_each_unsaved_background_document_to_the_page() {
 }
 
 #[test]
+fn an_unsaved_background_document_returns_by_its_session() {
+    let mut app = app("", None);
+    type_text(&mut app, "First");
+    let first = app.session.id();
+    send(&mut app, Message::New);
+    type_text(&mut app, "Second");
+
+    app.overlay = Some(Overlay::Settings);
+    send(&mut app, Message::Resume(first));
+    assert_eq!(
+        app.session.document.source(),
+        "Second",
+        "nothing moves under a dialog"
+    );
+    app.overlay = None;
+    send(&mut app, Message::Resume(first));
+    assert_eq!(app.session.id(), first);
+    assert_eq!(app.session.document.source(), "First");
+    assert!(app.session.dirty && app.session.document.can_undo());
+    assert_eq!(app.background.dirty().count(), 1);
+
+    send(&mut app, Message::Resume(first));
+    assert_eq!(
+        app.session.id(),
+        first,
+        "the page itself is not in the background"
+    );
+}
+
+#[test]
 fn the_close_prompt_names_a_few_documents_and_counts_the_rest() {
     assert_eq!(
         unsaved_summary(&["Draft.md"]),

@@ -176,6 +176,21 @@ documents, and 128 MiB of Markdown source; each document retains the ordinary
 limited to 240 UTF-8 bytes and cannot contain path separators. Cooperative locks
 coordinate Dosty writers; external tools do not participate in those locks.
 
+### Unsaved documents in Files
+
+A document with unsaved changes carries the modified mark at the right edge of
+its row, whether it is on the page or open in the background. A collapsed folder
+with such a document anywhere inside carries a fainter mark, so folding never
+hides unsaved writing; expanding the folder moves the mark to the document. The
+mark gives way to a row's action button while the row is hovered or focused.
+
+Unsaved documents that no row can stand for are listed above the tree under
+**Not saved yet**, with the folder they belong to: drafts that have never been
+saved, and documents outside the open place. With no place open, that is every
+unsaved document. Choosing one returns it to the page as it was left; the page's
+own entry is shown selected. A draft appears here rather than inside its folder
+in the tree, because it has no file there yet.
+
 ### Images in a place
 
 A place holds two kinds of thing: documents and images. Images appear in Files
@@ -205,7 +220,7 @@ image from Files onto the page is not supported; use Insert into document.
 
 ## Controls and sidebars
 
-Files and its titlebar toggle are available only while a place is open. Opening a place reveals Files on the left without replacing the current document. The place name is its header and opens its actions: move to another place, add a place, create a document or folder, refresh, show its location, reveal it in Finder/the file manager, or remove it from the library. The folder root is not repeated as a tree row; dropping into empty tree space targets the root. Its titlebar toggle keeps it open until you close it. Closing it leaves the document open.
+Files and its titlebar toggle are always available. With no place open the panel is headed Library, its menu still lists and adds places, and its body offers **Add place…**. Opening a place reveals Files on the left without replacing the current document. The place name is its header and opens its actions: move to another place, add a place, create a document or folder, refresh, show its location, reveal it in Finder/the file manager, or remove it from the library. The folder root is not repeated as a tree row; dropping into empty tree space targets the root. Its titlebar toggle keeps it open until you close it. Closing it leaves the document open.
 
 Outline opens independently on the right with its titlebar control, **View → Outline** on macOS, or Cmd/Ctrl+Alt+O. Its toggle keeps it open until you close it. When both panels cannot leave a writing column of at least 480 logical pixels, Files stays docked and Outline overlays the document. Editing, heading jumps, document opens, and Escape preserve the panel arrangement. Its header offers icon controls only when headings exist. Search filters the tree inline, retaining ancestor context; Cmd/Ctrl+Shift+J opens and focuses that filter. Each place remembers whether Files and Outline were open; Hide Sidebars lasts only for the application session.
 

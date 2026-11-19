@@ -61,6 +61,8 @@ pub(crate) struct FileTree<'a, Message> {
     tokens: Tokens,
     on_action: Box<dyn Fn(Action) -> Message + 'a>,
     enabled: bool,
+    /// Documents with unsaved changes. Owned because it is derived per view.
+    unsaved: Vec<PathBuf>,
 }
 
 impl<'a, Message> FileTree<'a, Message> {
@@ -78,6 +80,27 @@ impl<'a, Message> FileTree<'a, Message> {
             tokens,
             on_action: Box::new(on_action),
             enabled: true,
+            unsaved: Vec::new(),
+        }
+    }
+
+    /// Marks these documents, and any collapsed folder that hides one.
+    pub fn unsaved(mut self, paths: Vec<PathBuf>) -> Self {
+        self.unsaved = paths;
+        self
+    }
+
+    /// Whether the row stands for unsaved writing: the document itself, or a
+    /// collapsed folder with such a document somewhere inside it.
+    fn marks_unsaved(&self, entry: &Entry) -> bool {
+        if entry.directory {
+            !entry.expanded
+                && self
+                    .unsaved
+                    .iter()
+                    .any(|path| path.starts_with(&entry.path))
+        } else {
+            self.unsaved.contains(&entry.path)
         }
     }
 
@@ -675,7 +698,28 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                 ink,
                 clip,
             );
-            if state.dragging().is_none() && (hovered || focused) {
+            let actions_shown = state.dragging().is_none() && (hovered || focused);
+            // The mark shares the row's right edge with its action button and
+            // yields to it. A folder's mark is fainter: it stands for writing
+            // inside, not for the folder.
+            if !actions_shown && self.marks_unsaved(entry) {
+                let color = if entry.directory {
+                    muted.scale_alpha(0.6)
+                } else {
+                    self.tokens.accent.scale_alpha(alpha)
+                };
+                frame.fill(
+                    &CanvasPath::circle(
+                        Point::new(
+                            row.x + row.width - bounds.x - 14.0,
+                            row.center_y() - bounds.y,
+                        ),
+                        3.0,
+                    ),
+                    color,
+                );
+            }
+            if actions_shown {
                 let menu = menu_bounds(row);
                 let color = if cursor.is_over(menu) {
                     self.tokens.accent
@@ -1056,6 +1100,36 @@ mod tests {
             directory,
             expanded: false,
         }
+    }
+
+    #[test]
+    fn unsaved_writing_marks_its_document_and_any_collapsed_folder_hiding_it() {
+        let entries = [];
+        let tree = FileTree::new(
+            &entries,
+            None,
+            crate::theme::Preset::Paper.resolve().tokens,
+            |_| (),
+        )
+        .unsaved(vec!["/notes/Drafts/Deep/Essay.md".into()]);
+        let marks = |path: &str, directory, expanded| {
+            tree.marks_unsaved(&Entry {
+                expanded,
+                ..entry(path, directory)
+            })
+        };
+        assert!(marks("/notes/Drafts/Deep/Essay.md", false, false));
+        assert!(!marks("/notes/Drafts/Deep/Other.md", false, false));
+        assert!(marks("/notes/Drafts", true, false), "collapsed above it");
+        assert!(marks("/notes/Drafts/Deep", true, false));
+        assert!(
+            !marks("/notes/Drafts", true, true),
+            "an expanded folder shows the row itself"
+        );
+        assert!(
+            !marks("/notes/Drafts-old", true, false),
+            "a sibling sharing the prefix holds nothing unsaved"
+        );
     }
 
     #[test]

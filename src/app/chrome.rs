@@ -258,14 +258,12 @@ pub(super) fn event_message(
 
 impl App {
     pub(super) fn show_sidebar(&mut self, side: Sidebar) -> Task<AppMessage> {
-        if side == Sidebar::Files && self.folder.root().is_none() {
-            return Task::none();
-        }
         self.chrome.sidebars_hidden = false;
         self.chrome.panel_mut(side).open = true;
         self.preserve_viewport_generation =
             Some(self.session.document.collaboration().generation());
-        if side == Sidebar::Files {
+        // Without an open place the sidebar has no tree to take the keyboard.
+        if side == Sidebar::Files && self.folder.root().is_some() {
             self.editor_focused = false;
             operation::focus(crate::editor::file_tree::ID)
         } else {
@@ -290,9 +288,7 @@ impl App {
         if self.chrome.sidebars_hidden {
             return (false, false);
         }
-        let files = self.folder.root().is_some()
-            && self.chrome.files.open
-            && width >= FILES_WIDTH + MIN_WRITING_WIDTH;
+        let files = self.chrome.files.open && width >= FILES_WIDTH + MIN_WRITING_WIDTH;
         let remaining = width - if files { FILES_WIDTH } else { 0.0 };
         let outline = self.chrome.outline.open && remaining >= OUTLINE_WIDTH + MIN_WRITING_WIDTH;
         (files, outline)
@@ -321,10 +317,8 @@ impl App {
         ]
         .height(Fill);
         let mut layers = iced::widget::stack![writing];
-        let files_floating = self.folder.root().is_some()
-            && self.chrome.files.open
-            && !files_docked
-            && !self.chrome.sidebars_hidden;
+        let files_floating =
+            self.chrome.files.open && !files_docked && !self.chrome.sidebars_hidden;
         let outline_floating =
             self.chrome.outline.open && !outline_docked && !self.chrome.sidebars_hidden;
         if files_floating || outline_floating {
@@ -600,18 +594,13 @@ impl App {
                     ))
                     .into()
             };
-            let files: Element<'_, AppMessage> = if self.folder.root().is_some() {
-                container(self.titlebar_icon(
-                    Icon::Sidebar,
-                    "Files · ⌘/Ctrl Shift B",
-                    AppMessage::ToggleSidebar(Sidebar::Files),
-                    self.chrome.files.open && !self.chrome.sidebars_hidden,
-                ))
-                .id("titlebar-files")
-                .into()
-            } else {
-                space().width(0).into()
-            };
+            let files = container(self.titlebar_icon(
+                Icon::Sidebar,
+                "Files · ⌘/Ctrl Shift B",
+                AppMessage::ToggleSidebar(Sidebar::Files),
+                self.chrome.files.open && !self.chrome.sidebars_hidden,
+            ))
+            .id("titlebar-files");
             let left = row![space().width(native_inset), files, file,]
                 .spacing(4)
                 .align_y(Alignment::Center)
@@ -938,7 +927,7 @@ impl App {
                     "Files",
                     Icon::Folder,
                     AppMessage::ToggleSidebar(Sidebar::Files),
-                    self.folder.root().is_some(),
+                    true,
                 ),
                 Command::action(
                     "Outline",

@@ -66,12 +66,19 @@ fn launch_starts_with_one_blank_document_and_closed_navigation() {
 }
 
 #[test]
-fn files_panel_requires_a_workspace_and_closing_it_restores_standalone_writing() {
+fn files_panel_opens_without_a_place_and_closing_it_restores_standalone_writing() {
     let source = "# Draft\n\ncafé and 🦀";
     let mut harness = Harness::new(source, EditorMode::Live, Size::new(1180.0, 820.0));
     let before = harness.editor().0;
+    // With no place open the panel still opens, to offer the library.
     harness.message(AppMessage::ToggleSidebar(Sidebar::Files));
-    harness.message(AppMessage::ShowSidebar(Sidebar::Files));
+    assert!(harness.app.chrome.files.open);
+    assert!(harness.editor().0.x > before.x);
+    assert!(
+        harness.app.editor_focused,
+        "there is no tree to take the keyboard"
+    );
+    harness.message(AppMessage::ToggleSidebar(Sidebar::Files));
     assert!(!harness.app.chrome.files.open);
     assert_eq!(harness.editor().0, before);
     workspace(&mut harness.app);

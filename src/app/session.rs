@@ -12,7 +12,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 /// Identifies one session for as long as the application runs. Reloading a
 /// file starts a new session with a new identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SessionId(u64);
+pub struct SessionId(u64);
 
 /// One open document and its relationship to the file it was loaded from.
 ///
