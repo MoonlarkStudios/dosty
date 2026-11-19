@@ -16,6 +16,8 @@ Moving to another document never interrupts you. The one you leave stays open in
 
 Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter.
 
+Files also shows the images in a place. Choose one to preview it, and use **Insert into document** there, or in its menu, to reference it from the page where it already lives; nothing is copied. Images cannot be renamed or moved here, because pages that use them would lose them.
+
 Hover a file or folder to reveal its actions, or right-click it. A folder's menu offers **New document…** and **New folder…**; items below the root also offer **Rename** and **Move to…**. **Show location** displays the full path and can open its containing folder. Drag a file or folder onto another folder, or into the tree’s empty space to move it to the top of the place. A small preview and highlighted destination show where it will go; pausing over a collapsed folder opens it. Escape cancels the drag. Moves preserve unsaved writing and text undo; collisions, cross-filesystem moves, and references that cannot be preserved produce an error. There is no delete action. **Undo move** appears in a contextual notice and remains available in the document-name menu.
 
 In the file tree, Up/Down selects a row, Left/Right collapses or expands folders, and Enter or Space opens a file or toggles a folder. Home/End reaches the first/last row. F2 renames the selected item; Shift+F10 or the context-menu key opens its actions. Use Up/Down or Tab/Shift+Tab and Enter in menus. Hovering an item also shows its full path.

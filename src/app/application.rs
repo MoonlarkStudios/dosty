@@ -42,6 +42,8 @@ pub(super) mod folder;
 pub(super) mod footnotes;
 #[path = "home.rs"]
 mod home;
+#[path = "image_preview.rs"]
+pub(super) mod image_preview;
 #[cfg(target_os = "macos")]
 #[path = "native_menus.rs"]
 pub(super) mod native_menus;
@@ -126,6 +128,7 @@ pub struct App {
     folder: folder::State,
     workspace: workspace::State,
     quick_open: quick_open::State,
+    image_preview: image_preview::State,
     overlay: Option<Overlay>,
     pending: Option<Pending>,
     search_open: bool,
@@ -157,6 +160,7 @@ pub enum Message {
     NativeMenusReady,
     Chrome(chrome::Message),
     Folder(folder::Message),
+    ImagePreview(image_preview::Message),
     Workspace(workspace::Message),
     QuickOpen(quick_open::Message),
     #[cfg(target_os = "macos")]
@@ -309,6 +313,7 @@ enum Overlay {
     Writing,
     Footnote,
     Recovery,
+    Image,
 }
 
 #[derive(Debug, Clone)]
@@ -375,6 +380,7 @@ impl App {
             folder: folder::State::default(),
             workspace: workspace::State::default(),
             quick_open: quick_open::State::default(),
+            image_preview: image_preview::State::default(),
             overlay: None,
             pending: None,
             search_open: false,
@@ -782,6 +788,7 @@ impl App {
             Message::NativeMenusReady => self.attach_native_menus(),
             Message::Chrome(message) => return self.update_chrome(message),
             Message::Folder(message) => return self.update_folder(message),
+            Message::ImagePreview(message) => return self.update_image_preview(message),
             Message::Workspace(message) => return self.update_workspace(message),
             Message::QuickOpen(message) => return self.update_quick_open(message),
             #[cfg(target_os = "macos")]
@@ -1361,6 +1368,7 @@ impl App {
                     self.writing.close_details();
                     self.footnotes.close();
                     self.table = table::State::default();
+                    self.image_preview.close();
                     self.pending = None;
                     if table {
                         self.editor_focused = true;
@@ -2757,6 +2765,7 @@ impl App {
                     Overlay::Writing => self.writing_view(),
                     Overlay::Footnote => self.footnote_view(),
                     Overlay::Recovery => self.recovery_view(),
+                    Overlay::Image => self.image_preview_view(),
                     Overlay::QuickOpen => self.quick_open_view(size),
                     Overlay::Table => self.table_view(),
                 };

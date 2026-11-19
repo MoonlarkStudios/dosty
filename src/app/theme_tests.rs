@@ -508,6 +508,55 @@ fn native_quiet_previews() {
     );
 }
 
+#[tokio::test]
+#[ignore = "render the image preview and image rows for visual inspection"]
+async fn image_previews() {
+    let (mut app, _) = App::new();
+    app.set_document(
+        include_str!("../../assets/writing/the-quiet-hour.md").into(),
+        Some("/writing/Field notes/The quiet hour.md".into()),
+        "The quiet hour.md".into(),
+    );
+    drop(
+        app.update_folder(folder::Message::Scanned {
+            generation: 0,
+            result: Ok(crate::io::folder::Snapshot {
+                root: "/writing/Field notes".into(),
+                entries: [
+                    ("The quiet hour.md", false),
+                    ("coast.png", false),
+                    ("Research", true),
+                ]
+                .into_iter()
+                .map(|(name, is_directory)| crate::io::folder::Entry {
+                    path: std::path::Path::new("/writing/Field notes").join(name),
+                    is_directory,
+                })
+                .collect(),
+                limited: false,
+                warnings: Vec::new(),
+            }),
+        }),
+    );
+    app.chrome.files.open = true;
+    drop(app.update_quick_open(quick_open::Message::Open));
+    render(&app, Size::new(1180.0, 820.0), "image-switcher");
+    drop(app.update_quick_open(quick_open::Message::Cancel));
+    let coast = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/writing/coast.png");
+    drop(
+        app.update(Message::ImagePreview(super::image_preview::Message::Show(
+            coast.clone(),
+        ))),
+    );
+    render(&app, Size::new(1180.0, 820.0), "image-preview-opening");
+    let result = crate::io::image_store::load_path(coast).await;
+    assert!(result.is_ok());
+    drop(app.update(Message::ImagePreview(
+        super::image_preview::Message::Loaded { request: 1, result },
+    )));
+    render(&app, Size::new(1180.0, 820.0), "image-preview");
+}
+
 #[test]
 #[ignore = "render the home surface with and without places for visual inspection"]
 fn home_previews() {

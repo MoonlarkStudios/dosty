@@ -171,7 +171,7 @@ fn scan_blocking(root: &Path, cancelled: &AtomicBool) -> Result<Snapshot, FileEr
                     continue;
                 }
             } else if !kind.is_file()
-                || !is_markdown(&path)
+                || !(is_markdown(&path) || crate::io::assets::is_image(&path))
                 || entry.file_name().to_string_lossy().starts_with('.')
             {
                 continue;
@@ -199,6 +199,54 @@ fn scan_blocking(root: &Path, cancelled: &AtomicBool) -> Result<Snapshot, FileEr
         .entries
         .sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(snapshot)
+}
+
+#[cfg(test)]
+mod image_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    #[tokio::test]
+    async fn a_place_holds_documents_and_images_and_nothing_else() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        std::fs::create_dir_all(root.join("images")).unwrap();
+        std::fs::create_dir_all(root.join("essay.assets")).unwrap();
+        for name in [
+            "essay.md",
+            "images/Cover.PNG",
+            "images/photo.jpeg",
+            "images/diagram.svg",
+            "images/.hidden.png",
+            "essay.assets/0123abcd.png",
+            "config.toml",
+            "notes.txt",
+        ] {
+            std::fs::write(root.join(name), "x").unwrap();
+        }
+        let snapshot = super::scan(root.clone(), Arc::new(AtomicBool::new(false)))
+            .await
+            .unwrap();
+        let mut found: Vec<_> = snapshot
+            .entries
+            .iter()
+            .map(|entry| {
+                let relative = entry.path.strip_prefix(&root).unwrap();
+                relative.to_string_lossy().replace('\\', "/")
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                "essay.md",
+                "images",
+                "images/Cover.PNG",
+                "images/photo.jpeg"
+            ],
+            "Dosty's own asset folders and unsupported formats stay out"
+        );
+    }
 }
 
 #[cfg(test)]

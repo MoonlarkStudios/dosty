@@ -154,6 +154,11 @@ A never-saved session also carries the folder its first save writes into and
 whether the writer named it; that save claims a unique empty file through the
 ordinary guarded creation path and then saves over it with an empty expected
 baseline, so no separate overwrite check exists.
+Images are folder entries distinguished by extension, not documents: the
+folder state's document accessors exclude them, so opening, reopening, and
+switching never treat one as text. `app/image_preview.rs` loads a single image
+through the image store's bounded reader without entering the per-document cache,
+which is rebuilt from the projection on every update.
 Only closing the window raises the unsaved guard. `app/home.rs` derives the home
 surface from that state rather than storing a flag: it shows on an untouched,
 unsaved page with no trail in either direction, once the library has settled.

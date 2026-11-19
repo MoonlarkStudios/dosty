@@ -22,7 +22,8 @@ modes. Writing uses sans-serif text by default, with serif available in Settings
 time sit below the writing area. Places stay in the library until you remove them:
 Dosty reopens the last one with its document, caret, expanded folders and sidebars,
 lists them all under Places, and shows the place that holds the document you are in.
-Moving between documents never asks about unsaved changes; each stays open in the
+Images in a place can be previewed and referenced from a
+document where they already live. Moving between documents never asks about unsaved changes; each stays open in the
 background, and Back and Forward retrace your steps.
 
 See the [writing guide](assets/guide.md) for everyday editing and

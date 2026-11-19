@@ -206,6 +206,32 @@ fn key(url: &str, base: Option<&Path>) -> String {
     )
 }
 
+/// Reads and decodes one local image on workers, under the same size limits
+/// and concurrency bound as a document's images, without entering the cache.
+pub(crate) async fn load_path(path: PathBuf) -> Result<LoadedImage, String> {
+    let _permit = LOADS.acquire().await.map_err(|error| error.to_string())?;
+    let bytes = read_local(path).await?;
+    tokio::task::spawn_blocking(move || decode(&bytes))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+async fn read_local(path: PathBuf) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(MAX_ENCODED_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_ENCODED_BYTES {
+            return Err("Image exceeds 16 MiB".into());
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 async fn load(url: String, base: Option<PathBuf>) -> Result<LoadedImage, String> {
     let _permit = LOADS.acquire().await.map_err(|error| error.to_string())?;
     let bytes = if url.starts_with("https://") || url.starts_with("http://") {
@@ -258,19 +284,7 @@ async fn load(url: String, base: Option<PathBuf>) -> Result<LoadedImage, String>
             }
             base.as_deref().unwrap_or_else(|| Path::new(".")).join(path)
         };
-        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-            let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-            let mut bytes = Vec::new();
-            file.take(MAX_ENCODED_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| error.to_string())?;
-            if bytes.len() > MAX_ENCODED_BYTES {
-                return Err("Image exceeds 16 MiB".into());
-            }
-            Ok(bytes)
-        })
-        .await
-        .map_err(|error| error.to_string())??
+        read_local(path).await?
     };
     tokio::task::spawn_blocking(move || decode(&bytes))
         .await
@@ -343,6 +357,31 @@ mod tests {
         store.restore_references(next_ledger);
         assert_eq!(store.history().links, ["next.md"]);
         assert!(store.history().complete);
+    }
+
+    #[tokio::test]
+    async fn a_single_path_loads_under_the_document_limits_without_entering_the_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("100% cover.png");
+        std::fs::write(&path, png()).unwrap();
+        let loaded = load_path(path).await.unwrap();
+        assert!(loaded.size.width > 0 && loaded.size.height > 0);
+
+        let oversized = directory.path().join("huge.png");
+        std::fs::write(&oversized, vec![0; MAX_ENCODED_BYTES + 1]).unwrap();
+        assert_eq!(
+            load_path(oversized).await.unwrap_err(),
+            "Image exceeds 16 MiB"
+        );
+        assert!(
+            load_path(directory.path().join("missing.png"))
+                .await
+                .is_err()
+        );
+        assert!(
+            load_path(directory.path().to_owned()).await.is_err(),
+            "a folder is not an image"
+        );
     }
 
     #[tokio::test]

@@ -683,6 +683,11 @@ impl App {
                 self.quick_open.switching = true;
                 self.open_workspace(place)
             }
+            Target::File(path) if crate::io::assets::is_image(&path) => {
+                let focus = self.cancel_quick_open();
+                let show = self.update_image_preview(super::image_preview::Message::Show(path));
+                Task::batch([focus, show])
+            }
             Target::File(path) if self.folder.files().any(|file| file == path) => {
                 self.update_quick_open(Message::Choose(path))
             }
@@ -810,9 +815,10 @@ impl App {
                         .wrapping(text::Wrapping::None),
                 );
             }
-            let mark = match entry.target {
+            let mark = match &entry.target {
                 _ if entry.unsaved => Some(Icon::Modified),
                 Target::Folder(_) | Target::Place(_) => Some(Icon::Folder),
+                Target::File(path) if crate::io::assets::is_image(path) => Some(Icon::Image),
                 Target::File(_) | Target::Session(_) => None,
             };
             let mut line = row![].spacing(8).align_y(Alignment::Center);

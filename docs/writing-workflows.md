@@ -125,7 +125,8 @@ runs of digits compared as numbers, so `Chapter 2` precedes `Chapter 10`. Quick
 Open orders a folder's contents the same way. Documents are shown without their
 Markdown extension; a chevron marks a folder and documents carry no glyph.
 Discovery reads paths and file types on a worker, not document contents. It finds
-`.md` and `.markdown` case-insensitively, skips symlinks, hidden items, `target`,
+documents (`.md` and `.markdown`) and images (`.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`) case-insensitively, skips symlinks, hidden items, `target`,
 `node_modules`, and `*.assets` folders, and stops at 32,768 visited entries,
 48 levels, or 8 MiB of retained paths. Partial scans and unreadable subfolders
 surface a notice. The open place is rescanned whenever the window regains focus
@@ -174,6 +175,33 @@ documents, and 128 MiB of Markdown source; each document retains the ordinary
 16 MiB file limit. Asset copying has a shared 128 MiB limit. Visible names are
 limited to 240 UTF-8 bytes and cannot contain path separators. Cooperative locks
 coordinate Dosty writers; external tools do not participate in those locks.
+
+### Images in a place
+
+A place holds two kinds of thing: documents and images. Images appear in Files
+and Quick Open under their full file name; other files stay out. Dosty's own
+`*.assets` folders remain hidden.
+
+Choosing an image previews it rather than opening it: the page and its document
+are untouched. The preview is read and decoded on workers under the same 16 MiB,
+8192-pixel, and 64 MiB decoded limits as a document's images, shares their
+concurrency bound, and is dropped when it closes.
+
+**Insert into document**, in the preview and in an image's menu in Files, inserts
+a reference to the image where it already lives, at the selection, as one undo
+step. Nothing is copied. The path is relative to the document's folder, or for a
+draft to the folder its first save will use; a page that belongs nowhere must be
+saved first. The image's name, without brackets, becomes the description. A path
+that crosses to another drive, or holds `<`, `>`, or a line break, is refused.
+Read mode does not insert. References that climb out of the document's folder
+with `..` display normally, but **Save as…** to another folder stops rather than
+relocate them, as it does for any such reference. Blog engines that expect
+site-relative paths such as `/images/cover.png` need the inserted path adjusted.
+
+Images cannot be renamed or moved from Dosty: links in other documents are not
+rewritten, so a moved image would vanish from every page that uses it. Moving a
+folder still moves the images inside it, with that same limitation. Dragging an
+image from Files onto the page is not supported; use Insert into document.
 
 ## Controls and sidebars
 

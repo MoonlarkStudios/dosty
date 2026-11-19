@@ -14,6 +14,7 @@ use iced::{Element, Event, Fill, Padding, Point, Size, Task, event, window};
 
 use super::{App, EDITOR, Message as AppMessage, Overlay, Pending};
 use crate::editor::file_tree::{self, FileTree};
+use crate::io::assets::is_image;
 use crate::io::storage::FileError;
 use crate::io::{file_ops, folder};
 use crate::theme::styles::{self, Button};
@@ -53,6 +54,8 @@ pub enum Message {
     Remove,
     /// Name the never-saved document on the page.
     NameDraft,
+    /// Reference an image of the place from the document, where it lives.
+    InsertImage(PathBuf),
     Tree(file_tree::Action),
     NewDocument(PathBuf),
     NewFolder(PathBuf),
@@ -206,10 +209,11 @@ impl State {
     pub(super) fn entries(&self) -> &[folder::Entry] {
         &self.entries
     }
+    /// The documents of the open place. Images are entries, not documents.
     pub(super) fn files(&self) -> impl Iterator<Item = &Path> {
         self.entries
             .iter()
-            .filter(|entry| !entry.is_directory)
+            .filter(|entry| !entry.is_directory && !is_image(&entry.path))
             .map(|entry| entry.path.as_path())
     }
     pub(super) fn notice(&self) -> Option<&str> {
@@ -222,9 +226,7 @@ impl State {
         matches!(self.dialog, Some(Dialog::Menu { .. }))
     }
     pub(super) fn has_file(&self, path: &Path) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| !entry.is_directory && entry.path == path)
+        self.files().any(|file| file == path)
     }
     /// Whether Files opens when the next scan succeeds.
     pub(super) fn prepare_reveal(&mut self, reveal: bool) {
@@ -596,6 +598,17 @@ impl App {
                 }
                 return self.request(Pending::FolderNew(parent));
             }
+            Message::InsertImage(path) if !self.busy => {
+                self.folder.dialog = None;
+                self.overlay = None;
+                self.insert_image_reference(&path);
+                return operation::focus(EDITOR);
+            }
+            Message::Rename(path) | Message::MoveTo(path) if is_image(&path) => {
+                self.folder_error(
+                    "Images stay where they are: documents that use them are not updated.".into(),
+                );
+            }
             Message::NameDraft if !self.busy && self.session.path.is_none() => {
                 return self.folder_name(NameAction::Draft);
             }
@@ -729,6 +742,9 @@ impl App {
             file_tree::Action::Focus => {
                 self.editor_focused = false;
                 return operation::focus(TREE);
+            }
+            file_tree::Action::Open(path) if is_image(&path) => {
+                return self.update_image_preview(super::image_preview::Message::Show(path));
             }
             file_tree::Action::Open(path) => {
                 if self.session.path.as_ref() == Some(&path) {
@@ -940,6 +956,14 @@ impl App {
         }
         if to.starts_with(&from) {
             self.folder_error("A folder cannot be moved into itself.".into());
+            return Task::none();
+        }
+        // Links in other documents are not rewritten, so a moved image would
+        // silently vanish from every page that uses it.
+        if is_image(&from) {
+            self.folder_error(
+                "Images stay where they are: documents that use them are not updated.".into(),
+            );
             return Task::none();
         }
         // Only the page's unsaved writing is relocated with its file. A
@@ -1364,7 +1388,9 @@ impl App {
                         ("New folder…", Message::NewFolder(path.clone())),
                     ]);
                 }
-                if !root {
+                if is_image(path) {
+                    actions.push(("Insert into document", Message::InsertImage(path.clone())));
+                } else if !root {
                     actions.extend([
                         ("Rename", Message::Rename(path.clone())),
                         ("Move to…", Message::MoveTo(path.clone())),
@@ -1759,6 +1785,75 @@ mod tests {
         drop(app.update_folder(Message::WindowFocused));
         assert!(app.folder.scanning);
         assert_eq!(app.folder.visible.len(), 5, "rows stay while rescanning");
+    }
+
+    #[test]
+    fn images_are_shown_and_previewed_but_are_not_documents_and_do_not_move() {
+        let mut app = app();
+        let entry = |path: &str, is_directory| folder::Entry {
+            path: path.into(),
+            is_directory,
+        };
+        drop(app.update_folder(Message::Scanned {
+            generation: 0,
+            result: Ok(folder::Snapshot {
+                root: "/writing".into(),
+                entries: vec![
+                    entry("/writing/note.md", false),
+                    entry("/writing/cover.png", false),
+                    entry("/writing/images", true),
+                ],
+                limited: false,
+                warnings: Vec::new(),
+            }),
+        }));
+        let cover = PathBuf::from("/writing/cover.png");
+        let labels: Vec<_> = app
+            .folder
+            .visible
+            .iter()
+            .map(|row| row.label.as_str())
+            .collect();
+        assert_eq!(labels, ["images", "cover.png", "note"]);
+        assert_eq!(
+            app.folder.files().collect::<Vec<_>>(),
+            [Path::new("/writing/note.md")]
+        );
+        assert!(!app.folder.has_file(&cover));
+
+        for message in [
+            Message::Rename(cover.clone()),
+            Message::MoveTo(cover.clone()),
+            Message::Tree(file_tree::Action::Move {
+                source: cover.clone(),
+                destination: "/writing/images".into(),
+            }),
+        ] {
+            app.notification = None;
+            drop(app.update_folder(message));
+            assert!(app.notification.as_deref().unwrap().contains("Images stay"));
+            assert!(!app.busy && app.folder.dialog.is_none());
+        }
+
+        let source = app.session.document.source().to_owned();
+        drop(app.update_folder(Message::Tree(file_tree::Action::Open(cover.clone()))));
+        assert_eq!(app.overlay, Some(Overlay::Image));
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md")),
+            "previewing is not opening"
+        );
+        drop(app.update_message(AppMessage::CloseOverlay));
+
+        app.session.selection = Selection::caret(0);
+        drop(app.update_folder(Message::InsertImage(cover)));
+        assert!(
+            app.session
+                .document
+                .source()
+                .starts_with("![cover](<cover.png>)")
+        );
     }
 
     #[test]
