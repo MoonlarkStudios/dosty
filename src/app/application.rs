@@ -28,8 +28,12 @@ use crate::io::image_store::{ImageStore, LoadedImage};
 use crate::io::storage::{self, FileError, LoadedFile, Preferences};
 use crate::theme::styles::{self, Button};
 use crate::theme::{Preset, ResolvedTheme, WritingFont};
+use background::{Background, Parked};
 use session::Session;
+use trail::{Direction, Trail};
 
+#[path = "background.rs"]
+mod background;
 #[path = "chrome.rs"]
 pub(super) mod chrome;
 #[path = "folder.rs"]
@@ -51,6 +55,8 @@ mod session;
 pub(super) mod table;
 #[path = "table_grid.rs"]
 pub(super) mod table_grid;
+#[path = "trail.rs"]
+pub(super) mod trail;
 #[path = "workspace.rs"]
 pub(super) mod workspace;
 #[path = "writing.rs"]
@@ -83,6 +89,8 @@ pub struct App {
     #[cfg(target_os = "macos")]
     accessibility: Option<accessibility::State>,
     session: Session,
+    background: Background,
+    trail: Trail,
     editor: native_buffer::Buffer,
     native_edited: bool,
     edit_error: Option<String>,
@@ -203,6 +211,8 @@ pub enum Message {
     },
     Append,
     Navigate(i32),
+    /// Go back or forward through the documents visited in this window.
+    Step(Direction),
     Format(Format),
     Undo,
     Redo,
@@ -328,6 +338,8 @@ impl App {
             #[cfg(target_os = "macos")]
             accessibility: None,
             session,
+            background: Background::default(),
+            trail: Trail::default(),
             editor: native_buffer::Buffer::new(&projection.text),
             native_edited: false,
             edit_error: None,
@@ -381,6 +393,7 @@ impl App {
         };
         app.sync_editor();
         app.session.selection = app.projection.normalize_caret(app.session.selection);
+        app.trail.visit(app.session.id(), None);
         let theme_task = if let Some(path) = app.preferences.custom_theme.clone() {
             Task::perform(
                 async move {
@@ -441,11 +454,12 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            if self.session.dirty
-                && !self.loading
-                && self
-                    .recovery
-                    .needs_checkpoint(self.session.document.collaboration().generation())
+            if self.background.needing_checkpoint().is_some()
+                || (self.session.dirty
+                    && !self.loading
+                    && self
+                        .recovery
+                        .needs_checkpoint(self.session.document.collaboration().generation()))
             {
                 iced::time::every(std::time::Duration::from_secs(1))
                     .map(|_| Message::Recovery(recovery::Message::Tick))
@@ -1102,16 +1116,29 @@ impl App {
             }
             Message::Guide => return self.request(Pending::Guide),
             Message::Welcome => return self.request(Pending::Welcome),
-            Message::Save | Message::SaveAs | Message::ConfirmSave => {
+            Message::Step(direction) => return self.step(direction),
+            Message::Save | Message::SaveAs => {
                 let save_as = matches!(message, Message::SaveAs);
                 return self.save(save_as);
             }
-            Message::ChosenFile(path) => {
-                if let Some(path) = path {
-                    return Task::perform(storage::load(path), Message::Loaded);
+            Message::ConfirmSave => {
+                if self.session.dirty {
+                    return self.save(false);
                 }
+                // The page is clean, so the guard is about background documents.
+                if !self.busy
+                    && let Some(pending) = self.pending.take()
+                {
+                    self.overlay = None;
+                    return self.execute(pending);
+                }
+            }
+            Message::ChosenFile(path) => {
                 self.busy = false;
                 self.loading = false;
+                if let Some(path) = path {
+                    return self.execute(Pending::Open(Some(path)));
+                }
             }
             Message::Loaded(result) => {
                 self.busy = false;
@@ -1137,12 +1164,21 @@ impl App {
                             },
                             None => Document::new(file.source),
                         };
-                        self.install_document(
-                            document,
-                            Some(file.path.clone()),
-                            filename(&file.path),
-                        );
-                        self.session.saved_version = version;
+                        match self.background.take_unchanged(
+                            &file.path,
+                            document.source(),
+                            version.as_deref(),
+                        ) {
+                            Some(parked) => self.install_parked(parked),
+                            None => {
+                                self.install_document(
+                                    document,
+                                    Some(file.path.clone()),
+                                    filename(&file.path),
+                                );
+                                self.session.saved_version = version;
+                            }
+                        }
                         let folder_task = self.folder_document_changed();
                         let focus = if self.restore_workspace_caret() {
                             operation::focus(EDITOR)
@@ -1174,6 +1210,7 @@ impl App {
                         self.session.display_name = filename(&path);
                         self.session
                             .mark_saved((*source).clone(), version, generation);
+                        self.page_settled();
                         let folder_task = self.folder_document_changed();
                         if !self.session.dirty {
                             self.recovery.retire();
@@ -1497,6 +1534,9 @@ impl App {
                     && let Some(pending) = self.pending.take()
                 {
                     self.overlay = None;
+                    for parked in self.background.discard_dirty() {
+                        self.recovery.discard(parked.checkpoint);
+                    }
                     return self.execute(pending);
                 }
             }
@@ -2310,17 +2350,63 @@ impl App {
         operation::focus(EDITOR)
     }
 
+    /// Replaces the page, or closes the window.
+    ///
+    /// Replacing the page never asks about unsaved changes: the outgoing
+    /// document stays open in the background. Only closing the window, which
+    /// would end every open document, asks first.
     fn request(&mut self, pending: Pending) -> Task<Message> {
         if self.busy {
             return Task::none();
         }
-        if self.session.dirty {
+        let closing = matches!(pending, Pending::Close(_));
+        if closing && self.unsaved().next().is_some() {
             self.pending = Some(pending);
             self.overlay = Some(Overlay::Unsaved);
             Task::none()
         } else {
             self.execute(pending)
         }
+    }
+
+    /// Display names of every document with unsaved changes, the page first.
+    fn unsaved(&self) -> impl Iterator<Item = &str> {
+        self.session
+            .dirty
+            .then_some(&self.session)
+            .into_iter()
+            .chain(self.background.dirty())
+            .map(|session| session.display_name.as_str())
+    }
+
+    fn step(&mut self, direction: Direction) -> Task<Message> {
+        if self.busy || self.overlay.is_some() || !self.commit_cell() {
+            return Task::none();
+        }
+        let Some(stop) = self.trail.step(direction) else {
+            return Task::none();
+        };
+        if let Some(parked) = self.background.take_unsaved(stop.session) {
+            return self.resume(parked);
+        }
+        // Every other stop kept a path: clean sessions without one are dropped,
+        // and `Trail::forget` removes their stops.
+        stop.path
+            .map_or_else(Task::none, |path| self.execute(Pending::Open(Some(path))))
+    }
+
+    /// Brings a background document back to the page as it was left.
+    fn resume(&mut self, parked: Parked) -> Task<Message> {
+        self.install_parked(parked);
+        self.editor_focused = true;
+        self.sync_editor();
+        // The same sequence that follows loading a file and restoring its caret.
+        Task::batch([
+            self.folder_document_changed(),
+            self.persist_workspace(),
+            operation::focus(EDITOR),
+            operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+        ])
     }
 
     fn execute(&mut self, pending: Pending) -> Task<Message> {
@@ -2346,12 +2432,29 @@ impl App {
                 None,
                 "Welcome.md".into(),
             ),
-            Pending::Open(path) => {
+            Pending::Open(Some(path)) => {
+                // Reading the page's own file would replace its unsaved writing
+                // with the saved copy. A clean page is reread as it always was.
+                if self.session.dirty && self.session.path.as_ref() == Some(&path) {
+                    self.notification = Some(format!(
+                        "{} is already open with unsaved changes.",
+                        self.session.display_name
+                    ));
+                    return Task::none();
+                }
+                // Unsaved writing is newer than the file, so it returns without
+                // a read. Saving still checks the file against its baseline.
+                if let Some(parked) = self.background.take_dirty(Some(&path)) {
+                    return self.resume(parked);
+                }
                 self.busy = true;
                 self.loading = true;
-                return if let Some(path) = path {
-                    Task::perform(storage::load(path), Message::Loaded)
-                } else {
+                return Task::perform(storage::load(path), Message::Loaded);
+            }
+            Pending::Open(None) => {
+                self.busy = true;
+                self.loading = true;
+                return {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
@@ -2382,6 +2485,15 @@ impl App {
                 );
             }
             Pending::Close(id) => {
+                // Reached with a clean page. Each unsaved background document
+                // takes the page in turn so the writer sees what is being saved
+                // and can name a draft; a failed or cancelled save stops here.
+                if let Some(parked) = self.background.take_dirty(None) {
+                    self.install_parked(parked);
+                    self.pending = Some(Pending::Close(id));
+                    self.overlay = Some(Overlay::Unsaved);
+                    return self.save(false);
+                }
                 self.recovery.retire();
                 return self.close_after_workspace_save(id);
             }
@@ -2394,11 +2506,58 @@ impl App {
     }
 
     fn install_document(&mut self, document: Document, path: Option<PathBuf>, name: String) {
+        self.install_session(Session::new(document, path, name));
+    }
+
+    fn install_parked(&mut self, parked: Parked) {
+        self.install_session(parked.session);
+        self.recovery.resume(parked.checkpoint);
+        self.images.restore_references(parked.references);
+    }
+
+    /// Moves the outgoing document off the page.
+    ///
+    /// Unsaved writing is always kept. A clean document is kept while a file
+    /// can reload it, unless `incoming` is that same file read again. Whatever
+    /// is not kept is dropped, as replacing a document always did.
+    ///
+    /// Returns the name of a document kept with unsaved changes.
+    fn leave(&mut self, outgoing: Session) -> Option<String> {
+        let reloaded = outgoing.path.is_some() && outgoing.path == self.session.path;
+        if !outgoing.dirty && (outgoing.path.is_none() || reloaded) {
+            self.recovery.retire();
+            self.images.clear_history();
+            self.trail.forget(outgoing.id());
+            return None;
+        }
+        let kept_unsaved = outgoing.dirty.then(|| outgoing.display_name.clone());
+        let released = self.background.park(Parked {
+            session: outgoing,
+            references: self.images.take_references(),
+            checkpoint: self.recovery.park(),
+        });
+        for parked in released {
+            self.recovery.discard(parked.checkpoint);
+        }
+        kept_unsaved
+    }
+
+    /// Records the page on the trail under its current path, and drops clean
+    /// background copies of that file: the page now speaks for it.
+    pub(super) fn page_settled(&mut self) {
+        let path = self.session.path.clone();
+        self.trail.visit(self.session.id(), path.as_deref());
+        let stale = path.map_or_else(Vec::new, |path| self.background.release_clean_under(&path));
+        for parked in stale {
+            self.recovery.discard(parked.checkpoint);
+        }
+    }
+
+    fn install_session(&mut self, session: Session) {
         self.workspace_document_leaving();
         self.menu_input.clear();
         #[cfg(target_os = "macos")]
         self.native_menu_queue.clear();
-        self.recovery.retire();
         self.writing = writing::State::default();
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
@@ -2406,9 +2565,9 @@ impl App {
         self.table = table::State::default();
         self.table_editing = None;
         self.grid = table_grid::State::default();
-        self.images.clear_history();
         self.overlay = None;
-        self.session = Session::new(document, path, name);
+        let outgoing = std::mem::replace(&mut self.session, session);
+        let kept_unsaved = self.leave(outgoing);
         self.projection = Projection::new(self.session.document.source());
         self.projection_revision = Some(self.session.document.revision());
         self.editor_source = self.mode == EditorMode::Source;
@@ -2425,10 +2584,13 @@ impl App {
         self.chrome.saving = false;
         self.chrome.save_error = None;
         self.active = None;
-        self.notification = None;
+        self.notification = kept_unsaved.map(|name| {
+            format!("{name} stays open with its unsaved changes. Use Back to return to it.")
+        });
         self.refresh_matches();
         self.sync_editor();
         self.session.selection = self.projection.normalize_caret(self.session.selection);
+        self.page_settled();
     }
 
     fn save(&mut self, save_as: bool) -> Task<Message> {
@@ -3081,12 +3243,9 @@ impl App {
         container(
             column![
                 text("Keep this thought?").font(styles::BODY_FONT).size(28),
-                text(format!(
-                    "{} has unsaved changes. Save them before moving on.",
-                    self.session.display_name
-                ))
-                .size(14)
-                .color(tokens.muted),
+                text(unsaved_summary(&self.unsaved().collect::<Vec<_>>()))
+                    .size(14)
+                    .color(tokens.muted),
                 space().height(12),
                 row![
                     button("Discard")
@@ -3187,6 +3346,34 @@ impl App {
             Button::Quiet,
         ))
         .into()
+    }
+}
+
+/// Names what closing the window would lose. Long lists are counted, not
+/// spelled out, so the prompt stays readable.
+fn unsaved_summary(names: &[&str]) -> String {
+    const NAMED: usize = 3;
+    match names {
+        [] => "Nothing is unsaved.".into(),
+        [name] => format!("{name} has unsaved changes. Save them before closing."),
+        _ => {
+            let listed = names
+                .iter()
+                .take(NAMED)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = names.len().saturating_sub(NAMED);
+            let rest = if more == 0 {
+                String::new()
+            } else {
+                format!(" and {more} more")
+            };
+            format!(
+                "{} documents have unsaved changes: {listed}{rest}. Save them before closing.",
+                names.len()
+            )
+        }
     }
 }
 
@@ -3354,6 +3541,8 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 "o" if modifiers.alt() => Some(Message::ToggleSidebar(Sidebar::Outline)),
                 "o" if modifiers.shift() => Some(Message::Folder(folder::Message::Pick)),
                 "o" => Some(Message::Open),
+                "[" => Some(Message::Step(Direction::Back)),
+                "]" => Some(Message::Step(Direction::Forward)),
                 "p" if !modifiers.shift() && !modifiers.alt() => {
                     Some(Message::QuickOpen(quick_open::Message::Open))
                 }
@@ -3391,7 +3580,7 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, EditorMode, Format, Message, Overlay};
+    use super::{App, Direction, EditorMode, Format, Message};
     use crate::document::selection::Selection;
     use crate::document::table_edit;
     use iced::widget::text_editor::{Action, Edit, Motion};
@@ -3811,9 +4000,12 @@ mod tests {
         assert!(app.session.dirty);
         assert_eq!(app.session.document.source(), "Before!");
         send(&mut app, Message::New);
-        assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
+        assert!(app.overlay.is_none());
         type_text(&mut app, "?");
+        assert_eq!(app.session.document.source(), "?");
+        send(&mut app, Message::Step(Direction::Back));
         assert_eq!(app.session.document.source(), "Before!");
+        assert!(app.session.dirty);
     }
     #[test]
     fn initial_caret_edits_heading_and_formatted_content_without_touching_prefixes() {

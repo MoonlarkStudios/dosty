@@ -8,7 +8,9 @@ Dosty opens with one blank document and both sidebars hidden. Open a file or cho
 
 Within a workspace, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Files. Use the right button or Cmd/Ctrl+Alt+O to toggle Outline independently. Each toggle keeps its sidebar open until you close it. When both panels cannot fit comfortably, Outline overlays the document rather than squeezing the writing column. **Hide Sidebars** (Cmd/Ctrl+Shift+F) hides both panels while retaining their open state; the same command restores them. Escape dismisses the current editing context rather than restoring hidden sidebars.
 
-**Quick Open** (Cmd/Ctrl+P, or the search icon in Files) finds Markdown files by filename or relative path, including files in collapsed folders. Type one or more terms, use Up/Down to choose a result, and Enter to open it. Escape returns focus to where you were working. Opening a different file uses the usual Save/Discard/Cancel guard. The search is cleared when closed.
+**Quick Open** (Cmd/Ctrl+P, or the search icon in Files) finds Markdown files by filename or relative path, including files in collapsed folders. Type one or more terms, use Up/Down to choose a result, and Enter to open it. Escape returns focus to where you were working. The search is cleared when closed.
+
+Moving to another document never interrupts you. The one you leave stays open in the background with its unsaved changes and undo history, and **Back** (Cmd/Ctrl+[) and **Forward** (Cmd/Ctrl+]) move through the documents you have visited. Dosty asks about unsaved changes only when you close the window, once, naming every unsaved document.
 
 Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter.
 

@@ -9,6 +9,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Event, Fill, Padding, Size, Task, window};
 
+use super::trail::Direction;
 use super::{
     App, EDITOR, EditorMode, Format, Message as AppMessage, Overlay, Sidebar, folder, recovery,
     writing,
@@ -812,6 +813,18 @@ impl App {
                         Icon::Search,
                         AppMessage::QuickOpen(super::quick_open::Message::Open),
                         ready && self.folder.root().is_some(),
+                    ),
+                    Command::action(
+                        "Back",
+                        Icon::Document,
+                        AppMessage::Step(Direction::Back),
+                        ready && self.trail.can_step(Direction::Back),
+                    ),
+                    Command::action(
+                        "Forward",
+                        Icon::Document,
+                        AppMessage::Step(Direction::Forward),
+                        ready && self.trail.can_step(Direction::Forward),
                     ),
                     Command::action(
                         "Open folder…",

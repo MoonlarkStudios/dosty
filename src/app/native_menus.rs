@@ -8,6 +8,7 @@ use iced::futures::channel::mpsc;
 use iced::{Task, window};
 use muda::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
+use super::trail::Direction;
 use super::{
     App, EditorMode, Format, Message, Overlay, Sidebar, chrome, folder, recovery, workspace,
     writing,
@@ -20,6 +21,7 @@ pub enum Command {
     New,
     Open,
     QuickOpen,
+    Step(Direction),
     OpenFolder,
     OpenRecent(usize),
     ClearRecent,
@@ -197,6 +199,8 @@ impl State {
             ("New Document", Command::New, Some("Meta+n")),
             ("Open…", Command::Open, Some("Meta+o")),
             ("Quick Open…", Command::QuickOpen, Some("Meta+p")),
+            ("Back", Command::Step(Direction::Back), Some("Meta+[")),
+            ("Forward", Command::Step(Direction::Forward), Some("Meta+]")),
             ("Open Folder…", Command::OpenFolder, Some("Meta+Shift+o")),
         ] {
             state.add(&file, label, command, shortcut, false)?;
@@ -412,6 +416,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
     match command {
         Command::QuickOpen => (ready && app.folder.root().is_some(), false),
+        Command::Step(direction) => (ready && app.trail.can_step(direction), false),
         Command::OpenRecent(index) => (ready && index < app.workspace.recent().len(), false),
         Command::ClearRecent => (!app.workspace.recent().is_empty(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),
@@ -507,6 +512,7 @@ impl App {
             }),
             Command::Open => Message::Open,
             Command::QuickOpen => Message::QuickOpen(super::quick_open::Message::Open),
+            Command::Step(direction) => Message::Step(direction),
             Command::OpenFolder => Message::Folder(folder::Message::Pick),
             Command::OpenRecent(index) => Message::Workspace(workspace::Message::OpenRecent(index)),
             Command::ClearRecent => Message::Workspace(workspace::Message::ClearRecent),
@@ -562,7 +568,7 @@ mod tests {
     use crate::document::selection::Selection;
 
     #[test]
-    fn native_new_uses_the_unsaved_guard_and_closes_only_transient_commands() {
+    fn native_new_keeps_unsaved_writing_and_closes_only_transient_commands() {
         let (mut app, initial) = App::new();
         drop(initial);
         let source = "café and 🦀";
@@ -576,17 +582,18 @@ mod tests {
         app.overlay = Some(Overlay::Chrome);
         app.chrome.menu = Some(chrome::Menu::Document);
         drop(app.native_menu_command(Command::New));
-        assert_eq!(app.overlay, Some(Overlay::Unsaved));
+        assert!(app.overlay.is_none());
         assert!(app.chrome.menu.is_none());
-        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.document.source(), "");
+        let kept = app.background.dirty().next().unwrap();
+        assert_eq!(kept.document.source(), source);
         assert_eq!(
-            app.session.selection,
+            kept.selection,
             Selection {
                 anchor: source.len(),
                 head: 0
             }
         );
-        assert!(app.session.dirty);
     }
 
     #[test]

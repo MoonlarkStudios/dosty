@@ -1,3 +1,4 @@
+use super::super::trail::Direction;
 use super::super::{EditorMode, Pending, folder};
 use super::*;
 use crate::document::selection::Selection;
@@ -191,7 +192,7 @@ fn cancel_and_workspace_changes_discard_search_without_source_or_preference_chan
 }
 
 #[tokio::test]
-async fn opening_uses_the_unsaved_guard_and_cancel_preserves_the_existing_document() {
+async fn opening_keeps_unsaved_writing_open_and_back_returns_to_it() {
     let directory = tempfile::tempdir().unwrap();
     let target = directory.path().join("Target.md");
     std::fs::write(&target, "# Target").unwrap();
@@ -201,13 +202,17 @@ async fn opening_uses_the_unsaved_guard_and_cancel_preserves_the_existing_docume
     drop(app.update_quick_open(Message::Open));
     let task = app.update_quick_open(Message::Choose(target.clone()));
     settle(&mut app, task).await;
-    assert_eq!(app.overlay, Some(Overlay::Unsaved));
-    assert!(matches!(&app.pending, Some(Pending::Open(Some(path))) if path == &target));
-    assert_eq!(app.session.document.source(), source);
-    assert!(app.quick_open.candidates.is_empty());
-    drop(app.update_message(AppMessage::CloseOverlay));
+    assert!(app.overlay.is_none());
     assert!(app.pending.is_none());
+    assert_eq!(app.session.path.as_ref(), Some(&target));
+    assert_eq!(app.session.document.source(), "# Target");
+    assert!(app.quick_open.candidates.is_empty());
+    assert!(app.notification.as_deref().unwrap().contains("Draft.md"));
+    let task = app.update_message(AppMessage::Step(Direction::Back));
+    settle(&mut app, task).await;
     assert_eq!(app.session.document.source(), source);
+    assert!(app.session.dirty);
+    assert!(app.session.document.can_undo());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Target");
 }
 

@@ -909,6 +909,13 @@ impl App {
             self.folder_error("A folder cannot be moved into itself.".into());
             return Task::none();
         }
+        // Only the page's unsaved writing is relocated with its file. A
+        // background document's unsaved image references would be left behind.
+        if let Some(unsaved) = self.background.dirty_under(&from) {
+            let message = format!("Save {} before moving it.", unsaved.display_name);
+            self.folder_error(message);
+            return Task::none();
+        }
         if !self.commit_cell() {
             return Task::none();
         }
@@ -988,6 +995,10 @@ impl App {
                 }
                 self.folder.remap(&result.from, &result.to);
                 remembered = self.workspace_moved(&result.from, &result.to);
+                for parked in self.background.release_clean_under(&result.from) {
+                    self.recovery.discard(parked.checkpoint);
+                }
+                self.trail.moved(&result.from, &result.to);
                 if self.session.document.collaboration().id() == inflight.document
                     && self.session.document.collaboration().replica_id() == inflight.replica
                     && let Some(path) = result.active_path
@@ -995,6 +1006,7 @@ impl App {
                     self.session.display_name = name(&path);
                     self.session.path = Some(path);
                     self.recovery.path_changed();
+                    self.page_settled();
                 }
                 self.folder.notice = Some(if inflight.undoing {
                     "Move undone".into()
@@ -1638,19 +1650,47 @@ mod tests {
     }
 
     #[test]
-    fn file_switch_uses_the_unsaved_guard_and_leaves_active_row_until_success() {
+    fn file_switch_loads_without_asking_and_leaves_active_row_until_success() {
         let mut app = app();
         app.session.dirty = true;
         let selection = app.session.selection;
         drop(app.update_folder(Message::Tree(file_tree::Action::Open(
             "/writing/other.md".into(),
         ))));
-        assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
+        assert!(app.overlay.is_none());
+        assert!(app.loading);
         assert_eq!(
             app.session.path.as_deref(),
             Some(Path::new("/writing/note.md"))
         );
         assert_eq!(app.session.selection, selection);
+        assert!(app.session.dirty);
+    }
+
+    #[test]
+    fn a_file_with_unsaved_background_writing_cannot_be_moved_from_under_it() {
+        let mut app = app();
+        app.folder.root = Some("/".into());
+        app.session.dirty = true;
+        app.set_document(
+            "Elsewhere".into(),
+            Some("/elsewhere/other.md".into()),
+            "other.md".into(),
+        );
+        // The file itself, and a folder that contains it.
+        for source in ["/writing/note.md", "/writing"] {
+            app.notification = None;
+            drop(app.update_folder(Message::Tree(file_tree::Action::Move {
+                source: source.into(),
+                destination: "/drafts".into(),
+            })));
+            assert!(app.notification.as_deref().unwrap().contains("note.md"));
+            assert!(!app.busy && app.folder.inflight.is_none());
+        }
+        assert_eq!(
+            app.background.dirty().next().unwrap().path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
     }
 
     #[test]

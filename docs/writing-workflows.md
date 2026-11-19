@@ -5,6 +5,40 @@ the bundled essay and image under the configuration directory's `samples/`
 folder. Copies work offline and do not replace one another. Save As moves a copy
 into the writer's folder.
 
+## Moving between documents
+
+Replacing the document on the page never asks about unsaved changes. The
+outgoing document stays open in the background with its unsaved changes, its
+undo history, and its recovery copy, and a notice names it when it had unsaved
+changes. Nothing is written to its file until it is saved.
+
+**Back** (Cmd/Ctrl+[) and **Forward** (Cmd/Ctrl+]) move through the documents
+visited in the window, up to 64. They are also in File on macOS and in the File
+command menu elsewhere. Opening a document from anywhere other than Back or
+Forward replaces the forward part of that trail.
+
+A document with unsaved changes returns exactly as it was left, without reading
+its file; saving still checks the file against the baseline it was opened from.
+A clean document is read from its file again. If the file is unchanged, its
+background copy returns with its undo history; otherwise the file's current
+contents replace it. Choosing the file of the unsaved page itself is refused
+rather than reading the saved copy over the writing.
+
+Unsaved documents are kept until saved or discarded. Clean background documents
+are a convenience: at most 8, and 32 MiB of source, are kept, least recently
+used released first. A clean document that was never saved, such as an untouched
+new page, is dropped when replaced.
+
+Closing the window is the one place Dosty asks. A single prompt names the unsaved
+documents. **Save changes** saves the page, then brings each unsaved background
+document to the page in turn and saves it, asking for a name where one was never
+chosen; a cancelled or failed save stops there with everything still open.
+**Discard** closes without saving any of them. **Cancel** returns to writing.
+
+A file with unsaved background changes, or a folder containing one, cannot be
+moved or renamed until that document is saved: only the page's unsaved image
+references are relocated with a move.
+
 ## Files and folders
 
 **File → Open…** opens a single document; **Open folder…** or Cmd/Ctrl+Shift+O
@@ -70,7 +104,7 @@ Escape or leaving the application cancels a drag. A completed move briefly
 highlights the destination and offers **Undo move** in a contextual notice. Undo move is a
 checked reverse move and may fail if the filesystem has changed; it is separate
 from the document's preserved text undo/redo. Opening files and creating a new
-document use the existing Save/Discard/Cancel guard.
+document [keep the outgoing document open](#moving-between-documents).
 
 Organization runs on workers under ordered directory and document locks. Moves
 stay on one filesystem, reject occupied names and folder cycles, and preserve
@@ -112,7 +146,7 @@ Word count and reading time stay at the bottom center of the writing column whil
 
 Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/path search within the current workspace. It searches the same bounded Markdown path snapshot as Files, including collapsed folders. Matching is case-insensitive and requires every whitespace-separated term; exact filenames and filename prefixes rank first. The first 100 results are shown with a match count when more exist. Narrow the query to reach other matches. After external file changes, use the folder-name menu’s Refresh action to update the snapshot.
 
-Up/Down selects a result without moving the query caret; Enter opens it through the existing file-loading and Save/Discard/Cancel guards. Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active workspace documents come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
+Up/Down selects a result without moving the query caret; Enter opens it through the existing file loading, [keeping the outgoing document open](#moving-between-documents). Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active workspace documents come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
 
 ## Writing and details
 
@@ -123,7 +157,7 @@ Up/Down selects a result without moving the query caret; Enter opens it through 
   cross-paragraph selections do not become one link.
 - **Open a link:** Cmd/Ctrl-click or use Open in its details. HTTP/HTTPS and email
   use the OS handler. `#heading-slug` navigates locally. Relative `.md`, `.markdown`,
-  and `.txt` links use Dosty's unsaved-document guard. Unsupported schemes produce
+  and `.txt` links keep the outgoing document open in the background. Unsupported schemes produce
   a message. Cross-file fragments and hover cards are unsupported.
 - **Image:** choose a file/URL, paste one copied image file or raster image, or
   drop PNG/JPEG/GIF/WebP at the current source selection. Double-click an image,
@@ -199,7 +233,7 @@ writer identity. Recovery files are bounded to 112 MiB and use private temporary
 permissions; the recovery directory is private on Unix.
 
 Startup announces available copies. **Help → Recovery Copies…** lists them by name and
-recency; Open copy uses Save/Discard/Cancel guards. Restore preserves the original
+recency; Open copy keeps the outgoing document open in the background. Restore preserves the original
 saved-file baseline, so Save still detects external changes. Save As keeps both.
 Corrupt, oversized, or unsupported copies remain on disk with controlled errors.
 

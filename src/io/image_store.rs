@@ -39,6 +39,18 @@ pub enum Asset {
     Failed(String),
 }
 
+/// The image and link destinations one document's undo history can restore.
+///
+/// The ledger belongs to a document rather than to the decoded-image cache, so
+/// it travels with a document that leaves the page and later returns.
+#[derive(Default)]
+pub(crate) struct References {
+    history: HashSet<String>,
+    links: HashSet<String>,
+    bytes: usize,
+    incomplete: bool,
+}
+
 #[derive(Default)]
 pub struct ImageStore {
     assets: HashMap<String, Asset>,
@@ -60,10 +72,25 @@ impl ImageStore {
         }
     }
     pub fn clear_history(&mut self) {
-        self.history.clear();
-        self.links.clear();
-        self.history_bytes = 0;
-        self.history_incomplete = false;
+        drop(self.take_references());
+    }
+
+    /// Detaches the current document's ledger, leaving an empty one behind.
+    pub(crate) fn take_references(&mut self) -> References {
+        References {
+            history: std::mem::take(&mut self.history),
+            links: std::mem::take(&mut self.links),
+            bytes: std::mem::take(&mut self.history_bytes),
+            incomplete: std::mem::take(&mut self.history_incomplete),
+        }
+    }
+
+    /// Replaces the ledger with one detached earlier by `take_references`.
+    pub(crate) fn restore_references(&mut self, references: References) {
+        self.history = references.history;
+        self.links = references.links;
+        self.history_bytes = references.bytes;
+        self.history_incomplete = references.incomplete;
     }
 
     /// Retain local hyperlink destinations that Undo or Redo can restore.
@@ -305,8 +332,15 @@ mod tests {
         let next = crate::document::projection::Projection::new("[Another](next.md)");
         store.record_links(&next.rich.links);
         assert!(!store.history().complete);
-        store.clear_history();
+        let exhausted = store.take_references();
         store.record_links(&next.rich.links);
+        assert_eq!(store.history().links, ["next.md"]);
+        assert!(store.history().complete);
+        let next_ledger = store.take_references();
+        store.restore_references(exhausted);
+        assert_eq!(store.history().links, ["other.md"]);
+        assert!(!store.history().complete);
+        store.restore_references(next_ledger);
         assert_eq!(store.history().links, ["next.md"]);
         assert!(store.history().complete);
     }

@@ -141,6 +141,17 @@ statistics visibility, and writing typeface. The typeface is applied to the stor
 resolved typography on startup, appearance changes, and preference changes;
 layout/cache metrics include it so text is reshaped on a switch.
 
+`app/session.rs` holds what must survive when a document leaves the page: its
+text and history, selection, path, and saved baseline. `App` keeps one session on
+the page and rebuilds view state (projection, editor buffer, table drafts) when a
+session is installed. `app/background.rs` keeps outgoing sessions with their image
+reference ledger and recovery identity; unsaved ones are never released, clean
+ones are bounded. Each unsaved background session gets a recovery copy on the next
+scheduler tick, ahead of the page's own, with one write in flight at a time.
+`app/trail.rs` records visited documents for Back and Forward; a step moves the
+trail only when its document arrives, since opening may be asynchronous or fail.
+Only closing the window raises the unsaved guard.
+
 `app/workspace.rs` owns remembered workspaces; `io/workspace_state.rs` stores them
 in the data directory. A successful scan of a new root adopts it as the current
 workspace and applies state read before the scan. Replacing a document first

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::super::{Pending, Sidebar, event_message};
+use super::super::{Sidebar, event_message};
 use super::*;
 use crate::document::selection::Selection;
 use crate::io::storage::{LoadedFile, Preferences};
@@ -310,7 +310,7 @@ fn hide_sidebars_preserves_reverse_utf8_selection_native_buffer_and_history() {
 }
 
 #[test]
-fn titlebar_commands_preserve_the_existing_unsaved_document_guard() {
+fn titlebar_commands_keep_unsaved_writing_without_asking() {
     let parent = std::env::temp_dir().join("dosty-chrome-command-folder");
     for (index, command) in [
         AppMessage::New,
@@ -332,17 +332,21 @@ fn titlebar_commands_preserve_the_existing_unsaved_document_guard() {
             &mut app,
             AppMessage::Chrome(Message::Run(Box::new(command))),
         );
-        assert_eq!(app.overlay, Some(Overlay::Unsaved));
+        assert_ne!(app.overlay, Some(Overlay::Unsaved));
         assert!(app.chrome.menu.is_none());
-        assert_eq!(app.session.document.source(), source);
-        assert_eq!(app.session.selection, selection);
-        assert!(app.session.dirty);
-        assert!(!app.loading);
-        match (&app.pending, index) {
-            (Some(Pending::New), 0) | (Some(Pending::Open(None)), 1) => {}
-            (Some(Pending::FolderNew(path)), 2) => assert_eq!(path, &parent),
-            pending => panic!("command lost its guarded pending action: {pending:?}"),
-        }
+        assert!(app.pending.is_none());
+        // New replaces the page at once; the others are still choosing or
+        // creating a file. Either way the writing is held, never dropped.
+        let replaced = index == 0;
+        assert_eq!(app.session.document.source().is_empty(), replaced);
+        let held = if replaced {
+            app.background.dirty().next().unwrap()
+        } else {
+            &app.session
+        };
+        assert_eq!(held.document.source(), source);
+        assert_eq!(held.selection, selection);
+        assert!(held.dirty);
     }
 }
 
@@ -1353,7 +1357,7 @@ fn native_titlebar_menu_keyboard_choices_stay_visible_in_a_short_window() {
 }
 
 #[tokio::test]
-async fn native_file_drag_survives_undo_editing_and_cancelled_new_with_hover_expansion() {
+async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_hover_expansion() {
     use crate::editor::file_tree;
     use iced::Point;
 
@@ -1537,8 +1541,11 @@ async fn native_file_drag_survives_undo_editing_and_cancelled_new_with_hover_exp
         let generation = harness.app.session.document.collaboration().generation();
         assert!(harness.app.session.dirty);
         harness.key(Key::Character("n".into()), keyboard::Modifiers::COMMAND);
-        assert_eq!(harness.app.overlay, Some(Overlay::Unsaved));
-        harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
+        assert!(harness.app.overlay.is_none());
+        assert_eq!(harness.app.session.document.source(), "");
+        harness
+            .message_async(AppMessage::Step(Direction::Back))
+            .await;
         assert!(harness.app.overlay.is_none());
         drag(&mut harness, &from, &archive).await;
         assert!(!from.exists());

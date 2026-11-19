@@ -1,5 +1,6 @@
 //! Writing workflows use the real App transaction, projection, and native mirror.
 
+use super::super::trail::Direction;
 use super::*;
 use crate::document::Document;
 use crate::document::projection::Projection;
@@ -157,7 +158,7 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
 }
 
 #[tokio::test]
-async fn document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_intact() {
+async fn document_drop_keeps_unsaved_writing_reverse_selection_and_undo_for_back() {
     use iced::futures::StreamExt;
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("another.md");
@@ -176,20 +177,24 @@ async fn document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_in
     let task = app.update_message(AppMessage::Dropped(path));
     assert_eq!(app.session.document.source(), source);
     assert_eq!(app.session.selection, selection);
-    let mut effects = iced_runtime::task::into_stream(task).unwrap();
-    while let Some(effect) = effects.next().await {
-        match effect {
-            iced_runtime::Action::Output(message) => send(&mut app, message),
-            effect => panic!("Unexpected document drop effect: {effect:?}"),
+    // Classifying the path and reading the file are separate background steps.
+    // Focus and scroll operations need a live widget tree and are skipped.
+    let mut tasks = vec![task];
+    while let Some(task) = tasks.pop() {
+        let Some(mut effects) = iced_runtime::task::into_stream(task) else {
+            continue;
+        };
+        while let Some(effect) = effects.next().await {
+            if let iced_runtime::Action::Output(message) = effect {
+                tasks.push(app.update_message(message));
+            }
         }
     }
-    assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
-    assert!(matches!(app.pending, Some(Pending::Open(Some(_)))));
-    assert_eq!(app.session.document.source(), source);
-    assert_eq!(app.session.selection, selection);
-    send(&mut app, AppMessage::CloseOverlay);
     assert!(app.overlay.is_none());
     assert!(app.pending.is_none());
+    assert_eq!(app.session.document.source(), "Another document.");
+    send(&mut app, AppMessage::Step(Direction::Back));
+    assert!(app.session.dirty);
     assert_eq!(app.session.document.source(), source);
     assert_eq!(app.session.selection, selection);
     send(&mut app, AppMessage::Undo);
@@ -593,7 +598,7 @@ fn focusing_details_reconciles_editor_focus_and_settles_the_native_redraw_loop()
 }
 
 #[test]
-fn local_link_navigation_closes_details_and_respects_the_unsaved_guard() {
+fn local_link_navigation_closes_details_and_keeps_unsaved_writing() {
     let mut app = app("# A heading\n\nA [heading](#a-heading) and [file](other.md).\n");
     let dir = tempfile::tempdir().unwrap();
     app.session.path = Some(dir.path().join("current.md"));
@@ -605,11 +610,6 @@ fn local_link_navigation_closes_details_and_respects_the_unsaved_guard() {
     assert_eq!(app.session.selection.head, 0);
     let original = app.session.document.source().to_owned();
     app.session.dirty = true;
-    send(&mut app, AppMessage::Link("other.md".into()));
-    assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
-    assert_eq!(app.session.document.source(), original);
-    send(&mut app, AppMessage::CloseOverlay);
-    app.session.dirty = false;
     let link = app.session.document.source().find("[file]").unwrap();
     select(&mut app, Selection::caret(link));
     tool(&mut app, Message::Details(Kind::Link));
@@ -626,6 +626,11 @@ fn local_link_navigation_closes_details_and_respects_the_unsaved_guard() {
     );
     assert!(app.overlay.is_none());
     assert_eq!(app.session.document.source(), "# Another document\n");
+    assert!(
+        app.background
+            .dirty()
+            .any(|kept| kept.document.source() == original)
+    );
 }
 
 #[tokio::test]

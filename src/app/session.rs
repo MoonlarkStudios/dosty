@@ -2,9 +2,17 @@
 //! it differs from the last saved copy.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::document::Document;
 use crate::document::selection::Selection;
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Identifies one session for as long as the application runs. Reloading a
+/// file starts a new session with a new identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SessionId(u64);
 
 /// One open document and its relationship to the file it was loaded from.
 ///
@@ -12,6 +20,7 @@ use crate::document::selection::Selection;
 /// state derived from it (the projection, the editor buffer, table drafts)
 /// belongs to `App` and is rebuilt when a session is installed.
 pub(super) struct Session {
+    id: SessionId,
     pub(super) document: Document,
     /// UTF-8 byte offsets into the document source, with anchor/head direction.
     pub(super) selection: Selection,
@@ -34,6 +43,7 @@ impl Session {
     pub(super) fn new(document: Document, path: Option<PathBuf>, display_name: String) -> Self {
         let saved_source = document.source().to_owned();
         Self {
+            id: SessionId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
             document,
             selection: Selection::default(),
             path,
@@ -43,6 +53,10 @@ impl Session {
             saved_generation: 0,
             dirty: false,
         }
+    }
+
+    pub(super) fn id(&self) -> SessionId {
+        self.id
     }
 
     /// Recomputes `dirty` by comparing the document with its saved baseline.
