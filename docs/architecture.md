@@ -164,11 +164,13 @@ complete before a confirmed window close. Workspace state is a cache: write
 failures are logged, never shown, and every remembered path is revalidated against
 the current scan before use.
 
-Quick Open owns an ephemeral filename/path index derived from the existing bounded
-workspace snapshot. Its focused query intercepts result navigation locally.
-Acceptance reuses guarded file loading; cancellation restores the previous widget
-focus without committing a table draft or editing the source. Workspace changes
-invalidate it, refreshes update it, and closing discards its index and query.
+Quick Open is the switcher. It derives its rows when it opens from the open
+place's bounded snapshot, the background documents, and the library, and scans
+the other places on a cancellable worker task whose results it ignores once
+closed or superseded. Its focused query intercepts row navigation locally.
+Acceptance reuses file loading, background resumption, or place opening;
+cancellation restores the previous widget focus without committing a table draft
+or editing the source. Closing discards its index, query, and running scan.
 
 The folder workflow owns navigation, expanded paths, bounded scan generations,
 and operation identities. Folder discovery returns path-only snapshots from a

@@ -196,6 +196,10 @@ impl State {
     pub(super) fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
+    /// Every file and folder of the open place, as last scanned.
+    pub(super) fn entries(&self) -> &[folder::Entry] {
+        &self.entries
+    }
     pub(super) fn files(&self) -> impl Iterator<Item = &Path> {
         self.entries
             .iter()

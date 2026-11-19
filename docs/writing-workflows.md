@@ -151,9 +151,44 @@ Word count and reading time stay at the bottom center of the writing column whil
 
 ### Quick Open
 
-Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/path search within the open place. It searches the same bounded Markdown path snapshot as Files, including collapsed folders. Matching is case-insensitive and requires every whitespace-separated term; exact filenames and filename prefixes rank first. The first 100 results are shown with a match count when more exist. Narrow the query to reach other matches. After external file changes, use the folder-name menu’s Refresh action to update the snapshot.
+Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon summons the switcher
+over the page, with or without a place open. It is the one surface for moving
+between documents; choosing something dismisses it.
 
-Up/Down selects a result without moving the query caret; Enter opens it through the existing file loading, [keeping the outgoing document open](#moving-between-documents). Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. Opening another place closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active documents of the open place come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
+With an empty query it shows, in order:
+
+- **Unsaved:** documents open in the background with unsaved changes, marked, and
+  never the page itself. Choosing one returns it as it was left.
+- **Recent:** up to six recently active documents of the open place, leaving out
+  the page. The first is preselected, so Cmd/Ctrl+P then Enter switches back.
+- **The open place:** its top-level folders, then its top-level documents. Right
+  or Enter steps into the selected folder and Left steps out, returning to the
+  folder that was left. Stepping never changes the page.
+- **Places:** the other places. Choosing one opens it and keeps the switcher open
+  on its contents.
+
+Typing searches documents by name and path across the whole library. Matching is
+case-insensitive and requires every whitespace-separated term; exact filenames
+and filename prefixes rank first, and within a rank recently active documents
+lead, then the open place, then other places. A document in another place can be
+matched by its place's name and shows that place beside its folder. Unsaved
+documents match by title. Documents are shown by filename without the Markdown
+extension. The first 100 rows are shown with a match count when more exist.
+
+The open place is searched from the same bounded snapshot as Files, including
+collapsed folders; after external file changes, use Refresh in the place-name
+menu. Other places are scanned on a worker, one at a time, when the switcher
+opens, within a shared bound of 65,536 documents; their documents join the
+results when that scan finishes. A place that cannot be read is absent from
+search. Nothing read for the switcher outlives it: closing discards the query,
+the index, and any scan still running. No search history is persisted.
+
+Up/Down selects without moving the query caret; Left and Right step through
+folders only while the query is empty. Escape or an outside click restores the
+previous focused widget, source selection, and writing viewport. Choosing the
+document on the page only closes the switcher. Opening a place from outside the
+switcher closes it; a refresh updates its rows. It is unavailable while another
+modal or file load is active.
 
 ## Writing and details
 

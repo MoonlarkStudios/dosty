@@ -451,6 +451,12 @@ fn native_quiet_previews() {
     app.chrome.files.open = true;
     render(&app, Size::new(1180.0, 820.0), "native-quiet-both-sidebars");
     render(&app, Size::new(760.0, 520.0), "native-quiet-both-narrow");
+    app.workspace.remember_for_preview(&[
+        "/writing/Field notes",
+        "/Users/writer/Essays",
+        "/Volumes/Archive/Essays",
+        "/Users/writer/Letters",
+    ]);
     drop(app.update_quick_open(quick_open::Message::Open));
     render(&app, Size::new(1180.0, 820.0), "workspace-quick-open");
     render(&app, Size::new(760.0, 520.0), "workspace-quick-open-narrow");
@@ -464,12 +470,6 @@ fn native_quiet_previews() {
     drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Workspace)));
     render(&app, Size::new(1180.0, 820.0), "workspace-menu");
     drop(app.update_message(Message::CloseOverlay));
-    app.workspace.remember_for_preview(&[
-        "/writing/Field notes",
-        "/Users/writer/Essays",
-        "/Volumes/Archive/Essays",
-        "/Users/writer/Letters",
-    ]);
     drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Places)));
     render(&app, Size::new(1180.0, 820.0), "places-menu");
     drop(app.update_message(Message::CloseOverlay));

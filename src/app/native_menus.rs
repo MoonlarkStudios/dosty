@@ -403,7 +403,7 @@ impl State {
 fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
     match command {
-        Command::QuickOpen => (ready && app.folder.root().is_some(), false),
+        Command::QuickOpen => (ready, false),
         Command::Step(direction) => (ready && app.trail.can_step(direction), false),
         Command::OpenPlace(index) => (ready && index < app.workspace.places().len(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),

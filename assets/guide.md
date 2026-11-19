@@ -8,7 +8,7 @@ Dosty opens with one blank document and both sidebars hidden. Open a file, or ch
 
 With a place open, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Files. Use the right button or Cmd/Ctrl+Alt+O to toggle Outline independently. Each toggle keeps its sidebar open until you close it. When both panels cannot fit comfortably, Outline overlays the document rather than squeezing the writing column. **Hide Sidebars** (Cmd/Ctrl+Shift+F) hides both panels while retaining their open state; the same command restores them. Escape dismisses the current editing context rather than restoring hidden sidebars.
 
-**Quick Open** (Cmd/Ctrl+P, or the search icon in Files) finds Markdown files by filename or relative path, including files in collapsed folders. Type one or more terms, use Up/Down to choose a result, and Enter to open it. Escape returns focus to where you were working. The search is cleared when closed.
+**Quick Open** (Cmd/Ctrl+P, or the search icon in Files) is the one place to move between documents. Before you type, it lists documents with unsaved changes, the documents you used most recently, the folders and documents of the open place, and your other places. Use Up/Down to choose, Right or Enter to step into a folder, Left to step back out, and Enter to open a document. Type one or more terms to search by name or path across every place in your library. Escape returns focus to where you were working. The search is cleared when closed.
 
 Moving to another document never interrupts you. The one you leave stays open in the background with its unsaved changes and undo history, and **Back** (Cmd/Ctrl+[) and **Forward** (Cmd/Ctrl+]) move through the documents you have visited. Dosty asks about unsaved changes only when you close the window, once, naming every unsaved document.
 
@@ -51,7 +51,7 @@ fn main() {
 | :--- | :--- |
 | F10 | Open the File menu |
 | Cmd/Ctrl + O | Open a file |
-| Cmd/Ctrl + P | Quick Open within the open place |
+| Cmd/Ctrl + P | Quick Open: move between documents and places |
 | Cmd/Ctrl + [ and ] | Back and Forward through visited documents |
 | Cmd/Ctrl + Shift + O | Open a folder |
 | Cmd/Ctrl + S | Save document |
