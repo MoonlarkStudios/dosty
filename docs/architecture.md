@@ -150,7 +150,9 @@ ones are bounded. Each unsaved background session gets a recovery copy on the ne
 scheduler tick, ahead of the page's own, with one write in flight at a time.
 `app/trail.rs` records visited documents for Back and Forward; a step moves the
 trail only when its document arrives, since opening may be asynchronous or fail.
-Only closing the window raises the unsaved guard.
+Only closing the window raises the unsaved guard. `app/home.rs` derives the home
+surface from that state rather than storing a flag: it shows on an untouched,
+unsaved page with no trail in either direction, once the library has settled.
 
 `app/workspace.rs` owns the library of places and the open place's remembered
 state; `io/workspace_state.rs` stores them in the data directory. Places are an

@@ -83,11 +83,18 @@ impl State {
         &self.registry.places
     }
 
+    /// Whether the library has been read and no place is still being opened,
+    /// so nothing remembered is about to arrive.
+    pub(super) fn settled(&self) -> bool {
+        self.loaded && self.opening.is_none()
+    }
+
     #[cfg(test)]
     pub(super) fn remember_for_preview(&mut self, roots: &[&str]) {
         for root in roots {
             let _ = self.registry.opened(Path::new(root));
         }
+        self.loaded = true;
     }
 
     /// Absolute paths of the current workspace's documents, most recent first.

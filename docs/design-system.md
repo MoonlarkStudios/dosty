@@ -30,6 +30,8 @@ Built-in theme tests check normal text and interactive accent contrast against t
 
 ## Layout and behavior
 
+Home is drawn on the untouched first page, below the room left for its first lines and caret. Its labels align with the writing column; rows extend slightly past it so their hover surface has room. It uses muted section labels and quiet rows, adds no sentence where the page's own placeholder already invites writing, and shows a single line of guidance only when the library is empty.
+
 The document is the central surface, with no ribbon, permanent formatting toolbar, or footer command bar. A quiet titlebar holds Files, Format, and Outline controls on the same background as the sidebars. On macOS it uses a compact row aligned with the native window buttons; the system buttons remain native. File, Edit, Format, View, Window, and Help live in the macOS menu bar. Windows/Linux keep system decorations and an in-window File command menu. F10 opens the keyboard-operated command menu on every platform.
 
 The filename opens document actions and the Write, Source, and Read modes. Normal writing needs no mode label; Source and Read display a small label beside the filename. Titlebar controls and the save indicator remain visible while typing: a check means saved, a filled dot means modified, an empty circle means never saved, a save icon means saving, and a warning means saving failed. Tooltips explain these shapes; clicking can save. A save error stays represented after its notification is dismissed until a successful save or a different document is installed.

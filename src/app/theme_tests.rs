@@ -509,6 +509,23 @@ fn native_quiet_previews() {
 }
 
 #[test]
+#[ignore = "render the home surface with and without places for visual inspection"]
+fn home_previews() {
+    let (mut app, _) = App::new();
+    app.workspace.remember_for_preview(&[]);
+    render(&app, Size::new(1180.0, 820.0), "home-first-launch");
+    app.workspace.remember_for_preview(&[
+        "/writing/Field notes",
+        "/Users/writer/Essays",
+        "/Volumes/Archive/Essays",
+    ]);
+    render(&app, Size::new(1180.0, 820.0), "home-places");
+    render(&app, Size::new(560.0, 520.0), "home-narrow");
+    app.resolved_theme = Preset::Midnight.resolve();
+    render(&app, Size::new(1180.0, 820.0), "home-midnight");
+}
+
+#[test]
 #[ignore = "render table controls in every preset and narrow windows without opening native documents"]
 fn table_controls_previews() {
     let mut fonts = iced_tiny_skia::graphics::text::font_system()

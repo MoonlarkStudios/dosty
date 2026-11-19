@@ -40,6 +40,8 @@ pub(super) mod chrome;
 pub(super) mod folder;
 #[path = "footnotes.rs"]
 pub(super) mod footnotes;
+#[path = "home.rs"]
+mod home;
 #[cfg(target_os = "macos")]
 #[path = "native_menus.rs"]
 pub(super) mod native_menus;
@@ -2856,7 +2858,7 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         let width = self.resolved_theme.typography.content_width;
         if self.mode != EditorMode::Read {
-            return container(
+            let page = container(
                 column![self.editor_view(self.mode == EditorMode::Source)]
                     .spacing(0)
                     .max_width(width)
@@ -2864,8 +2866,12 @@ impl App {
             )
             .padding(iced::Padding::new(32.0).top(56.0).bottom(16.0))
             .center_x(Fill)
-            .height(Fill)
-            .into();
+            .height(Fill);
+            return if self.is_home() {
+                stack![page, self.home_view()].into()
+            } else {
+                page.into()
+            };
         }
         let mut blocks = column![].spacing(12);
         let mut settings = styles::markdown_settings(&self.resolved_theme);

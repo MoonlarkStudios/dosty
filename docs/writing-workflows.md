@@ -5,6 +5,16 @@ the bundled essay and image under the configuration directory's `samples/`
 folder. Copies work offline and do not replace one another. Save As moves a copy
 into the writer's folder.
 
+## Home
+
+A launch with nothing to resume shows home on the first, untouched page: recent
+documents of the open place, the places in the library, and Add place, Open file,
+and Quick Open. The page keeps its caret and focus, so typing starts a document
+and home is gone; it does not return for that document, even if the writing is
+undone. Home waits until the library has been read and any remembered place has
+finished opening, so it never flashes before a document that is about to return.
+A new page requested after visiting a document is a plain blank page.
+
 ## Moving between documents
 
 Replacing the document on the page never asks about unsaved changes. The
