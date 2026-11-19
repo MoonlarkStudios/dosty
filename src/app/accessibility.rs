@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use accesskit::ActionRequest;
 use iced::advanced::widget::{Id, Operation, operation};
-use iced::futures::{StreamExt, channel::mpsc};
+use iced::futures::StreamExt;
+use iced::futures::channel::mpsc;
 use iced::{Rectangle, Task};
 use iced_winit::accessibility::Config;
 

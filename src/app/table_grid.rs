@@ -5,7 +5,8 @@
 
 use std::sync::Arc;
 
-use iced::keyboard::{Key, Modifiers, key::Named};
+use iced::keyboard::key::Named;
+use iced::keyboard::{Key, Modifiers};
 use iced::widget::{operation, text_editor};
 use iced::{Element, Task};
 use yrs::Assoc;

@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use iced::futures::{StreamExt, channel::mpsc};
+use iced::futures::StreamExt;
+use iced::futures::channel::mpsc;
 use iced::{Task, window};
 use muda::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 

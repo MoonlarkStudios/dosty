@@ -14,7 +14,8 @@ use iced::{Element, Event, Fill, Padding, Point, Size, Task, event, window};
 
 use super::{App, EDITOR, Message as AppMessage, Overlay, Pending};
 use crate::editor::file_tree::{self, FileTree};
-use crate::io::{file_ops, folder, storage::FileError};
+use crate::io::storage::FileError;
+use crate::io::{file_ops, folder};
 use crate::theme::styles::{self, Button};
 
 const NAME_INPUT: &str = "folder-name";
