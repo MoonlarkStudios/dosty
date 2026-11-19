@@ -49,6 +49,8 @@ pub enum Message {
     Refresh,
     /// Remove the open place from the library. Its files are untouched.
     Remove,
+    /// Name the never-saved document on the page.
+    NameDraft,
     Tree(file_tree::Action),
     NewDocument(PathBuf),
     NewFolder(PathBuf),
@@ -94,6 +96,8 @@ enum NameAction {
     Document(PathBuf),
     Directory(PathBuf),
     Rename(PathBuf),
+    /// Name the never-saved document on the page; no file exists yet.
+    Draft,
 }
 
 #[derive(Debug, Clone)]
@@ -580,6 +584,9 @@ impl App {
                 }
                 return self.request(Pending::FolderNew(parent));
             }
+            Message::NameDraft if !self.busy && self.session.path.is_none() => {
+                return self.folder_name(NameAction::Draft);
+            }
             Message::NewFolder(parent) if !self.busy => {
                 return self.folder_name(NameAction::Directory(parent));
             }
@@ -694,6 +701,7 @@ impl App {
             NameAction::Document(_) => "Untitled.md".into(),
             NameAction::Directory(_) => "New folder".into(),
             NameAction::Rename(path) => name(path),
+            NameAction::Draft => self.session.display_name.clone(),
         };
         self.folder.dialog = Some(Dialog::Name {
             action,
@@ -797,6 +805,7 @@ impl App {
             NameAction::Directory(_) => false,
             NameAction::Document(_) => true,
             NameAction::Rename(path) => folder::is_markdown(path),
+            NameAction::Draft => true,
         };
         let value = match validate_name(&value, kind) {
             Ok(value) => value,
@@ -815,6 +824,13 @@ impl App {
             }
             NameAction::Document(parent) => self.start_folder_create(parent, value, false),
             NameAction::Directory(parent) => self.start_folder_create(parent, value, true),
+            // Nothing exists on disk yet; the first save uses this name.
+            NameAction::Draft => {
+                self.session.name(value);
+                self.folder.dialog = None;
+                self.overlay = None;
+                operation::focus(EDITOR)
+            }
         }
     }
 
@@ -1157,13 +1173,18 @@ impl App {
                 error,
             }) => {
                 let (title, parent) = match action {
-                    NameAction::Document(parent) => ("New document", parent.as_path()),
-                    NameAction::Directory(parent) => ("New folder", parent.as_path()),
-                    NameAction::Rename(path) => ("Rename", path.parent().unwrap_or(path)),
+                    NameAction::Document(parent) => ("New document", Some(parent.as_path())),
+                    NameAction::Directory(parent) => ("New folder", Some(parent.as_path())),
+                    NameAction::Rename(path) => ("Rename", Some(path.parent().unwrap_or(path))),
+                    NameAction::Draft => ("Name this draft", self.session.folder.as_deref()),
                 };
+                let parent = parent.map_or_else(
+                    || "Saving will ask where to keep it.".into(),
+                    Path::to_string_lossy,
+                );
                 content = content
                     .push(text(title).font(styles::BODY_FONT).size(28))
-                    .push(text(parent.to_string_lossy()).size(12).color(tokens.muted));
+                    .push(text(parent).size(12).color(tokens.muted));
                 let mut input = text_input("Name", value)
                     .id(NAME_INPUT)
                     .style(styles::input(tokens))

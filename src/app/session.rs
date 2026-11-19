@@ -36,6 +36,42 @@ pub(super) struct Session {
     /// matches the baseline is still modified if its history has moved on.
     saved_generation: u64,
     pub(super) dirty: bool,
+    /// Where the first save of a never-saved document writes it without
+    /// asking. `None` asks, as does any document opened from elsewhere.
+    pub(super) folder: Option<PathBuf>,
+    /// Whether `display_name` was chosen rather than derived. A never-saved
+    /// document that was not named is titled from its first line.
+    pub(super) named: bool,
+}
+
+const UNTITLED: &str = "Untitled";
+const MAX_TITLE_CHARS: usize = 60;
+
+/// A file name for a draft, taken from the first line that has any words.
+///
+/// Markdown markers and characters that cannot appear in a file name on every
+/// platform are dropped, so the result is always a valid, visible name.
+fn draft_name(source: &str) -> String {
+    let title: String = source
+        .lines()
+        .map(|line| {
+            line.chars()
+                .filter(|character| !matches!(character, '#' | '*' | '_' | '`' | '[' | ']' | '>'))
+                .map(|character| match character {
+                    '/' | '\\' | ':' | '?' | '"' | '<' | '|' => ' ',
+                    character if character.is_control() => ' ',
+                    character => character,
+                })
+                .collect::<String>()
+        })
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .find(|line| line.chars().any(char::is_alphanumeric))
+        .unwrap_or_default();
+    let title: String = title.chars().take(MAX_TITLE_CHARS).collect();
+    // A trailing dot or space is not preserved by every file system.
+    let title = title.trim_matches(|character: char| character == '.' || character.is_whitespace());
+    let title = if title.is_empty() { UNTITLED } else { title };
+    format!("{title}.md")
 }
 
 impl Session {
@@ -52,7 +88,32 @@ impl Session {
             saved_version: None,
             saved_generation: 0,
             dirty: false,
+            folder: None,
+            named: true,
         }
+    }
+
+    /// Starts an empty draft that its first save writes into `folder`, titled
+    /// from its first line until the writer names it.
+    pub(super) fn draft(folder: Option<PathBuf>) -> Self {
+        Self {
+            folder,
+            named: false,
+            ..Self::new(Document::new(String::new()), None, draft_name(""))
+        }
+    }
+
+    /// Keeps an unnamed draft titled after its first line.
+    pub(super) fn retitle(&mut self) {
+        if self.path.is_none() && !self.named {
+            self.display_name = draft_name(self.document.source());
+        }
+    }
+
+    /// Records the name the writer chose for a draft.
+    pub(super) fn name(&mut self, display_name: String) {
+        self.display_name = display_name;
+        self.named = true;
     }
 
     pub(super) fn id(&self) -> SessionId {
@@ -70,6 +131,8 @@ impl Session {
     /// The save captured a snapshot, so writing that continued while it ran
     /// leaves the session dirty.
     pub(super) fn mark_saved(&mut self, source: String, version: String, generation: u64) {
+        self.folder = None;
+        self.named = true;
         self.saved_source = source;
         self.saved_version = Some(version);
         self.saved_generation = generation;
@@ -79,7 +142,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::Session;
+    use super::{Session, draft_name};
     use crate::document::Document;
     use crate::document::selection::Selection;
 
@@ -139,6 +202,36 @@ mod tests {
         session.mark_saved(source, "v1".into(), generation);
         assert!(session.dirty);
         assert_eq!(session.saved_source, "Quiet.");
+    }
+
+    #[test]
+    fn a_draft_is_titled_from_its_first_words_until_it_is_named() {
+        for (source, name) in [
+            ("", "Untitled.md"),
+            ("\n   \n---\n", "Untitled.md"),
+            ("# The quiet hour\n\nBody.", "The quiet hour.md"),
+            ("\n\n> **Bold** _start_: a/b? `c`\n", "Bold start a b c.md"),
+            ("Chapter 1. ", "Chapter 1.md"),
+            ("海の近く — café", "海の近く — café.md"),
+        ] {
+            assert_eq!(draft_name(source), name, "{source:?}");
+        }
+        let long = draft_name(&"word ".repeat(40));
+        assert_eq!(long.chars().count(), 59 + ".md".len(), "{long}");
+
+        let mut draft = Session::draft(Some("/writing/posts".into()));
+        assert_eq!(draft.display_name, "Untitled.md");
+        append(&mut draft, "# First thoughts");
+        draft.retitle();
+        assert_eq!(draft.display_name, "First thoughts.md");
+        draft.name("first-thoughts.md".into());
+        append(&mut draft, "\n\nMore.");
+        draft.retitle();
+        assert_eq!(draft.display_name, "first-thoughts.md");
+
+        let mut opened = session("# Heading");
+        opened.retitle();
+        assert_eq!(opened.display_name, "Test.md", "only drafts are retitled");
     }
 
     #[test]

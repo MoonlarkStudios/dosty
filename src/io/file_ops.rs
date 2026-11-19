@@ -135,6 +135,52 @@ fn create_document_blocking(parent: &Path, value: &str) -> Result<PathBuf, FileE
     Ok(destination)
 }
 
+/// How many numbered names a draft's first save tries before giving up.
+const MAX_UNIQUE_NAMES: usize = 99;
+
+/// Creates an empty document named `value` in `parent`, or `value 2`,
+/// `value 3`, and so on when that name is taken. Nothing is ever replaced.
+pub async fn create_unique_document(parent: PathBuf, value: String) -> Result<PathBuf, FileError> {
+    tokio::task::spawn_blocking(move || {
+        let value = Path::new(&value);
+        let stem = value
+            .file_stem()
+            .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+        let mut occupied = None;
+        for attempt in 1..=MAX_UNIQUE_NAMES {
+            let candidate = if attempt == 1 {
+                format!("{stem}.md")
+            } else {
+                format!("{stem} {attempt}.md")
+            };
+            match create_document_blocking(&parent, &candidate) {
+                Ok(path) => return Ok(path),
+                // Any failure while the name is taken means "try the next one".
+                Err(failure) if parent.join(&candidate).symlink_metadata().is_ok() => {
+                    occupied = Some(failure);
+                }
+                Err(failure) => return Err(failure),
+            }
+        }
+        Err(occupied.unwrap_or_else(|| error("No free name was found.")))
+    })
+    .await
+    .map_err(|e| error(e.to_string()))?
+}
+
+/// Removes a document created by [`create_unique_document`] whose first save
+/// failed, if nothing has been written to it since.
+pub async fn discard_empty_document(path: PathBuf) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == 0)
+        {
+            let _ = fs::remove_file(&path);
+        }
+    })
+    .await;
+}
+
 pub async fn create_folder(parent: PathBuf, value: String) -> Result<PathBuf, FileError> {
     tokio::task::spawn_blocking(move || create_folder_blocking(&parent, &value))
         .await

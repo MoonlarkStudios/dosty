@@ -87,6 +87,10 @@ mod theme_tests;
 #[path = "task_tests.rs"]
 mod task_tests;
 
+#[cfg(test)]
+#[path = "draft_tests.rs"]
+mod draft_tests;
+
 pub struct App {
     #[cfg(target_os = "macos")]
     accessibility: Option<accessibility::State>,
@@ -1584,6 +1588,7 @@ impl App {
     fn changed(&mut self) {
         self.recovery.edited();
         self.session.refresh_dirty();
+        self.session.retitle();
         self.notification = self.edit_error.take();
         self.refresh_matches();
     }
@@ -2423,7 +2428,17 @@ impl App {
                 return Task::perform(crate::io::writing_sample::load(), Message::Loaded);
             }
             Pending::New => {
-                self.set_document(String::new(), None, "Untitled.md".into());
+                // A new page belongs beside the document the writer was in, or
+                // in the open place when that document has no folder of its own.
+                let folder = self
+                    .session
+                    .path
+                    .as_deref()
+                    .and_then(std::path::Path::parent)
+                    .map(std::path::Path::to_owned)
+                    .or_else(|| self.session.folder.clone())
+                    .or_else(|| self.folder.root().map(std::path::Path::to_owned));
+                self.install_session(Session::draft(folder));
                 return self.activate(0, false);
             }
             Pending::Guide => self.set_document(
@@ -2608,6 +2623,10 @@ impl App {
         } else {
             self.session.path.clone()
         };
+        // A draft that knows its folder is written there without asking.
+        let draft_folder = (!save_as && path.is_none())
+            .then(|| self.session.folder.clone())
+            .flatten();
         let expected = path.as_ref().map(|_| self.session.saved_source.clone());
         let source = Arc::new(self.session.document.source().to_owned());
         let result_source = Arc::clone(&source);
@@ -2624,38 +2643,56 @@ impl App {
         let image_history = self.images.history();
         Task::perform(
             async move {
-                let path = if let Some(path) = path {
-                    path
-                } else {
-                    rfd::AsyncFileDialog::new()
-                        .set_file_name(name)
-                        .add_filter("Markdown", &["md"])
-                        .save_file()
-                        .await
-                        .ok_or_else(|| FileError::Io("Save cancelled".into()))?
-                        .path()
-                        .to_path_buf()
+                let (path, expected, reserved) = match (path, draft_folder) {
+                    (Some(path), _) => (path, expected, false),
+                    // The name is claimed as an empty file that nothing else
+                    // can take, then saved over under the ordinary guard that
+                    // the file still holds what was expected.
+                    (None, Some(folder)) => (
+                        crate::io::file_ops::create_unique_document(folder, name).await?,
+                        Some(String::new()),
+                        true,
+                    ),
+                    (None, None) => (
+                        rfd::AsyncFileDialog::new()
+                            .set_file_name(name)
+                            .add_filter("Markdown", &["md"])
+                            .save_file()
+                            .await
+                            .ok_or_else(|| FileError::Io("Save cancelled".into()))?
+                            .path()
+                            .to_path_buf(),
+                        expected,
+                        false,
+                    ),
                 };
                 let asset_source = Arc::clone(&source);
                 let asset_path = path.clone();
-                tokio::task::spawn_blocking(move || {
-                    crate::io::assets::relocate(
-                        &asset_source,
-                        old_path.as_deref(),
-                        &asset_path,
-                        &image_history,
+                let saved = async {
+                    tokio::task::spawn_blocking(move || {
+                        crate::io::assets::relocate(
+                            &asset_source,
+                            old_path.as_deref(),
+                            &asset_path,
+                            &image_history,
+                        )
+                    })
+                    .await
+                    .map_err(|error| FileError::Io(error.to_string()))??;
+                    collaboration_store::save_document(
+                        path.clone(),
+                        (*source).clone(),
+                        state,
+                        expected,
+                        expected_version,
                     )
-                })
-                .await
-                .map_err(|error| FileError::Io(error.to_string()))??;
-                collaboration_store::save_document(
-                    path,
-                    (*source).clone(),
-                    state,
-                    expected,
-                    expected_version,
-                )
-                .await
+                    .await
+                }
+                .await;
+                if reserved && saved.is_err() {
+                    crate::io::file_ops::discard_empty_document(path).await;
+                }
+                saved
             },
             move |result| Message::Saved {
                 result,

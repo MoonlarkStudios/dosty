@@ -802,11 +802,8 @@ impl App {
         let ready = !self.busy;
         match menu {
             Menu::File => {
-                let new = self.folder.root().map_or(AppMessage::New, |root| {
-                    AppMessage::Folder(folder::Message::NewDocument(root.to_owned()))
-                });
                 vec![
-                    Command::action("New document", Icon::Plus, new, ready),
+                    Command::action("New document", Icon::Plus, AppMessage::New, ready),
                     Command::action("Open file…", Icon::Document, AppMessage::Open, ready),
                     Command::action(
                         "Quick Open…",
@@ -872,6 +869,14 @@ impl App {
                     Command::action("Save", Icon::Save, AppMessage::Save, ready),
                     Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                 ];
+                if self.session.path.is_none() {
+                    commands.push(Command::action(
+                        "Name…",
+                        Icon::Document,
+                        AppMessage::Folder(folder::Message::NameDraft),
+                        ready,
+                    ));
+                }
                 if let Some(path) = &self.session.path {
                     commands.extend([
                         Command::action(

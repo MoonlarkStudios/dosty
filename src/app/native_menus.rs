@@ -409,9 +409,9 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
         Command::Edit(action) => (app.edit_command_enabled(action), false),
         Command::Mode(mode) => (ready, app.mode == mode),
         Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
-        Command::Rename | Command::Move | Command::Location => {
-            (ready && app.session.path.is_some(), false)
-        }
+        // A never-saved document can be named, but has no file to move or show.
+        Command::Rename => (ready, false),
+        Command::Move | Command::Location => (ready && app.session.path.is_some(), false),
         Command::UndoMove => (ready && app.folder.can_undo(), false),
         Command::BackToReference => (ready && app.footnotes.can_return(), false),
         Command::Files => (
@@ -494,9 +494,7 @@ impl App {
             self.chrome.menu = None;
         }
         let message = match command {
-            Command::New => self.folder.root().map_or(Message::New, |root| {
-                Message::Folder(folder::Message::NewDocument(root.to_owned()))
-            }),
+            Command::New => Message::New,
             Command::Open => Message::Open,
             Command::QuickOpen => Message::QuickOpen(super::quick_open::Message::Open),
             Command::Step(direction) => Message::Step(direction),
@@ -532,6 +530,9 @@ impl App {
             Command::Close => {
                 return window::latest()
                     .map(|id| id.map_or(Message::Dismiss, Message::CloseRequested));
+            }
+            Command::Rename if self.session.path.is_none() => {
+                Message::Folder(folder::Message::NameDraft)
             }
             Command::Rename | Command::Move | Command::Location => {
                 let Some(path) = self.session.path.clone() else {

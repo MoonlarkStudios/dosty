@@ -150,6 +150,10 @@ ones are bounded. Each unsaved background session gets a recovery copy on the ne
 scheduler tick, ahead of the page's own, with one write in flight at a time.
 `app/trail.rs` records visited documents for Back and Forward; a step moves the
 trail only when its document arrives, since opening may be asynchronous or fail.
+A never-saved session also carries the folder its first save writes into and
+whether the writer named it; that save claims a unique empty file through the
+ordinary guarded creation path and then saves over it with an empty expected
+baseline, so no separate overwrite check exists.
 Only closing the window raises the unsaved guard. `app/home.rs` derives the home
 surface from that state rather than storing a flag: it shows on an untouched,
 unsaved page with no trail in either direction, once the library has settled.

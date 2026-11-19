@@ -10,6 +10,8 @@ With a place open, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Fi
 
 **Quick Open** (Cmd/Ctrl+P, or the search icon in Files) is the one place to move between documents. Before you type, it lists documents with unsaved changes, the documents you used most recently, the folders and documents of the open place, and your other places. Use Up/Down to choose, Right or Enter to step into a folder, Left to step back out, and Enter to open a document. Type one or more terms to search by name or path across every place in your library. Escape returns focus to where you were working. The search is cleared when closed.
 
+**New document** (Cmd/Ctrl+N) gives you an empty page immediately. It takes its title from its first line and belongs to the folder of the document you were in; the first save puts it there without asking, and never over an existing file. Use **Name…** in the document menu to choose the file name yourself first.
+
 Moving to another document never interrupts you. The one you leave stays open in the background with its unsaved changes and undo history, and **Back** (Cmd/Ctrl+[) and **Forward** (Cmd/Ctrl+]) move through the documents you have visited. Dosty asks about unsaved changes only when you close the window, once, naming every unsaved document.
 
 Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter.

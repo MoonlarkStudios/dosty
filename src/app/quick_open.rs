@@ -440,11 +440,11 @@ impl App {
                     .path
                     .as_deref()
                     .map_or_else(|| title(Path::new(&session.display_name)), title),
-                location: session
-                    .path
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .map_or_else(|| "Not saved yet".into(), super::folder::name),
+                location: match (session.path.as_deref(), session.folder.as_deref()) {
+                    (Some(path), _) => path.parent().map(super::folder::name).unwrap_or_default(),
+                    (None, Some(folder)) => format!("Draft in {}", super::folder::name(folder)),
+                    (None, None) => "Not saved yet".into(),
+                },
             })
             .collect();
         self.quick_open.places = self

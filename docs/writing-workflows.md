@@ -15,6 +15,31 @@ undone. Home waits until the library has been read and any remembered place has
 finished opening, so it never flashes before a document that is about to return.
 A new page requested after visiting a document is a plain blank page.
 
+## New pages
+
+**New document** (Cmd/Ctrl+N) opens an empty page at once, with no name or
+location to choose. The page belongs to a folder straight away: the folder of the
+document the writer was in, the folder of the draft they were in, or otherwise
+the open place. With none of those it belongs nowhere yet.
+
+Until it is first saved, a new page is a draft. It is titled from its first line
+that has any words, without Markdown markers or characters that file names cannot
+hold, up to 60 characters; an empty draft is `Untitled.md`. **Name…** in the
+document menu (Rename on macOS) sets the name instead, as written, and the title
+stops following the text. Naming writes nothing.
+
+Nothing is written until the first save. That save claims the draft's name in its
+folder as a new, empty file, numbering the name (`Title 2.md`, up to 99) when it
+is taken, and then saves over that file under the same guard as any later save.
+An existing file is never replaced. If the save fails, the claimed file is removed
+when nothing has been written to it. A draft that belongs nowhere, and **Save
+as…**, ask where to save as before. A draft restored from a recovery copy has
+forgotten its folder and asks too.
+
+Creating a document from a folder's menu in Files still asks for a name and
+creates the file immediately, for when the name must follow a convention from
+the start.
+
 ## Moving between documents
 
 Replacing the document on the page never asks about unsaved changes. The
