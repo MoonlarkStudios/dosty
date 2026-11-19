@@ -4,9 +4,9 @@ Simple marks. Beautiful words. The active heading shows its markers, and the inl
 
 ## Your writing space
 
-Dosty opens with one blank document and both sidebars hidden. Open a file or choose **File → Open Folder…** to use a folder as your workspace. Files and their titlebar toggle appear only while a folder workspace is open. The folder name at the top of Files opens workspace actions: switch folders, create a document or folder, refresh, show its location, or close it. On macOS, **Show in Finder** reveals the workspace folder. Closing the workspace leaves your document open. Dosty remembers each workspace: the next launch reopens the last folder with its document, caret, expanded folders and sidebars, and **File → Open Recent** returns to earlier folders.
+Dosty opens with one blank document and both sidebars hidden. Open a file, or choose **File → Add Place…** to add a folder to your library. A place stays in the library until you remove it, and **File → Places** moves between them. Files and its titlebar toggle appear while a place is open. The place name at the top of Files opens its actions: move to another place, add a place, create a document or folder, refresh, show its location, or remove it from the library. On macOS, **Show in Finder** reveals the folder. Removing a place never touches its files and leaves your document open. Dosty remembers each place: the next launch reopens the last one with its document, caret, expanded folders and sidebars, and Files follows the document you are in to the place that holds it.
 
-Within a workspace, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Files. Use the right button or Cmd/Ctrl+Alt+O to toggle Outline independently. Each toggle keeps its sidebar open until you close it. When both panels cannot fit comfortably, Outline overlays the document rather than squeezing the writing column. **Hide Sidebars** (Cmd/Ctrl+Shift+F) hides both panels while retaining their open state; the same command restores them. Escape dismisses the current editing context rather than restoring hidden sidebars.
+With a place open, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Files. Use the right button or Cmd/Ctrl+Alt+O to toggle Outline independently. Each toggle keeps its sidebar open until you close it. When both panels cannot fit comfortably, Outline overlays the document rather than squeezing the writing column. **Hide Sidebars** (Cmd/Ctrl+Shift+F) hides both panels while retaining their open state; the same command restores them. Escape dismisses the current editing context rather than restoring hidden sidebars.
 
 **Quick Open** (Cmd/Ctrl+P, or the search icon in Files) finds Markdown files by filename or relative path, including files in collapsed folders. Type one or more terms, use Up/Down to choose a result, and Enter to open it. Escape returns focus to where you were working. The search is cleared when closed.
 
@@ -14,7 +14,7 @@ Moving to another document never interrupts you. The one you leave stays open in
 
 Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter.
 
-Hover a file or folder to reveal its actions, or right-click it. A folder's menu offers **New document…** and **New folder…**; items below the root also offer **Rename** and **Move to…**. **Show location** displays the full path and can open its containing folder. Drag a file or folder onto another folder, or into the tree’s empty space to move it to the workspace root. A small preview and highlighted destination show where it will go; pausing over a collapsed folder opens it. Escape cancels the drag. Moves preserve unsaved writing and text undo; collisions, cross-filesystem moves, and references that cannot be preserved produce an error. There is no delete action. **Undo move** appears in a contextual notice and remains available in the document-name menu.
+Hover a file or folder to reveal its actions, or right-click it. A folder's menu offers **New document…** and **New folder…**; items below the root also offer **Rename** and **Move to…**. **Show location** displays the full path and can open its containing folder. Drag a file or folder onto another folder, or into the tree’s empty space to move it to the top of the place. A small preview and highlighted destination show where it will go; pausing over a collapsed folder opens it. Escape cancels the drag. Moves preserve unsaved writing and text undo; collisions, cross-filesystem moves, and references that cannot be preserved produce an error. There is no delete action. **Undo move** appears in a contextual notice and remains available in the document-name menu.
 
 In the file tree, Up/Down selects a row, Left/Right collapses or expands folders, and Enter or Space opens a file or toggles a folder. Home/End reaches the first/last row. F2 renames the selected item; Shift+F10 or the context-menu key opens its actions. Use Up/Down or Tab/Shift+Tab and Enter in menus. Hovering an item also shows its full path.
 
@@ -51,7 +51,8 @@ fn main() {
 | :--- | :--- |
 | F10 | Open the File menu |
 | Cmd/Ctrl + O | Open a file |
-| Cmd/Ctrl + P | Quick Open within the workspace |
+| Cmd/Ctrl + P | Quick Open within the open place |
+| Cmd/Ctrl + [ and ] | Back and Forward through visited documents |
 | Cmd/Ctrl + Shift + O | Open a folder |
 | Cmd/Ctrl + S | Save document |
 | Cmd/Ctrl + Shift + B | Toggle Files |

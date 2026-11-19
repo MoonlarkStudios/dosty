@@ -78,7 +78,7 @@ fn files_panel_requires_a_workspace_and_closing_it_restores_standalone_writing()
     harness.message(AppMessage::ToggleSidebar(Sidebar::Files));
     assert!(harness.app.chrome.files.open);
     assert!(harness.editor().0.x > before.x);
-    harness.message(AppMessage::Folder(folder::Message::Close));
+    harness.message(AppMessage::Folder(folder::Message::Remove));
     assert!(!harness.app.chrome.files.open && harness.app.folder.root().is_none());
     assert_eq!(harness.editor().0, before);
     assert_eq!(harness.app.session.document.source(), source);

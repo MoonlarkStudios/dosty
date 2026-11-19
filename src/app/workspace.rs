@@ -1,9 +1,10 @@
-//! Remembered folder workspaces.
+//! The library of places.
 //!
-//! A folder opened in Dosty becomes a workspace: Dosty reopens the last one on
-//! launch, restores which document was active and where its caret was, which
-//! folders were expanded, and which sidebars were open, and offers recent
-//! folders. State is written to the per-user data directory on workers; see
+//! A folder added to Dosty becomes a place in the library and stays there until
+//! it is removed. One place is open at a time: Dosty reopens the last one on
+//! launch and restores which document was active and where its caret was, which
+//! folders were expanded, and which sidebars were open. The open place follows
+//! the document on the page. State is written to the per-user data directory on workers; see
 //! [`crate::io::workspace_state`].
 
 use std::path::{Path, PathBuf};
@@ -14,6 +15,8 @@ use super::{App, Message as AppMessage, Pending};
 use crate::document::selection::Selection;
 use crate::io::storage::FileError;
 use crate::io::workspace_state::{self, Registry, Workspace};
+
+const LIBRARY_FULL: &str = "The library is full. Remove a place to keep this folder in it.";
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -26,8 +29,7 @@ pub enum Message {
         requested: PathBuf,
         result: Result<Workspace, FileError>,
     },
-    OpenRecent(usize),
-    ClearRecent,
+    OpenPlace(usize),
     Saved(Result<(), FileError>),
 }
 
@@ -77,14 +79,14 @@ impl Default for State {
 }
 
 impl State {
-    pub(super) fn recent(&self) -> &[PathBuf] {
-        &self.registry.recent
+    pub(super) fn places(&self) -> &[PathBuf] {
+        &self.registry.places
     }
 
     #[cfg(test)]
     pub(super) fn remember_for_preview(&mut self, roots: &[&str]) {
-        for root in roots.iter().rev() {
-            self.registry.opened(Path::new(root));
+        for root in roots {
+            let _ = self.registry.opened(Path::new(root));
         }
     }
 
@@ -101,8 +103,8 @@ impl State {
 }
 
 /// A short menu label: the folder name, qualified by its parent only when two
-/// recent folders share a name.
-pub(super) fn recent_label(root: &Path, recent: &[PathBuf]) -> String {
+/// places share a name.
+pub(super) fn place_label(root: &Path, places: &[PathBuf]) -> String {
     let name = |path: &Path| {
         path.file_name().map_or_else(
             || path.display().to_string(),
@@ -110,7 +112,7 @@ pub(super) fn recent_label(root: &Path, recent: &[PathBuf]) -> String {
         )
     };
     let label = name(root);
-    if recent
+    if places
         .iter()
         .filter(|other| other.as_path() != root)
         .all(|other| name(other) != label)
@@ -144,9 +146,14 @@ impl App {
         match message {
             Message::RegistryLoaded { registry, restore } => {
                 let mut registry = registry;
-                // A folder opened before the registry arrived stays the latest.
-                if let Some(workspace) = &self.workspace.current {
-                    registry.opened(&workspace.root);
+                // A folder opened before the registry arrived stays open.
+                let kept = self
+                    .workspace
+                    .current
+                    .as_ref()
+                    .is_none_or(|workspace| registry.opened(&workspace.root));
+                if !kept {
+                    self.notification = Some(LIBRARY_FULL.into());
                 }
                 self.workspace.registry = registry;
                 self.workspace.loaded = true;
@@ -185,11 +192,11 @@ impl App {
                     }
                     Err(error) => {
                         tracing::info!("workspace {} unavailable: {error}", requested.display());
-                        let remembered = self.workspace.registry.recent.contains(&requested);
+                        let remembered = self.workspace.registry.places.contains(&requested);
                         self.notification = Some(if remembered {
                             format!(
                                 "“{}” could not be reopened. It may have been moved, renamed, or disconnected.",
-                                recent_label(&requested, &[])
+                                place_label(&requested, &[])
                             )
                         } else {
                             error.to_string()
@@ -202,8 +209,8 @@ impl App {
                     }
                 }
             }
-            Message::OpenRecent(index) => {
-                let Some(root) = self.workspace.registry.recent.get(index).cloned() else {
+            Message::OpenPlace(index) => {
+                let Some(root) = self.workspace.registry.places.get(index).cloned() else {
                     return Task::none();
                 };
                 if self.busy {
@@ -214,10 +221,6 @@ impl App {
                     return Task::none();
                 }
                 self.open_workspace(root)
-            }
-            Message::ClearRecent => {
-                self.workspace.registry.clear_recent();
-                self.persist_workspace()
             }
             Message::Saved(result) => {
                 self.workspace.writing = false;
@@ -303,20 +306,49 @@ impl App {
             })
             .flatten()
             .filter(|path| self.session.path.as_ref() != Some(path));
-        self.workspace.registry.opened(root);
+        if !self.workspace.registry.opened(root) {
+            self.notification = Some(LIBRARY_FULL.into());
+        }
         self.workspace.current = Some(workspace);
         let open = reopen.map_or_else(Task::none, |path| self.request(Pending::Open(Some(path))));
         Task::batch([self.persist_workspace(), open])
     }
 
-    pub(super) fn workspace_closed(&mut self) -> Task<AppMessage> {
+    /// Remove the open place from the library. Its remembered state is
+    /// forgotten with it; the folder and its files are untouched.
+    pub(super) fn place_removed(&mut self) -> Task<AppMessage> {
         self.workspace.opening = None;
-        self.capture_workspace();
-        if let Some(outgoing) = self.workspace.current.take() {
-            self.workspace.outgoing.push(outgoing);
+        if let Some(removed) = self.workspace.current.take() {
+            self.workspace.registry.forget(&removed.root);
         }
         self.workspace.registry.last = None;
         self.persist_workspace()
+    }
+
+    /// Open the place that holds the page's document, so the sidebar always
+    /// shows where the writer is. A document outside every place leaves the
+    /// open place as it is.
+    pub(super) fn follow_document(&mut self) -> Task<AppMessage> {
+        let Some(path) = &self.session.path else {
+            return Task::none();
+        };
+        if self
+            .folder
+            .root()
+            .is_some_and(|root| path.starts_with(root))
+        {
+            return Task::none();
+        }
+        // The deepest place wins when one place sits inside another.
+        let place = self
+            .workspace
+            .registry
+            .places
+            .iter()
+            .filter(|place| path.starts_with(place))
+            .max_by_key(|place| place.components().count())
+            .cloned();
+        place.map_or_else(Task::none, |root| self.open_workspace(root))
     }
 
     /// Follow a checked move or rename below the current workspace.
@@ -497,7 +529,7 @@ mod tests {
             [PathBuf::from("Drafts")]
         );
         assert!(app.loading, "the remembered document is opening");
-        assert_eq!(app.workspace.registry.recent, [PathBuf::from("/writing")]);
+        assert_eq!(app.workspace.registry.places, [PathBuf::from("/writing")]);
         assert_eq!(
             app.workspace.registry.last.as_deref(),
             Some(Path::new("/writing"))
@@ -556,9 +588,9 @@ mod tests {
     }
 
     #[test]
-    fn moves_closing_and_unavailable_folders_update_the_registry() {
+    fn moves_removal_and_unavailable_folders_update_the_library() {
         let (mut app, _) = App::new();
-        app.workspace.registry.opened(Path::new("/gone"));
+        assert!(app.workspace.registry.opened(Path::new("/gone")));
         scanned(&mut app, "/writing", &["Drafts/a.md"], &["Drafts"]);
         app.workspace
             .current
@@ -571,22 +603,53 @@ mod tests {
             [PathBuf::from("/writing/Archive/a.md")]
         );
 
-        drop(app.update_folder(folder::Message::Close));
+        drop(app.update_folder(folder::Message::Remove));
         assert!(app.workspace.current.is_none());
         assert_eq!(app.workspace.registry.last, None);
-        assert_eq!(app.workspace.outgoing.len(), 1);
+        assert_eq!(
+            app.workspace.registry.places,
+            [PathBuf::from("/gone")],
+            "a removed place leaves the library; other places stay"
+        );
+        assert!(app.workspace.outgoing.is_empty());
 
         drop(app.update_workspace(Message::Opened {
             request: app.workspace.request,
             requested: "/gone".into(),
             result: Err(FileError::Io("missing".into())),
         }));
-        assert_eq!(app.workspace.registry.recent, [PathBuf::from("/writing")]);
+        assert!(app.workspace.registry.places.is_empty());
         assert!(
             app.notification
                 .as_deref()
                 .is_some_and(|notice| notice.contains("“gone” could not be reopened"))
         );
+    }
+
+    #[test]
+    fn the_open_place_follows_the_document_on_the_page() {
+        let (mut app, _) = App::new();
+        for place in [
+            "/library/essays",
+            "/library/essays/drafts",
+            "/library/notes",
+        ] {
+            assert!(app.workspace.registry.opened(Path::new(place)));
+        }
+        scanned(&mut app, "/library/notes", &["a.md"], &[]);
+        let follows = |app: &mut App, path: Option<&str>| {
+            app.set_document("Text".into(), path.map(PathBuf::from), "Text.md".into());
+            let before = app.workspace.request;
+            drop(app.follow_document());
+            app.workspace.request != before
+        };
+
+        assert!(!follows(&mut app, None), "a draft has no place to follow");
+        assert!(!follows(&mut app, Some("/library/notes/a.md")));
+        assert!(!follows(&mut app, Some("/elsewhere/loose.md")));
+        assert!(!follows(&mut app, Some("/library/notes-old/b.md")));
+        assert!(follows(&mut app, Some("/library/essays/one.md")));
+        assert!(follows(&mut app, Some("/library/essays/drafts/two.md")));
     }
 
     #[test]
@@ -697,7 +760,7 @@ mod tests {
                 .expanded_below(&root)
                 .contains(&PathBuf::from("Drafts/Old"))
         );
-        assert_eq!(app.workspace.recent(), std::slice::from_ref(&root));
+        assert_eq!(app.workspace.places(), std::slice::from_ref(&root));
         assert_eq!(
             app.workspace.recent_documents(),
             std::slice::from_ref(&essay),
@@ -720,21 +783,21 @@ mod tests {
         let launch = app.workspace_launch(false);
         settle(&mut app, launch).await;
         assert_eq!(app.folder.root(), None);
-        assert_eq!(app.workspace.recent(), [root]);
+        assert_eq!(app.workspace.places(), [root]);
     }
 
     #[test]
-    fn recent_labels_disambiguate_shared_names() {
+    fn place_labels_disambiguate_shared_names() {
         let recent = [
             PathBuf::from("/a/Essays"),
             "/b/Essays".into(),
             "/c/Notes".into(),
         ];
-        assert_eq!(recent_label(&recent[2], &recent), "Notes");
-        assert!(recent_label(&recent[0], &recent).starts_with("Essays — "));
+        assert_eq!(place_label(&recent[2], &recent), "Notes");
+        assert!(place_label(&recent[0], &recent).starts_with("Essays — "));
         assert_ne!(
-            recent_label(&recent[0], &recent),
-            recent_label(&recent[1], &recent)
+            place_label(&recent[0], &recent),
+            place_label(&recent[1], &recent)
         );
     }
 }

@@ -470,8 +470,8 @@ fn native_quiet_previews() {
         "/Volumes/Archive/Essays",
         "/Users/writer/Letters",
     ]);
-    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Recent)));
-    render(&app, Size::new(1180.0, 820.0), "workspace-recent-menu");
+    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Places)));
+    render(&app, Size::new(1180.0, 820.0), "places-menu");
     drop(app.update_message(Message::CloseOverlay));
     for font in WritingFont::ALL {
         app.resolved_theme.typography.font = font;

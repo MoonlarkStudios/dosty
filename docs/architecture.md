@@ -135,7 +135,7 @@ without adding a second source mutation path. Other platforms retain the
 in-window command menu. The macOS content extends into the transparent native
 titlebar while retaining system window buttons.
 
-Startup creates one blank document, then reopens the last workspace unless a
+Startup creates one blank document, then reopens the last place unless a
 document or folder argument was given. Preferences retain appearance, independent
 statistics visibility, and writing typeface. The typeface is applied to the stored
 resolved typography on startup, appearance changes, and preference changes;
@@ -152,8 +152,10 @@ scheduler tick, ahead of the page's own, with one write in flight at a time.
 trail only when its document arrives, since opening may be asynchronous or fail.
 Only closing the window raises the unsaved guard.
 
-`app/workspace.rs` owns remembered workspaces; `io/workspace_state.rs` stores them
-in the data directory. A successful scan of a new root adopts it as the current
+`app/workspace.rs` owns the library of places and the open place's remembered
+state; `io/workspace_state.rs` stores them in the data directory. Places are an
+explicit, bounded, ordered list rather than a recency list, and the open place
+follows the document on the page. A successful scan of a new root adopts it as the current
 workspace and applies state read before the scan. Replacing a document first
 records the outgoing selection; loading one restores its clamped selection through
 the ordinary sync path. Writes coalesce so an older snapshot cannot land after a

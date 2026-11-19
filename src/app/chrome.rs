@@ -117,7 +117,7 @@ pub enum Menu {
     Help,
     Navigation,
     Preferences,
-    Recent,
+    Places,
     Workspace,
 }
 
@@ -418,7 +418,7 @@ impl App {
                             | Menu::Format
                             | Menu::Navigation
                             | Menu::Preferences
-                            | Menu::Recent
+                            | Menu::Places
                             | Menu::Workspace
                     )
                 ) {
@@ -603,7 +603,7 @@ impl App {
             let files: Element<'_, AppMessage> = if self.folder.root().is_some() {
                 container(self.titlebar_icon(
                     Icon::Sidebar,
-                    "Workspace / Files · ⌘/Ctrl Shift B",
+                    "Files · ⌘/Ctrl Shift B",
                     AppMessage::ToggleSidebar(Sidebar::Files),
                     self.chrome.files.open && !self.chrome.sidebars_hidden,
                 ))
@@ -827,12 +827,12 @@ impl App {
                         ready && self.trail.can_step(Direction::Forward),
                     ),
                     Command::action(
-                        "Open folder…",
+                        "Add place…",
                         Icon::Folder,
                         AppMessage::Folder(folder::Message::Pick),
                         ready,
                     ),
-                    Command::menu("Open recent…", Icon::Folder, Menu::Recent),
+                    Command::menu("Places…", Icon::Folder, Menu::Places),
                     Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                     Command::menu("Document actions…", Icon::Document, Menu::Document),
                     Command::action("Export HTML…", Icon::Export, AppMessage::Export, ready),
@@ -958,55 +958,45 @@ impl App {
                     self.chrome.files.open || self.chrome.outline.open,
                 ),
             ],
-            Menu::Recent => {
-                let recent = self.workspace.recent();
-                let mut commands: Vec<_> = recent
+            Menu::Places => {
+                let places = self.workspace.places();
+                let mut commands: Vec<_> = places
                     .iter()
                     .enumerate()
                     .map(|(index, root)| {
                         Command::action(
-                            super::workspace::recent_label(root, recent),
+                            super::workspace::place_label(root, places),
                             if self.folder.root() == Some(root.as_path()) {
                                 Icon::Check
                             } else {
                                 Icon::Folder
                             },
-                            AppMessage::Workspace(super::workspace::Message::OpenRecent(index)),
+                            AppMessage::Workspace(super::workspace::Message::OpenPlace(index)),
                             ready,
                         )
                     })
                     .collect();
                 if commands.is_empty() {
                     commands.push(Command::action(
-                        "No recent folders",
+                        "No places yet",
                         Icon::Folder,
                         AppMessage::Dismiss,
                         false,
-                    ));
-                } else {
-                    commands.push(Command::action(
-                        "Clear recent folders",
-                        Icon::Close,
-                        AppMessage::Workspace(super::workspace::Message::ClearRecent),
-                        true,
                     ));
                 }
                 commands
             }
             Menu::Workspace => {
-                let mut commands = vec![Command::action(
-                    if self.folder.root().is_some() {
-                        "Switch folder…"
-                    } else {
-                        "Open folder…"
-                    },
+                let mut commands = Vec::new();
+                if self.workspace.places().len() > 1 {
+                    commands.push(Command::menu("Places…", Icon::Folder, Menu::Places));
+                }
+                commands.push(Command::action(
+                    "Add place…",
                     Icon::Folder,
                     AppMessage::Folder(folder::Message::Pick),
                     ready,
-                )];
-                if self.workspace.recent().len() > 1 {
-                    commands.push(Command::menu("Open recent…", Icon::Folder, Menu::Recent));
-                }
+                ));
                 if let Some(root) = self.folder.root() {
                     commands.extend([
                         Command::action(
@@ -1044,9 +1034,9 @@ impl App {
                             ready,
                         ),
                         Command::action(
-                            "Close folder",
+                            "Remove from library",
                             Icon::Close,
-                            AppMessage::Folder(folder::Message::Close),
+                            AppMessage::Folder(folder::Message::Remove),
                             ready,
                         ),
                     ]);

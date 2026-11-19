@@ -41,41 +41,48 @@ references are relocated with a move.
 
 ## Files and folders
 
-**File → Open…** opens a single document; **Open folder…** or Cmd/Ctrl+Shift+O
-opens a folder as a workspace. Without a workspace, startup opens one blank
-document with both sidebars hidden. Legacy recent-file preferences are removed
-when preferences are rewritten.
+**File → Open…** opens a single document. **Add place…** or Cmd/Ctrl+Shift+O
+adds a folder to the library and opens it. With no place open, startup opens one
+blank document with both sidebars hidden. Legacy recent-file preferences are
+removed when preferences are rewritten.
 
-### Remembered workspaces
+### The library of places
 
-A workspace is remembered the way an editor such as VS Code remembers folders.
-Launching Dosty without a document or folder argument reopens the last workspace
-that was open when it quit. For each workspace Dosty remembers which documents
-were active (the most recent is reopened), each document's last selection, the
-expanded folders, and whether Files and Outline were open. Reopening a document
-in that workspace returns its caret, even after switching away. Quick Open lists
-recently active documents first.
+A place is a folder the writer has added. It stays in the library, in the order
+it was added, until **Remove from library** takes it out; removal forgets how the
+place was left and never touches the folder or its files. The library holds up to
+64 places. When it is full, another folder still opens but is not kept, with a
+notice. Folders remembered as recent by earlier versions become places.
 
-Opening a workspace reopens its last document only when nothing would be
-displaced: the current page is an empty untitled document or a clean document from
-the workspace being left. Unsaved writing always stays open. A remembered document
-or folder that no longer exists is skipped; a selection is clamped to the current
-source if the file changed outside Dosty.
+One place is open at a time and Files shows it. **File → Places** (or **Places…**
+in the File command menu and the place-name menu) lists every place, qualifying
+duplicate names with their location. The open place follows the page: opening or
+returning to a document that lives in another place opens that place. A document
+outside every place leaves the open place as it is. Where one place sits inside
+another, the open place is kept if it holds the document; otherwise the deepest
+place that holds it opens.
 
-**File → Open Recent** (or **Open recent…** in the File command menu and the
-workspace menu) lists up to 12 recent folders, qualifying duplicate names with
-their location. **Clear Menu** / **Clear recent folders** forgets every folder
-except the open one, including how each was left. A recent folder that cannot be
-reopened is removed with a notice.
+Launching Dosty without a document or folder argument reopens the place that was
+open when it quit. For each place Dosty remembers which documents were active (the
+most recent is reopened), each document's last selection, the expanded folders,
+and whether Files and Outline were open. Reopening a document in that place returns
+its caret, even after switching away. Quick Open lists recently active documents
+first.
+
+Moving to a place reopens its last document only when the page is an empty
+untitled document or a clean document from the place being left. Unsaved writing
+always stays on the page. A remembered document or folder that no longer exists is
+skipped; a selection is clamped to the current source if the file changed outside
+Dosty. A place that cannot be reopened is removed with a notice.
 
 State lives in the `workspaces/` folder of Dosty's per-user
 [data directory](identity-migration.md#existing-koan-and-daytrip-data), never in
-the writer's folders: `workspaces.toml` holds recent folders and the folder to
-reopen, and one `state.toml` per remembered folder records how it was left. Files
-are private to the user on Unix, bounded, and written on workers. Unreadable or
-malformed state is ignored rather than reported. Deleting `workspaces/` forgets
-workspaces and nothing else; the Windows uninstaller removes it while keeping
-preferences and recovery copies.
+the writer's folders: `workspaces.toml` holds the places and the one to reopen,
+and one `state.toml` per place records how it was left. Files are private to the
+user on Unix, bounded, and written on workers. Unreadable or malformed state is
+ignored rather than reported. Deleting `workspaces/` empties the library and
+nothing else; the Windows uninstaller removes it while keeping preferences and
+recovery copies.
 
 The Files tree preserves the actual directory hierarchy, including empty folders.
 Discovery reads paths and file types on a worker, not document contents. It finds
@@ -92,8 +99,8 @@ Enter/Space opens a file or toggles a folder, and F2 renames. Menus support
 Up/Down, Tab/Shift+Tab, Enter, and Escape.
 
 Folder actions create Markdown documents and folders, rename or move items below
-the open root, and show their location. The root also offers Refresh and Close;
-closing navigation leaves the active document open. The titlebar's document-name
+the open root, and show their location. The root also offers Refresh and Remove from library;
+removing a place leaves the active document open. The titlebar's document-name
 menu offers Rename, Move to, and Show location for a saved standalone file. Move
 to can select a destination outside the open folder. There is no delete,
 multi-selection, or general-purpose file-manager view.
@@ -128,9 +135,9 @@ coordinate Dosty writers; external tools do not participate in those locks.
 
 ## Controls and sidebars
 
-Files and its titlebar toggle are available only within a folder workspace. A successful folder open reveals Files on the left without replacing the current document. The folder name is its header and opens workspace actions: switch folders, create a document or folder, refresh, show its location, reveal it in Finder/the file manager, or close the workspace. The folder root is not repeated as a tree row; dropping into empty tree space targets the root. Its titlebar toggle keeps it open until you close it. Closing it leaves the document open.
+Files and its titlebar toggle are available only while a place is open. Opening a place reveals Files on the left without replacing the current document. The place name is its header and opens its actions: move to another place, add a place, create a document or folder, refresh, show its location, reveal it in Finder/the file manager, or remove it from the library. The folder root is not repeated as a tree row; dropping into empty tree space targets the root. Its titlebar toggle keeps it open until you close it. Closing it leaves the document open.
 
-Outline opens independently on the right with its titlebar control, **View → Outline** on macOS, or Cmd/Ctrl+Alt+O. Its toggle keeps it open until you close it. When both panels cannot leave a writing column of at least 480 logical pixels, Files stays docked and Outline overlays the document. Editing, heading jumps, document opens, and Escape preserve the panel arrangement. Its header offers icon controls only when headings exist. Search filters the tree inline, retaining ancestor context; Cmd/Ctrl+Shift+J opens and focuses that filter. Each workspace remembers whether Files and Outline were open; Hide Sidebars lasts only for the application session.
+Outline opens independently on the right with its titlebar control, **View → Outline** on macOS, or Cmd/Ctrl+Alt+O. Its toggle keeps it open until you close it. When both panels cannot leave a writing column of at least 480 logical pixels, Files stays docked and Outline overlays the document. Editing, heading jumps, document opens, and Escape preserve the panel arrangement. Its header offers icon controls only when headings exist. Search filters the tree inline, retaining ancestor context; Cmd/Ctrl+Shift+J opens and focuses that filter. Each place remembers whether Files and Outline were open; Hide Sidebars lasts only for the application session.
 
 Cmd/Ctrl+Shift+B toggles Files. Cmd/Ctrl+Shift+F runs **Hide Sidebars**, hiding/restoring the existing arrangement without changing editing mode or control visibility. Escape dismisses the current editing context; it does not restore deliberately hidden panels. These operations retain source selection, undo, and viewport anchoring.
 
@@ -144,9 +151,9 @@ Word count and reading time stay at the bottom center of the writing column whil
 
 ### Quick Open
 
-Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/path search within the current workspace. It searches the same bounded Markdown path snapshot as Files, including collapsed folders. Matching is case-insensitive and requires every whitespace-separated term; exact filenames and filename prefixes rank first. The first 100 results are shown with a match count when more exist. Narrow the query to reach other matches. After external file changes, use the folder-name menu’s Refresh action to update the snapshot.
+Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/path search within the open place. It searches the same bounded Markdown path snapshot as Files, including collapsed folders. Matching is case-insensitive and requires every whitespace-separated term; exact filenames and filename prefixes rank first. The first 100 results are shown with a match count when more exist. Narrow the query to reach other matches. After external file changes, use the folder-name menu’s Refresh action to update the snapshot.
 
-Up/Down selects a result without moving the query caret; Enter opens it through the existing file loading, [keeping the outgoing document open](#moving-between-documents). Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active workspace documents come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
+Up/Down selects a result without moving the query caret; Enter opens it through the existing file loading, [keeping the outgoing document open](#moving-between-documents). Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. Opening another place closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active documents of the open place come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
 
 ## Writing and details
 

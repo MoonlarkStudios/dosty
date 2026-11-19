@@ -23,8 +23,7 @@ pub enum Command {
     QuickOpen,
     Step(Direction),
     OpenFolder,
-    OpenRecent(usize),
-    ClearRecent,
+    OpenPlace(usize),
     Save,
     SaveAs,
     Rename,
@@ -85,12 +84,10 @@ pub(super) struct State {
     hidden: bool,
     /// File → Open Recent is rebuilt from fixed command items whenever the
     /// remembered folders change, so menu identifiers stay stable.
-    recent: Submenu,
-    recent_items: Vec<MenuItem>,
-    recent_clear: MenuItem,
-    recent_empty: MenuItem,
-    recent_separator: PredefinedMenuItem,
-    recent_shown: Option<Vec<PathBuf>>,
+    places: Submenu,
+    place_items: Vec<MenuItem>,
+    places_empty: MenuItem,
+    places_shown: Option<Vec<PathBuf>>,
 }
 
 impl State {
@@ -136,25 +133,22 @@ impl State {
             help: Submenu::new("Help", true),
             entries: Vec::new(),
             hidden: false,
-            recent: Submenu::new("Open Recent", true),
-            recent_items: (0..crate::io::workspace_state::MAX_RECENT_WORKSPACES)
-                .map(|index| command_item(Command::OpenRecent(index), ""))
+            places: Submenu::new("Places", true),
+            place_items: (0..crate::io::workspace_state::MAX_PLACES)
+                .map(|index| command_item(Command::OpenPlace(index), ""))
                 .collect(),
-            recent_clear: command_item(Command::ClearRecent, "Clear Menu"),
-            recent_empty: MenuItem::new("No Recent Folders", false, None),
-            recent_separator: PredefinedMenuItem::separator(),
-            recent_shown: None,
+            places_empty: MenuItem::new("No Places Yet", false, None),
+            places_shown: None,
         };
-        let recent_entries: Vec<_> = state
-            .recent_items
+        let place_entries: Vec<_> = state
+            .place_items
             .iter()
             .enumerate()
-            .map(|(index, item)| (Command::OpenRecent(index), item.clone()))
-            .chain([(Command::ClearRecent, state.recent_clear.clone())])
+            .map(|(index, item)| (Command::OpenPlace(index), item.clone()))
             .collect();
         state
             .entries
-            .extend(recent_entries.into_iter().map(|(command, item)| Entry {
+            .extend(place_entries.into_iter().map(|(command, item)| Entry {
                 command,
                 item: Item::Action(item),
                 enabled: true,
@@ -201,11 +195,11 @@ impl State {
             ("Quick Open…", Command::QuickOpen, Some("Meta+p")),
             ("Back", Command::Step(Direction::Back), Some("Meta+[")),
             ("Forward", Command::Step(Direction::Forward), Some("Meta+]")),
-            ("Open Folder…", Command::OpenFolder, Some("Meta+Shift+o")),
+            ("Add Place…", Command::OpenFolder, Some("Meta+Shift+o")),
         ] {
             state.add(&file, label, command, shortcut, false)?;
         }
-        file.append(&state.recent)?;
+        file.append(&state.places)?;
         for (label, command, shortcut) in [
             ("Save", Command::Save, Some("Meta+s")),
             ("Save As…", Command::SaveAs, Some("Meta+Shift+s")),
@@ -356,36 +350,30 @@ impl State {
         ))
     }
 
-    fn sync_recent(&mut self, recent: &[PathBuf]) {
-        if self.recent_shown.as_deref() == Some(recent) {
+    fn sync_places(&mut self, places: &[PathBuf]) {
+        if self.places_shown.as_deref() == Some(places) {
             return;
         }
-        while self.recent.remove_at(0).is_some() {}
-        let result = if recent.is_empty() {
-            self.recent.append(&self.recent_empty)
+        while self.places.remove_at(0).is_some() {}
+        let result = if places.is_empty() {
+            self.places.append(&self.places_empty)
         } else {
-            self.recent_items
+            self.place_items
                 .iter()
-                .zip(recent)
+                .zip(places)
                 .try_for_each(|(item, root)| {
-                    item.set_text(workspace::recent_label(root, recent));
-                    self.recent.append(item)
-                })
-                .and_then(|()| {
-                    self.recent.append_items(&[
-                        &self.recent_separator as &dyn IsMenuItem,
-                        &self.recent_clear,
-                    ])
+                    item.set_text(workspace::place_label(root, places));
+                    self.places.append(item)
                 })
         };
         if let Err(error) = result {
-            tracing::warn!("could not update Open Recent: {error}");
+            tracing::warn!("could not update Places: {error}");
         }
-        self.recent_shown = Some(recent.to_vec());
+        self.places_shown = Some(places.to_vec());
     }
 
     fn sync(&mut self, app: &App) {
-        self.sync_recent(app.workspace.recent());
+        self.sync_places(app.workspace.places());
         for entry in &mut self.entries {
             let (enabled, checked) = availability(app, entry.command);
             if enabled != entry.enabled {
@@ -417,8 +405,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
     match command {
         Command::QuickOpen => (ready && app.folder.root().is_some(), false),
         Command::Step(direction) => (ready && app.trail.can_step(direction), false),
-        Command::OpenRecent(index) => (ready && index < app.workspace.recent().len(), false),
-        Command::ClearRecent => (!app.workspace.recent().is_empty(), false),
+        Command::OpenPlace(index) => (ready && index < app.workspace.places().len(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),
         Command::Mode(mode) => (ready, app.mode == mode),
         Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
@@ -514,8 +501,7 @@ impl App {
             Command::QuickOpen => Message::QuickOpen(super::quick_open::Message::Open),
             Command::Step(direction) => Message::Step(direction),
             Command::OpenFolder => Message::Folder(folder::Message::Pick),
-            Command::OpenRecent(index) => Message::Workspace(workspace::Message::OpenRecent(index)),
-            Command::ClearRecent => Message::Workspace(workspace::Message::ClearRecent),
+            Command::OpenPlace(index) => Message::Workspace(workspace::Message::OpenPlace(index)),
             Command::Save => Message::Save,
             Command::SaveAs => Message::SaveAs,
             Command::Export => Message::Export,

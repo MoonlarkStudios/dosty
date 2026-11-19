@@ -1187,6 +1187,7 @@ impl App {
                         };
                         return Task::batch([
                             folder_task,
+                            self.follow_document(),
                             self.persist_workspace(),
                             focus,
                             operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
@@ -2403,6 +2404,7 @@ impl App {
         // The same sequence that follows loading a file and restoring its caret.
         Task::batch([
             self.folder_document_changed(),
+            self.follow_document(),
             self.persist_workspace(),
             operation::focus(EDITOR),
             operation::snap_to(SCROLL, scrollable::RelativeOffset::START),

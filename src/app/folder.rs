@@ -47,7 +47,8 @@ pub enum Message {
         result: Result<folder::Snapshot, FileError>,
     },
     Refresh,
-    Close,
+    /// Remove the open place from the library. Its files are untouched.
+    Remove,
     Tree(file_tree::Action),
     NewDocument(PathBuf),
     NewFolder(PathBuf),
@@ -550,7 +551,7 @@ impl App {
                 self.overlay = None;
                 return self.folder_refresh();
             }
-            Message::Close if !self.busy => {
+            Message::Remove if !self.busy => {
                 drop(self.cancel_quick_open());
                 self.folder.cancel_scan();
                 self.folder.next_navigation();
@@ -562,7 +563,7 @@ impl App {
                 self.folder.dialog = None;
                 self.folder.error = None;
                 self.overlay = None;
-                let workspace = self.workspace_closed();
+                let workspace = self.place_removed();
                 self.chrome.files.open = false;
                 return Task::batch([workspace, operation::focus(EDITOR)]);
             }
@@ -1335,7 +1336,7 @@ impl App {
                 if root {
                     actions.extend([
                         ("Refresh folder", Message::Refresh),
-                        ("Close folder", Message::Close),
+                        ("Remove from library", Message::Remove),
                     ]);
                 }
                 actions
@@ -1583,7 +1584,7 @@ mod tests {
             }),
         }));
         assert!(app.folder.root.is_none());
-        drop(app.update_folder(Message::Close));
+        drop(app.update_folder(Message::Remove));
         drop(app.update_folder(Message::Scanned {
             generation: 4,
             result: Ok(folder::Snapshot {
