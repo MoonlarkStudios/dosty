@@ -143,14 +143,14 @@ fn cancel_and_workspace_changes_discard_search_without_source_or_preference_chan
         let mut app = app(root, &[root.join("Nested/Notes.md")]);
         drop(app.update_message(AppMessage::Edit(Action::Edit(Edit::Insert('!')))));
         drop(app.update_message(AppMessage::SetMode(mode)));
-        app.selection = Selection {
-            anchor: app.document.source().len(),
+        app.session.selection = Selection {
+            anchor: app.session.document.source().len(),
             head: 2,
         };
         app.sync_editor();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
-        let generation = app.document.collaboration().generation();
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
+        let generation = app.session.document.collaboration().generation();
         let preferences = toml::to_string(&app.preferences).unwrap();
         drop(app.update_quick_open(Message::Open));
         drop(app.update_quick_open(Message::Query("nested notes".into())));
@@ -173,11 +173,14 @@ fn cancel_and_workspace_changes_discard_search_without_source_or_preference_chan
         }));
         assert!(app.overlay.is_none());
         assert!(app.quick_open.candidates.is_empty());
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         assert_eq!(app.mode, mode);
-        assert_eq!(app.document.collaboration().generation(), generation);
-        assert!(app.document.can_undo());
+        assert_eq!(
+            app.session.document.collaboration().generation(),
+            generation
+        );
+        assert!(app.session.document.can_undo());
         assert_eq!(toml::to_string(&app.preferences).unwrap(), preferences);
         assert!(
             !preferences.contains("/writing")
@@ -194,17 +197,17 @@ async fn opening_uses_the_unsaved_guard_and_cancel_preserves_the_existing_docume
     std::fs::write(&target, "# Target").unwrap();
     let mut app = app(directory.path(), std::slice::from_ref(&target));
     drop(app.update_message(AppMessage::Edit(Action::Edit(Edit::Insert('!')))));
-    let source = app.document.source().to_owned();
+    let source = app.session.document.source().to_owned();
     drop(app.update_quick_open(Message::Open));
     let task = app.update_quick_open(Message::Choose(target.clone()));
     settle(&mut app, task).await;
     assert_eq!(app.overlay, Some(Overlay::Unsaved));
     assert!(matches!(&app.pending, Some(Pending::Open(Some(path))) if path == &target));
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
     assert!(app.quick_open.candidates.is_empty());
     drop(app.update_message(AppMessage::CloseOverlay));
     assert!(app.pending.is_none());
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Target");
 }
 
@@ -215,14 +218,14 @@ async fn stale_file_choices_cannot_switch_the_workspace_to_a_directory() {
     std::fs::create_dir(&target).unwrap();
     // The cached entry still describes the file that occupied this path.
     let mut app = app(directory.path(), std::slice::from_ref(&target));
-    let source = app.document.source().to_owned();
-    let identity = app.document.collaboration().id();
+    let source = app.session.document.source().to_owned();
+    let identity = app.session.document.collaboration().id();
     drop(app.update_quick_open(Message::Open));
     let task = app.update_quick_open(Message::Choose(target));
     settle(&mut app, task).await;
     assert_eq!(app.folder.root(), Some(directory.path()));
-    assert_eq!(app.document.source(), source);
-    assert_eq!(app.document.collaboration().id(), identity);
+    assert_eq!(app.session.document.source(), source);
+    assert_eq!(app.session.document.collaboration().id(), identity);
     assert!(!app.loading && !app.busy);
     assert!(app.notification.is_some());
 }
@@ -266,17 +269,17 @@ fn cancelling_keeps_a_table_draft_and_window_close_still_uses_the_save_guard() {
             "pending café".into(),
         )))),
     );
-    assert!(!app.dirty);
+    assert!(!app.session.dirty);
     drop(app.update_quick_open(Message::Open));
     drop(app.update_message(AppMessage::CloseOverlay));
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
     assert_eq!(
         app.grid.draft.as_ref().unwrap().buffer.snapshot(),
         "pending café"
     );
     drop(app.update_quick_open(Message::Open));
     drop(app.update_message(AppMessage::CloseRequested(iced::window::Id::unique())));
-    assert!(app.document.source().contains("pending café"));
+    assert!(app.session.document.source().contains("pending café"));
     assert_eq!(app.overlay, Some(Overlay::Unsaved));
     assert!(matches!(app.pending, Some(Pending::Close(_))));
     assert!(app.quick_open.candidates.is_empty());

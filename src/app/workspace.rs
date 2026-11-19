@@ -154,8 +154,8 @@ impl App {
                     restore
                         && self.folder.root().is_none()
                         && self.workspace.opening.is_none()
-                        && self.path.is_none()
-                        && !self.dirty
+                        && self.session.path.is_none()
+                        && !self.session.dirty
                 });
                 let save = if std::mem::take(&mut self.workspace.pending) {
                     self.persist_workspace()
@@ -287,10 +287,10 @@ impl App {
         // Reopen where the writer left off only when nothing would be lost or
         // displaced: an empty untitled page, or a clean document belonging to
         // the workspace being left.
-        let replaceable = !self.dirty
+        let replaceable = !self.session.dirty
             && !self.busy
-            && match &self.path {
-                None => self.document.source().is_empty(),
+            && match &self.session.path {
+                None => self.session.document.source().is_empty(),
                 Some(path) => previous_root.is_some_and(|previous| path.starts_with(previous)),
             };
         let reopen = replaceable
@@ -302,7 +302,7 @@ impl App {
                     .find(|path| self.folder.has_file(path))
             })
             .flatten()
-            .filter(|path| self.path.as_ref() != Some(path));
+            .filter(|path| self.session.path.as_ref() != Some(path));
         self.workspace.registry.opened(root);
         self.workspace.current = Some(workspace);
         let open = reopen.map_or_else(Task::none, |path| self.request(Pending::Open(Some(path))));
@@ -342,7 +342,11 @@ impl App {
     /// Put the caret back where it was when this document was last active.
     /// Offsets are clamped to the loaded source, which may have changed since.
     pub(super) fn restore_workspace_caret(&mut self) -> bool {
-        let Some((workspace, path)) = self.workspace.current.as_ref().zip(self.path.as_ref())
+        let Some((workspace, path)) = self
+            .workspace
+            .current
+            .as_ref()
+            .zip(self.session.path.as_ref())
         else {
             return false;
         };
@@ -357,11 +361,11 @@ impl App {
             anchor: document.anchor,
             head: document.head,
         }
-        .clamp(self.document.source());
+        .clamp(self.session.document.source());
         if selection == Selection::default() {
             return false;
         }
-        self.selection = self.projection.normalize_caret(selection);
+        self.session.selection = self.projection.normalize_caret(selection);
         self.editor_focused = true;
         self.sync_editor();
         true
@@ -375,11 +379,16 @@ impl App {
         workspace.files_hidden = !self.chrome.files.open;
         workspace.outline_open = self.chrome.outline.open;
         if let Some(relative) = self
+            .session
             .path
             .as_ref()
             .and_then(|path| path.strip_prefix(&workspace.root).ok())
         {
-            workspace.visited(relative, self.selection.anchor, self.selection.head);
+            workspace.visited(
+                relative,
+                self.session.selection.anchor,
+                self.session.selection.head,
+            );
         }
     }
 
@@ -499,13 +508,13 @@ mod tests {
     fn unsaved_writing_is_never_displaced_by_a_restored_document() {
         let (mut app, _) = App::new();
         app.set_document("Unsaved thought".into(), None, "Untitled.md".into());
-        app.dirty = true;
+        app.session.dirty = true;
         let mut remembered = Workspace::new("/writing".into());
         remembered.visited(Path::new("Notes.md"), 0, 0);
         opened(&mut app, remembered);
         scanned(&mut app, "/writing", &["Notes.md"], &[]);
         assert!(!app.loading && app.overlay.is_none());
-        assert_eq!(app.document.source(), "Unsaved thought");
+        assert_eq!(app.session.document.source(), "Unsaved thought");
     }
 
     #[test]
@@ -524,11 +533,16 @@ mod tests {
             .unwrap()
             .visited(Path::new("Notes.md"), 9, 22);
         assert!(app.restore_workspace_caret());
-        assert_eq!(app.selection.anchor, 9);
-        assert!(app.document.source().is_char_boundary(app.selection.head));
-        assert!(app.selection.head <= app.document.source().len());
+        assert_eq!(app.session.selection.anchor, 9);
+        assert!(
+            app.session
+                .document
+                .source()
+                .is_char_boundary(app.session.selection.head)
+        );
+        assert!(app.session.selection.head <= app.session.document.source().len());
 
-        app.selection = Selection::caret(3);
+        app.session.selection = Selection::caret(3);
         app.workspace_document_leaving();
         let document = app
             .workspace
@@ -647,8 +661,8 @@ mod tests {
         assert_eq!(app.folder.root(), Some(root.as_path()));
         let open = app.update_message(AppMessage::OpenPath(essay.clone()));
         settle(&mut app, open).await;
-        assert_eq!(app.path.as_ref(), Some(&essay));
-        app.selection = Selection {
+        assert_eq!(app.session.path.as_ref(), Some(&essay));
+        app.session.selection = Selection {
             anchor: 9,
             head: 14,
         };
@@ -669,9 +683,9 @@ mod tests {
         let launch = app.workspace_launch(true);
         settle(&mut app, launch).await;
         assert_eq!(app.folder.root(), Some(root.as_path()));
-        assert_eq!(app.path.as_ref(), Some(&essay));
+        assert_eq!(app.session.path.as_ref(), Some(&essay));
         assert_eq!(
-            app.selection,
+            app.session.selection,
             Selection {
                 anchor: 9,
                 head: 14
@@ -694,12 +708,12 @@ mod tests {
         let notes = root.join("Notes.md");
         let open = app.update_message(AppMessage::OpenPath(notes.clone()));
         settle(&mut app, open).await;
-        assert_eq!(app.path.as_ref(), Some(&notes));
+        assert_eq!(app.session.path.as_ref(), Some(&notes));
         let quick_open = super::super::quick_open::Message::Open;
         drop(app.update_quick_open(quick_open));
         let accept = app.update_quick_open(super::super::quick_open::Message::Accept);
         settle(&mut app, accept).await;
-        assert_eq!(app.path.as_ref(), Some(&essay));
+        assert_eq!(app.session.path.as_ref(), Some(&essay));
 
         // A document argument opens that document instead.
         let mut app = launched(data.path());

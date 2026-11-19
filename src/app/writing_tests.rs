@@ -13,19 +13,19 @@ fn app(source: &str) -> App {
 fn send(app: &mut App, message: AppMessage) {
     drop(app.update(message));
     assert_eq!(
-        app.document.source(),
-        app.document.collaboration().materialize()
+        app.session.document.source(),
+        app.session.document.collaboration().materialize()
     );
     let fresh = Projection::with_context(
-        app.document.source(),
-        app.editor_focused.then_some(app.selection.head),
+        app.session.document.source(),
+        app.editor_focused.then_some(app.session.selection.head),
     );
     assert_eq!(app.projection.text, fresh.text);
     assert_eq!(app.projection.rich, fresh.rich);
     assert_eq!(
         app.editor.snapshot(),
         if app.mode == EditorMode::Source {
-            app.document.source()
+            app.session.document.source()
         } else {
             &app.projection.text
         }
@@ -50,26 +50,26 @@ async fn dropped_image_import_keeps_later_reverse_selection_remote_edits_and_und
     let bytes = std::fs::read(&image).unwrap();
     let original = "# Heading\r\n\r\nParagraph.\n\n| A | B |\n|---|---|\n| one | two |\n\n![alt](missing.png)\n\nTail.";
     let mut app = app(original);
-    app.path = Some(path.clone());
+    app.session.path = Some(path.clone());
     let gap = original.find("Paragraph").unwrap();
     select(&mut app, Selection::caret(gap));
     // Schedule the actual import without executing native dialogs or image tasks.
     let task = app.update_message(AppMessage::Dropped(image.clone()));
     assert!(app.busy);
-    assert_eq!(app.document.source(), original);
+    assert_eq!(app.session.document.source(), original);
     let selection = Selection {
         anchor: original.len(),
         head: original.find("Heading").unwrap(),
     };
     select(&mut app, selection);
-    let stable_selection = app.document.collaboration().selection(selection);
-    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+    let stable_selection = app.session.document.collaboration().selection(selection);
+    let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     peer.replace(0..0, "Remote prefix.\n\n").unwrap();
     send(
         &mut app,
         AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
-    let before_import = app.document.source().to_owned();
+    let before_import = app.session.document.source().to_owned();
     let mut outputs = iced_runtime::task::into_stream(task).unwrap();
     let mut completed = 0;
     while let Some(action) = outputs.next().await {
@@ -88,17 +88,18 @@ async fn dropped_image_import_keeps_later_reverse_selection_remote_edits_and_und
     assert_eq!(completed, 1);
     assert!(!app.busy);
     assert_eq!(std::fs::read(image).unwrap(), bytes);
-    let imported = app.document.source().to_owned();
+    let imported = app.session.document.source().to_owned();
     assert!(imported.contains("![写 真](<Writing%2Eassets/"));
     assert!(imported.contains("Remote prefix."));
     assert_eq!(
-        app.selection,
-        app.document
+        app.session.selection,
+        app.session
+            .document
             .collaboration()
             .resolve_selection(&stable_selection)
             .unwrap()
     );
-    assert!(app.selection.anchor > app.selection.head);
+    assert!(app.session.selection.anchor > app.session.selection.head);
     let destination = app
         .projection
         .rich
@@ -111,9 +112,9 @@ async fn dropped_image_import_keeps_later_reverse_selection_remote_edits_and_und
         .unwrap();
     assert_eq!(std::fs::read(stored).unwrap(), bytes);
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), before_import);
+    assert_eq!(app.session.document.source(), before_import);
     send(&mut app, AppMessage::Redo);
-    assert_eq!(app.document.source(), imported);
+    assert_eq!(app.session.document.source(), imported);
 }
 
 #[test]
@@ -123,7 +124,7 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
         &mut app,
         AppMessage::Edit(text_editor::Action::Edit(text_editor::Edit::Insert('!'))),
     );
-    let source = app.document.source().to_owned();
+    let source = app.session.document.source().to_owned();
     let selection = Selection {
         anchor: source.len(),
         head: 2,
@@ -132,7 +133,7 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
     drop(app.update_message(AppMessage::Dropped(PathBuf::from("photo.png"))));
     assert!(app.busy);
     assert!(app.writing.pending_media.is_some());
-    let generation = app.document.collaboration().generation();
+    let generation = app.session.document.collaboration().generation();
     send(
         &mut app,
         AppMessage::Saved {
@@ -143,13 +144,16 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
         },
     );
     assert!(!app.busy);
-    assert!(app.path.is_none());
-    assert!(app.dirty);
+    assert!(app.session.path.is_none());
+    assert!(app.session.dirty);
     assert!(app.writing.pending_media.is_none());
-    assert_eq!(app.document.source(), source);
-    assert_eq!(app.selection, selection);
+    assert_eq!(app.session.document.source(), source);
+    assert_eq!(app.session.selection, selection);
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), "# Heading\n\nUnfinished paragraph.");
+    assert_eq!(
+        app.session.document.source(),
+        "# Heading\n\nUnfinished paragraph."
+    );
 }
 
 #[tokio::test]
@@ -163,15 +167,15 @@ async fn document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_in
         &mut app,
         AppMessage::Edit(text_editor::Action::Edit(text_editor::Edit::Insert('!'))),
     );
-    let source = app.document.source().to_owned();
+    let source = app.session.document.source().to_owned();
     let selection = Selection {
         anchor: source.len(),
         head: 2,
     };
     select(&mut app, selection);
     let task = app.update_message(AppMessage::Dropped(path));
-    assert_eq!(app.document.source(), source);
-    assert_eq!(app.selection, selection);
+    assert_eq!(app.session.document.source(), source);
+    assert_eq!(app.session.selection, selection);
     let mut effects = iced_runtime::task::into_stream(task).unwrap();
     while let Some(effect) = effects.next().await {
         match effect {
@@ -181,15 +185,15 @@ async fn document_drop_and_cancel_leave_unsaved_writing_and_reverse_selection_in
     }
     assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
     assert!(matches!(app.pending, Some(Pending::Open(Some(_)))));
-    assert_eq!(app.document.source(), source);
-    assert_eq!(app.selection, selection);
+    assert_eq!(app.session.document.source(), source);
+    assert_eq!(app.session.selection, selection);
     send(&mut app, AppMessage::CloseOverlay);
     assert!(app.overlay.is_none());
     assert!(app.pending.is_none());
-    assert_eq!(app.document.source(), source);
-    assert_eq!(app.selection, selection);
+    assert_eq!(app.session.document.source(), source);
+    assert_eq!(app.session.selection, selection);
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), "# Heading\n\nParagraph.");
+    assert_eq!(app.session.document.source(), "# Heading\n\nParagraph.");
 }
 
 #[tokio::test]
@@ -204,8 +208,8 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     let source = include_str!("../../assets/writing/the-quiet-hour.md")
         .replace("the-quiet-hour.assets/coast.png", &destination);
     let mut app = app(&source);
-    app.path = Some(path.clone());
-    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+    app.session.path = Some(path.clone());
+    let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     let start = source.find("CommonMark reference").unwrap();
     let before = Selection {
         anchor: start + "CommonMark reference".len(),
@@ -238,16 +242,20 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     );
     tool(&mut app, Message::Accept);
     assert!(
-        app.document
+        app.session
+            .document
             .source()
             .contains("[A clear reference](<https://commonmark.org/>)")
     );
-    assert!(app.document.source().starts_with("A shared note."));
+    assert!(app.session.document.source().starts_with("A shared note."));
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), format!("A shared note.\n\n{source}"));
-    assert!(app.selection.anchor > app.selection.head);
+    assert_eq!(
+        app.session.document.source(),
+        format!("A shared note.\n\n{source}")
+    );
+    assert!(app.session.selection.anchor > app.session.selection.head);
     send(&mut app, AppMessage::Redo);
-    let image = app.document.source().find("![").unwrap();
+    let image = app.session.document.source().find("![").unwrap();
     select(&mut app, Selection::caret(image));
     tool(&mut app, Message::Details(Kind::Image));
     tool(
@@ -263,7 +271,7 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
         Message::Field(Field::CreditUrl, "https://openai.com/".into()),
     );
     tool(&mut app, Message::Accept);
-    let quote = app.document.source().find("> Make enough").unwrap();
+    let quote = app.session.document.source().find("> Make enough").unwrap();
     select(&mut app, Selection::caret(quote + 3));
     tool(&mut app, Message::Details(Kind::Quote));
     tool(
@@ -272,16 +280,18 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     );
     tool(&mut app, Message::Accept);
     assert!(
-        app.document
+        app.session
+            .document
             .source()
             .contains("> — Dosty notebook, [A place to begin](<#a-place-to-begin>)")
     );
-    peer.receive(&app.document.collaboration().state()).unwrap();
-    assert_eq!(peer.source(), app.document.source());
-    let state = app.document.collaboration().state();
+    peer.receive(&app.session.document.collaboration().state())
+        .unwrap();
+    assert_eq!(peer.source(), app.session.document.source());
+    let state = app.session.document.collaboration().state();
     collaboration_store::save_document(
         path.clone(),
-        app.document.source().into(),
+        app.session.document.source().into(),
         state,
         None,
         None,
@@ -290,10 +300,10 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     .unwrap();
     let loaded = storage::load(path).await.unwrap();
     let reopened = Document::from_state(&loaded.collaboration.unwrap()).unwrap();
-    assert_eq!(reopened.source(), app.document.source());
+    assert_eq!(reopened.source(), app.session.document.source());
     assert_ne!(
         reopened.collaboration().replica_id(),
-        app.document.collaboration().replica_id()
+        app.session.document.collaboration().replica_id()
     );
     let html = export::html(reopened.source(), Some(root.path())).unwrap();
     assert!(html.contains("data:image/png;base64,"));
@@ -306,7 +316,7 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
 #[test]
 fn overlapping_remote_edit_leaves_details_open_and_does_not_overwrite_new_text() {
     let mut app = app("A [link](https://example.com).\n");
-    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+    let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     select(&mut app, Selection::caret(5));
     tool(&mut app, Message::Details(Kind::Link));
     peer.transact(
@@ -323,13 +333,13 @@ fn overlapping_remote_edit_leaves_details_open_and_does_not_overwrite_new_text()
         &mut app,
         AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
-    let current = app.document.source().to_owned();
+    let current = app.session.document.source().to_owned();
     tool(
         &mut app,
         Message::Field(Field::Destination, "https://new.example/".into()),
     );
     tool(&mut app, Message::Accept);
-    assert_eq!(app.document.source(), current);
+    assert_eq!(app.session.document.source(), current);
     assert!(
         app.writing
             .form
@@ -341,7 +351,7 @@ fn overlapping_remote_edit_leaves_details_open_and_does_not_overwrite_new_text()
             .contains("changed")
     );
     send(&mut app, AppMessage::CloseOverlay);
-    assert_eq!(app.document.source(), current);
+    assert_eq!(app.session.document.source(), current);
 }
 
 #[test]
@@ -356,11 +366,11 @@ fn image_properties_and_quote_credits_preserve_crlf_neighbors_and_exact_undo() {
     );
     tool(&mut app, Message::Accept);
     assert_eq!(
-        app.document.source(),
+        app.session.document.source(),
         source.replace("![海]", "![海 at dawn 👩‍💻]")
     );
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
     select(&mut app, Selection::caret(source.find("Writer").unwrap()));
     tool(&mut app, Message::Details(Kind::Quote));
     tool(
@@ -369,11 +379,11 @@ fn image_properties_and_quote_credits_preserve_crlf_neighbors_and_exact_undo() {
     );
     tool(&mut app, Message::Accept);
     assert_eq!(
-        app.document.source(),
+        app.session.document.source(),
         source.replace("Writer,", "A different writer,")
     );
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
 }
 
 #[test]
@@ -385,7 +395,7 @@ fn delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_con
     };
     select(&mut app, selection);
     let target = DeferredTarget::new(&app, selection);
-    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+    let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     peer.transact(
         &[SourceEdit {
             range: 7..13,
@@ -400,7 +410,7 @@ fn delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_con
         &mut app,
         AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
     );
-    let source = app.document.source().to_owned();
+    let source = app.session.document.source().to_owned();
     tool(
         &mut app,
         Message::Clipboard {
@@ -408,10 +418,10 @@ fn delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_con
             result: Ok(assets::Clipboard::Text("日本語 e\u{301} 🦀".into())),
         },
     );
-    assert!(app.document.source().contains("remote"));
-    assert!(app.document.source().contains("日本語 e\u{301} 🦀"));
+    assert!(app.session.document.source().contains("remote"));
+    assert!(app.session.document.source().contains("日本語 e\u{301} 🦀"));
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
     let target = DeferredTarget::new(&app, Selection::caret(0));
     app.set_document("A different document".into(), None, "New.md".into());
     tool(
@@ -423,14 +433,14 @@ fn delayed_clipboard_and_image_targets_follow_edits_and_do_not_delete_remote_con
             result: Ok("old.assets/a.png".into()),
         },
     );
-    assert_eq!(app.document.source(), "A different document");
+    assert_eq!(app.session.document.source(), "A different document");
 }
 
 #[test]
 fn selected_url_paste_and_ime_commit_have_separate_undo_steps() {
     let mut app = app("A café and a table.\n");
     select(&mut app, Selection { anchor: 7, head: 2 });
-    let target = DeferredTarget::new(&app, app.selection);
+    let target = DeferredTarget::new(&app, app.session.selection);
     tool(
         &mut app,
         Message::Clipboard {
@@ -438,12 +448,13 @@ fn selected_url_paste_and_ime_commit_have_separate_undo_steps() {
             result: Ok(assets::Clipboard::Text("https://example.com/".into())),
         },
     );
-    let linked = app.document.source().to_owned();
+    let linked = app.session.document.source().to_owned();
     assert!(linked.contains("[café](<https://example.com/>)"));
     let target = app
+        .session
         .document
         .collaboration()
-        .composition_target(app.selection);
+        .composition_target(app.session.selection);
     send(
         &mut app,
         AppMessage::CommitComposition {
@@ -451,18 +462,18 @@ fn selected_url_paste_and_ime_commit_have_separate_undo_steps() {
             text: "日本語".into(),
         },
     );
-    assert_eq!(app.document.source().matches("日本語").count(), 1);
+    assert_eq!(app.session.document.source().matches("日本語").count(), 1);
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), linked);
+    assert_eq!(app.session.document.source(), linked);
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), "A café and a table.\n");
+    assert_eq!(app.session.document.source(), "A café and a table.\n");
 }
 
 #[test]
 fn late_paste_precedes_later_typing_at_its_gap_and_keeps_the_current_caret() {
     let mut app = app("Before after.");
     select(&mut app, Selection::caret(7));
-    let target = DeferredTarget::new(&app, app.selection);
+    let target = DeferredTarget::new(&app, app.session.selection);
     send(
         &mut app,
         AppMessage::Edit(text_editor::Action::Edit(text_editor::Edit::Insert('T'))),
@@ -474,8 +485,11 @@ fn late_paste_precedes_later_typing_at_its_gap_and_keeps_the_current_caret() {
             result: Ok(assets::Clipboard::Text("paste".into())),
         },
     );
-    assert_eq!(app.document.source(), "Before pasteTafter.");
-    assert_eq!(app.selection, Selection::caret("Before pasteT".len()));
+    assert_eq!(app.session.document.source(), "Before pasteTafter.");
+    assert_eq!(
+        app.session.selection,
+        Selection::caret("Before pasteT".len())
+    );
 }
 
 #[test]
@@ -572,8 +586,8 @@ fn focusing_details_reconciles_editor_focus_and_settles_the_native_redraw_loop()
                 "{kind:?} at {size:?} must settle focus without repeated rebuilds"
             );
             assert!(!app.editor_focused);
-            assert_eq!(app.document.source(), source);
-            assert_eq!(app.selection, Selection::caret(head));
+            assert_eq!(app.session.document.source(), source);
+            assert_eq!(app.session.selection, Selection::caret(head));
         }
     }
 }
@@ -582,21 +596,21 @@ fn focusing_details_reconciles_editor_focus_and_settles_the_native_redraw_loop()
 fn local_link_navigation_closes_details_and_respects_the_unsaved_guard() {
     let mut app = app("# A heading\n\nA [heading](#a-heading) and [file](other.md).\n");
     let dir = tempfile::tempdir().unwrap();
-    app.path = Some(dir.path().join("current.md"));
-    let link = app.document.source().find("[heading]").unwrap();
+    app.session.path = Some(dir.path().join("current.md"));
+    let link = app.session.document.source().find("[heading]").unwrap();
     select(&mut app, Selection::caret(link));
     tool(&mut app, Message::Details(Kind::Link));
     send(&mut app, AppMessage::Link("#a-heading".into()));
     assert!(app.overlay.is_none());
-    assert_eq!(app.selection.head, 0);
-    let original = app.document.source().to_owned();
-    app.dirty = true;
+    assert_eq!(app.session.selection.head, 0);
+    let original = app.session.document.source().to_owned();
+    app.session.dirty = true;
     send(&mut app, AppMessage::Link("other.md".into()));
     assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
-    assert_eq!(app.document.source(), original);
+    assert_eq!(app.session.document.source(), original);
     send(&mut app, AppMessage::CloseOverlay);
-    app.dirty = false;
-    let link = app.document.source().find("[file]").unwrap();
+    app.session.dirty = false;
+    let link = app.session.document.source().find("[file]").unwrap();
     select(&mut app, Selection::caret(link));
     tool(&mut app, Message::Details(Kind::Link));
     send(&mut app, AppMessage::Link("other.md".into()));
@@ -611,7 +625,7 @@ fn local_link_navigation_closes_details_and_respects_the_unsaved_guard() {
         })),
     );
     assert!(app.overlay.is_none());
-    assert_eq!(app.document.source(), "# Another document\n");
+    assert_eq!(app.session.document.source(), "# Another document\n");
 }
 
 #[tokio::test]
@@ -630,7 +644,7 @@ async fn save_as_keeps_images_referenced_only_by_undo_history() {
     }
     let source = format!("![A photograph](<{}>)\n\n*Caption.*\n", references[0]);
     let mut app = app(&source);
-    app.path = Some(path.clone());
+    app.session.path = Some(path.clone());
     select(&mut app, Selection::caret(1));
     tool(&mut app, Message::Details(Kind::Image));
     tool(
@@ -638,18 +652,18 @@ async fn save_as_keeps_images_referenced_only_by_undo_history() {
         Message::Field(Field::Destination, references[1].clone()),
     );
     tool(&mut app, Message::Accept);
-    assert!(!app.document.source().contains(&references[0]));
+    assert!(!app.session.document.source().contains(&references[0]));
     assets::relocate(
-        app.document.source(),
+        app.session.document.source(),
         Some(&path),
         &copy,
         &app.images.history(),
     )
     .unwrap();
-    let state = app.document.collaboration().state();
+    let state = app.session.document.collaboration().state();
     let version = collaboration_store::version(&state);
-    let source = Arc::new(app.document.source().to_owned());
-    let generation = app.document.collaboration().generation();
+    let source = Arc::new(app.session.document.source().to_owned());
+    let generation = app.session.document.collaboration().generation();
     collaboration_store::save_document(copy.clone(), (*source).clone(), state, None, None)
         .await
         .unwrap();
@@ -663,8 +677,8 @@ async fn save_as_keeps_images_referenced_only_by_undo_history() {
         },
     );
     send(&mut app, AppMessage::Undo);
-    assert!(app.document.source().contains(&references[0]));
-    let html = export::html(app.document.source(), Some(new.path())).unwrap();
+    assert!(app.session.document.source().contains(&references[0]));
+    let html = export::html(app.session.document.source(), Some(new.path())).unwrap();
     assert!(html.contains("data:image/png;base64,"));
     for reference in references {
         assert!(
@@ -679,7 +693,7 @@ async fn save_as_keeps_images_referenced_only_by_undo_history() {
 #[test]
 fn image_completion_keeps_focus_and_transient_form_edits_in_the_open_dialog() {
     let mut app = app("A [link](https://example.com).\n");
-    let target = DeferredTarget::new(&app, Selection::caret(app.document.source().len()));
+    let target = DeferredTarget::new(&app, Selection::caret(app.session.document.source().len()));
     select(&mut app, Selection::caret(4));
     tool(&mut app, Message::Details(Kind::Link));
     send(&mut app, AppMessage::EditorFocused(false));
@@ -705,7 +719,8 @@ fn image_completion_keeps_focus_and_transient_form_edits_in_the_open_dialog() {
         "A label still being edited"
     );
     assert!(
-        app.document
+        app.session
+            .document
             .source()
             .contains("![Photograph](<note.assets/a.png>)")
     );

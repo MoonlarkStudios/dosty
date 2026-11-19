@@ -12,20 +12,20 @@ fn switching_appearance_preserves_the_document_and_reverse_selection() {
         None,
         "Thought.md".into(),
     );
-    app.selection = Selection {
+    app.session.selection = Selection {
         anchor: 29,
         head: 16,
     };
     drop(app.update_message(Message::Format(Format::Bold)));
-    assert!(app.document.can_undo());
-    let source = app.document.source().to_owned();
-    let selection = app.selection;
-    let undo = app.document.can_undo();
+    assert!(app.session.document.can_undo());
+    let source = app.session.document.source().to_owned();
+    let selection = app.session.selection;
+    let undo = app.session.document.can_undo();
     for preset in Preset::ALL {
         drop(app.update_message(Message::Theme(preset)));
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.can_undo(), undo);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(app.session.document.can_undo(), undo);
         assert_eq!(
             app.theme().palette().background,
             app.resolved_theme.tokens.canvas
@@ -37,9 +37,9 @@ fn switching_appearance_preserves_the_document_and_reverse_selection() {
         "this is not a theme".into(),
     ))))));
     assert_eq!(app.resolved_theme.tokens, previous);
-    assert_eq!(app.document.source(), source);
-    assert_eq!(app.selection, selection);
-    assert_eq!(app.document.can_undo(), undo);
+    assert_eq!(app.session.document.source(), source);
+    assert_eq!(app.session.selection, selection);
+    assert_eq!(app.session.document.can_undo(), undo);
 }
 
 fn render(app: &App, size: Size, name: &str) {
@@ -200,7 +200,7 @@ fn document_table_previews() {
     app.notification = None;
     app.mode = EditorMode::Live;
     app.editor_focused = true;
-    app.selection = Selection::caret(source.find("Second").unwrap() + 3);
+    app.session.selection = Selection::caret(source.find("Second").unwrap() + 3);
     app.sync_editor();
     for preset in Preset::ALL {
         app.resolved_theme = preset.resolve();
@@ -254,7 +254,8 @@ fn table_grid_previews() {
     for preset in Preset::ALL {
         app.resolved_theme = preset.resolve();
         app.clear_grid();
-        app.selection = Selection::caret(app.document.source().find("Keep the team").unwrap());
+        app.session.selection =
+            Selection::caret(app.session.document.source().find("Keep the team").unwrap());
         app.sync_editor();
         render(
             &app,
@@ -352,9 +353,9 @@ fn theme_ui_previews() {
         app.overlay = None;
     }
     app.resolved_theme = Preset::Paper.resolve();
-    app.display_name = "Notes for a very long and unbroken document title that should never push controls out of the window.md".into();
+    app.session.display_name = "Notes for a very long and unbroken document title that should never push controls out of the window.md".into();
     render(&app, Size::new(760.0, 520.0), "long-title-narrow");
-    app.display_name = "Welcome.md".into();
+    app.session.display_name = "Welcome.md".into();
     app.chrome.sidebars_hidden = true;
     render(&app, Size::new(1180.0, 820.0), "focus");
     app.chrome.sidebars_hidden = false;
@@ -366,7 +367,7 @@ fn theme_ui_previews() {
     drop(app.update_message(Message::ToggleReading));
     render(&app, Size::new(1180.0, 820.0), "read");
     drop(app.update_message(Message::ToggleReading));
-    app.dirty = true;
+    app.session.dirty = true;
     app.overlay = Some(Overlay::Unsaved);
     render(&app, Size::new(760.0, 520.0), "unsaved-narrow");
     app.overlay = None;
@@ -418,12 +419,12 @@ fn native_quiet_previews() {
         );
     }
     app.resolved_theme = Preset::Paper.resolve();
-    app.dirty = true;
+    app.session.dirty = true;
     render(&app, Size::new(1180.0, 820.0), "native-quiet-typing");
     app.chrome.outline.open = true;
     render(&app, Size::new(1180.0, 820.0), "native-quiet-navigation");
     render(&app, Size::new(760.0, 520.0), "native-quiet-outline-narrow");
-    app.path = Some("/writing/Field notes/The quiet hour.md".into());
+    app.session.path = Some("/writing/Field notes/The quiet hour.md".into());
     drop(
         app.update_folder(folder::Message::Scanned {
             generation: 0,
@@ -496,7 +497,7 @@ fn native_quiet_previews() {
     );
     render(&app, Size::new(1180.0, 1000.0), "typeface-settings");
     app.overlay = None;
-    app.display_name =
+    app.session.display_name =
         "A very long document name that must never push the save indicator outside the titlebar.md"
             .into();
     app.chrome.save_error = Some("This file changed outside Dosty.".into());
@@ -527,7 +528,7 @@ fn table_controls_previews() {
     let (mut app, task) = App::new();
     drop(task);
     app.set_document(source.into(), None, "Tables.md".into());
-    app.selection = Selection::caret(source.find("Name").unwrap());
+    app.session.selection = Selection::caret(source.find("Name").unwrap());
     app.editor_focused = true;
     app.sync_editor();
     drop(app.update(Message::Table(table::Message::Open)));
@@ -579,7 +580,7 @@ fn table_context_previews() {
                 app.resolved_theme = preset.resolve();
                 app.chrome.files.open = false;
                 app.editor_focused = true;
-                app.selection = Selection::caret(source.find("Keep the team").unwrap());
+                app.session.selection = Selection::caret(source.find("Keep the team").unwrap());
                 app.sync_editor();
                 drop(
                     app.update_message(Message::Table(table::Message::OpenContext {

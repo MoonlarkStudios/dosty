@@ -358,7 +358,7 @@ impl App {
                         self.folder.limited = snapshot.limited;
                         self.folder.warnings = snapshot.warnings;
                         self.folder.error = None;
-                        if let Some(path) = &self.path {
+                        if let Some(path) = &self.session.path {
                             self.folder.reveal(path);
                         }
                         self.folder.refresh_visible();
@@ -406,7 +406,7 @@ impl App {
                 match result {
                     Ok(PathKind::Directory) => return self.open_workspace(path),
                     Ok(PathKind::File) if !self.busy => {
-                        if self.path.as_ref() == Some(&path) {
+                        if self.session.path.as_ref() == Some(&path) {
                             return Task::none();
                         }
                         if !self.commit_cell() {
@@ -705,7 +705,7 @@ impl App {
                 return operation::focus(TREE);
             }
             file_tree::Action::Open(path) => {
-                if self.path.as_ref() == Some(&path) {
+                if self.session.path.as_ref() == Some(&path) {
                     return Task::none();
                 }
                 if !self.commit_cell() {
@@ -765,7 +765,7 @@ impl App {
     }
 
     pub(super) fn folder_document_changed(&mut self) -> Task<AppMessage> {
-        if let Some(path) = &self.path {
+        if let Some(path) = &self.session.path {
             self.folder.reveal(path);
         }
         self.folder.refresh_visible();
@@ -774,7 +774,7 @@ impl App {
                 .folder
                 .root
                 .as_ref()
-                .zip(self.path.as_ref())
+                .zip(self.session.path.as_ref())
                 .is_some_and(|(root, path)| path.starts_with(root))
         {
             self.folder_refresh()
@@ -821,8 +821,8 @@ impl App {
         let id = self.folder.next_operation;
         self.folder.inflight = Some(InFlight {
             id,
-            document: self.document.collaboration().id(),
-            replica: self.document.collaboration().replica_id(),
+            document: self.session.document.collaboration().id(),
+            replica: self.session.document.collaboration().replica_id(),
             moving,
             undoing,
         });
@@ -876,7 +876,7 @@ impl App {
             .root
             .as_ref()
             .is_some_and(|root| from.starts_with(root) && to.starts_with(root));
-        let active = self.path.as_ref() == Some(&from);
+        let active = self.session.path.as_ref() == Some(&from);
         let active_rename = active && from.parent() == to.parent();
         let authorized_undo = undoing
             && self
@@ -911,13 +911,17 @@ impl App {
         if !self.commit_cell() {
             return Task::none();
         }
-        let active = self.path.clone().map(|path| file_ops::ActiveDocument {
-            path,
-            saved_source: self.saved_source.clone(),
-            saved_version: self.saved_version.clone(),
-            source: self.document.source().to_owned(),
-            history: self.images.history(),
-        });
+        let active = self
+            .session
+            .path
+            .clone()
+            .map(|path| file_ops::ActiveDocument {
+                path,
+                saved_source: self.session.saved_source.clone(),
+                saved_version: self.session.saved_version.clone(),
+                source: self.session.document.source().to_owned(),
+                history: self.images.history(),
+            });
         let operation = self.begin_folder_operation(true, undoing);
         Task::perform(file_ops::move_item(from, to, active), move |result| {
             AppMessage::Folder(Message::Finished {
@@ -983,12 +987,12 @@ impl App {
                 }
                 self.folder.remap(&result.from, &result.to);
                 remembered = self.workspace_moved(&result.from, &result.to);
-                if self.document.collaboration().id() == inflight.document
-                    && self.document.collaboration().replica_id() == inflight.replica
+                if self.session.document.collaboration().id() == inflight.document
+                    && self.session.document.collaboration().replica_id() == inflight.replica
                     && let Some(path) = result.active_path
                 {
-                    self.display_name = name(&path);
-                    self.path = Some(path);
+                    self.session.display_name = name(&path);
+                    self.session.path = Some(path);
                     self.recovery.path_changed();
                 }
                 self.folder.notice = Some(if inflight.undoing {
@@ -1048,7 +1052,7 @@ impl App {
         content = content.push(
             FileTree::new(
                 &self.folder.visible,
-                self.path.as_deref(),
+                self.session.path.as_deref(),
                 tokens,
                 |action| AppMessage::Folder(Message::Tree(action)),
             )
@@ -1261,7 +1265,7 @@ impl App {
     }
 
     fn pick_move_destination(&mut self, source: PathBuf) -> Task<AppMessage> {
-        let known = self.path.as_ref() == Some(&source)
+        let known = self.session.path.as_ref() == Some(&source)
             || self
                 .folder
                 .root
@@ -1512,8 +1516,8 @@ mod tests {
             Some(PathBuf::from("/writing/note.md")),
             "note.md".into(),
         );
-        app.selection = Selection {
-            anchor: app.document.source().len(),
+        app.session.selection = Selection {
+            anchor: app.session.document.source().len(),
             head: 2,
         };
         app.sync_editor();
@@ -1523,8 +1527,8 @@ mod tests {
     #[test]
     fn workspace_appears_only_after_a_successful_scan_and_reports_failures() {
         let mut app = app();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
         drop(app.update_folder(Message::OpenRoot("/missing".into())));
         assert!(!app.chrome.files.open && app.folder.root.is_none());
         drop(app.update_folder(Message::Scanned {
@@ -1548,8 +1552,8 @@ mod tests {
             }),
         }));
         assert!(app.chrome.files.open && app.folder.root().is_some());
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
     }
 
     #[test]
@@ -1582,9 +1586,9 @@ mod tests {
     #[test]
     fn folder_scan_and_disclosure_preserve_source_direction_and_history() {
         let mut app = app();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
-        let id = app.document.collaboration().id();
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
+        let id = app.session.document.collaboration().id();
         drop(app.update_folder(Message::Scanned {
             generation: 0,
             result: Ok(folder::Snapshot {
@@ -1606,10 +1610,10 @@ mod tests {
         drop(app.update_folder(Message::Tree(file_tree::Action::Toggle(
             "/writing/empty".into(),
         ))));
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.collaboration().id(), id);
-        assert!(!app.dirty);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(app.session.document.collaboration().id(), id);
+        assert!(!app.session.dirty);
         assert!(
             app.folder
                 .visible
@@ -1622,37 +1626,40 @@ mod tests {
     fn failed_scan_retains_the_previous_folder_and_document() {
         let mut app = app();
         app.folder.root = Some("/writing".into());
-        let selection = app.selection;
+        let selection = app.session.selection;
         drop(app.update_folder(Message::Scanned {
             generation: 0,
             result: Err(FileError::Io("Drive unavailable".into())),
         }));
         assert_eq!(app.folder.root.as_deref(), Some(Path::new("/writing")));
         assert!(app.folder.error.is_some());
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
     }
 
     #[test]
     fn file_switch_uses_the_unsaved_guard_and_leaves_active_row_until_success() {
         let mut app = app();
-        app.dirty = true;
-        let selection = app.selection;
+        app.session.dirty = true;
+        let selection = app.session.selection;
         drop(app.update_folder(Message::Tree(file_tree::Action::Open(
             "/writing/other.md".into(),
         ))));
         assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
-        assert_eq!(app.selection, selection);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
+        assert_eq!(app.session.selection, selection);
     }
 
     #[test]
     fn active_path_remap_keeps_unsaved_source_selection_and_undo_session() {
         let mut app = app();
-        let id = app.document.collaboration().id();
-        let replica = app.document.collaboration().replica_id();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
-        app.dirty = true;
+        let id = app.session.document.collaboration().id();
+        let replica = app.session.document.collaboration().replica_id();
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
+        app.session.dirty = true;
         app.folder.root = Some("/writing".into());
         app.folder.next_operation = 1;
         app.folder.inflight = Some(InFlight {
@@ -1674,13 +1681,13 @@ mod tests {
             })),
         }));
         assert_eq!(
-            app.path.as_deref(),
+            app.session.path.as_deref(),
             Some(Path::new("/writing/drafts/note.md"))
         );
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.collaboration().replica_id(), replica);
-        assert!(app.dirty);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(app.session.document.collaboration().replica_id(), replica);
+        assert!(app.session.dirty);
         assert!(!app.busy);
         assert!(!app.loading);
         assert!(app.folder.can_undo());
@@ -1693,8 +1700,8 @@ mod tests {
         app.folder.navigation = 9;
         app.folder.generation = 4;
         app.folder.picker = true;
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
         drop(app.update_folder(Message::Tree(file_tree::Action::Move {
             source: "/writing/note.md".into(),
             destination: "/writing/drafts".into(),
@@ -1726,9 +1733,12 @@ mod tests {
             result: Err(FileError::Io("Destination already exists".into())),
         }));
         assert!(!app.busy && !app.loading);
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         assert!(app.folder.highlighted.is_none());
         assert!(!app.folder.can_undo());
     }
@@ -1738,8 +1748,8 @@ mod tests {
         let mut app = app();
         app.chrome.sidebars_hidden = true;
         app.chrome.files.open = false;
-        let selection = app.selection;
-        let source = app.document.source().to_owned();
+        let selection = app.session.selection;
+        let source = app.session.document.source().to_owned();
         drop(app.update_folder(Message::Rename("/writing/note.md".into())));
         assert!(matches!(app.overlay, Some(Overlay::Folder)));
         assert!(app.chrome.sidebars_hidden && !app.chrome.files.open);
@@ -1754,9 +1764,12 @@ mod tests {
         drop(app.update_folder(Message::Accept));
         assert!(app.busy && app.loading);
         assert!(app.chrome.sidebars_hidden && !app.chrome.files.open);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
     }
 
     #[test]
@@ -1779,7 +1792,7 @@ mod tests {
                 is_directory: true,
             },
         ];
-        let selection = app.selection;
+        let selection = app.session.selection;
         drop(app.update_folder(Message::MoveTo("/writing/note.md".into())));
         assert_eq!(app.folder.selected, 0);
         drop(app.update_folder(Message::Key {
@@ -1803,7 +1816,7 @@ mod tests {
         assert!(app.folder.dialog.is_none());
         assert!(!app.busy);
         assert!(app.chrome.sidebars_hidden && !app.chrome.files.open);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
     }
 
     #[test]
@@ -1832,7 +1845,10 @@ mod tests {
         }));
         assert!(!app.busy);
         assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
     }
 
     #[test]
@@ -1854,11 +1870,11 @@ mod tests {
             })),
         }));
         assert_eq!(
-            app.path.as_deref(),
+            app.session.path.as_deref(),
             Some(Path::new("/other/replacement.md"))
         );
-        assert_eq!(app.document.source(), "Replacement");
-        assert_eq!(app.display_name, "replacement.md");
+        assert_eq!(app.session.document.source(), "Replacement");
+        assert_eq!(app.session.display_name, "replacement.md");
         assert!(!app.busy && !app.loading);
     }
 

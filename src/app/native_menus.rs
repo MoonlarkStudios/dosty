@@ -416,7 +416,9 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
         Command::Edit(action) => (app.edit_command_enabled(action), false),
         Command::Mode(mode) => (ready, app.mode == mode),
         Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
-        Command::Rename | Command::Move | Command::Location => (ready && app.path.is_some(), false),
+        Command::Rename | Command::Move | Command::Location => {
+            (ready && app.session.path.is_some(), false)
+        }
         Command::UndoMove => (ready && app.folder.can_undo(), false),
         Command::BackToReference => (ready && app.footnotes.can_return(), false),
         Command::Files => (
@@ -539,7 +541,7 @@ impl App {
                     .map(|id| id.map_or(Message::Dismiss, Message::CloseRequested));
             }
             Command::Rename | Command::Move | Command::Location => {
-                let Some(path) = self.path.clone() else {
+                let Some(path) = self.session.path.clone() else {
                     return Task::none();
                 };
                 Message::Folder(match command {
@@ -564,26 +566,26 @@ mod tests {
         drop(initial);
         let source = "café and 🦀";
         app.set_document(source.into(), None, "Draft.md".into());
-        app.selection = Selection {
+        app.session.selection = Selection {
             anchor: source.len(),
             head: 0,
         };
         app.sync_editor();
-        app.dirty = true;
+        app.session.dirty = true;
         app.overlay = Some(Overlay::Chrome);
         app.chrome.menu = Some(chrome::Menu::Document);
         drop(app.native_menu_command(Command::New));
         assert_eq!(app.overlay, Some(Overlay::Unsaved));
         assert!(app.chrome.menu.is_none());
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
         assert_eq!(
-            app.selection,
+            app.session.selection,
             Selection {
                 anchor: source.len(),
                 head: 0
             }
         );
-        assert!(app.dirty);
+        assert!(app.session.dirty);
     }
 
     #[test]
@@ -594,7 +596,7 @@ mod tests {
         app.mode = EditorMode::Read;
         assert!(!availability(&app, Command::Format(Format::Bold)).0);
         drop(app.native_menu_command(Command::Format(Format::Bold)));
-        assert_eq!(app.document.source(), "café and 🦀");
+        assert_eq!(app.session.document.source(), "café and 🦀");
         drop(app.native_menu_command(Command::Mode(EditorMode::Source)));
         assert!(availability(&app, Command::Mode(EditorMode::Source)).1);
         assert!(!availability(&app, Command::Files).0);

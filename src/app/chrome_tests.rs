@@ -23,8 +23,8 @@ fn app(source: &str) -> App {
 fn send(app: &mut App, message: AppMessage) {
     drop(app.update_message(message));
     assert_eq!(
-        app.document.source(),
-        app.document.collaboration().materialize()
+        app.session.document.source(),
+        app.session.document.collaboration().materialize()
     );
 }
 
@@ -54,15 +54,15 @@ fn reverse_selection(source: &str) -> Selection {
 fn launch_starts_with_one_blank_document_and_closed_navigation() {
     let (app, initial_tasks) = App::new();
     drop(initial_tasks);
-    assert!(app.document.source().is_empty());
+    assert!(app.session.document.source().is_empty());
     assert!(app.editor.snapshot().is_empty());
-    assert!(app.path.is_none());
+    assert!(app.session.path.is_none());
     assert!(app.folder.root().is_none());
     assert!(!app.chrome.files.open);
     assert!(!app.chrome.sidebars_hidden);
-    assert!(!app.dirty);
+    assert!(!app.session.dirty);
     assert!(app.overlay.is_none());
-    assert!(!app.document.can_undo());
+    assert!(!app.session.document.can_undo());
 }
 
 #[test]
@@ -81,8 +81,8 @@ fn files_panel_requires_a_workspace_and_closing_it_restores_standalone_writing()
     harness.message(AppMessage::Folder(folder::Message::Close));
     assert!(!harness.app.chrome.files.open && harness.app.folder.root().is_none());
     assert_eq!(harness.editor().0, before);
-    assert_eq!(harness.app.document.source(), source);
-    assert!(!harness.app.document.can_undo());
+    assert_eq!(harness.app.session.document.source(), source);
+    assert!(!harness.app.session.document.can_undo());
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn typing_keeps_navigation_visible_with_legacy_fade_preferences() {
         let mut after = Controls::default();
         harness.operate(&mut after);
         assert_eq!(before.0, after.0);
-        assert!(harness.app.dirty);
+        assert!(harness.app.session.dirty);
         assert!(harness.app.chrome.files.open && harness.app.chrome.outline.open);
     }
 }
@@ -145,11 +145,11 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
         let mut app = app("# Draft\n\ncafé **words** and 🦀\n\nLast line.");
         send(&mut app, AppMessage::Edit(Action::Edit(Edit::Insert('!'))));
         send(&mut app, AppMessage::SetMode(mode));
-        app.selection = reverse_selection(app.document.source());
+        app.session.selection = reverse_selection(app.session.document.source());
         app.sync_editor();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
-        let generation = app.document.collaboration().generation();
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
+        let generation = app.session.document.collaboration().generation();
         let native_selection = app.editor.selection();
         for font in [
             WritingFont::Serif,
@@ -170,12 +170,15 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
             );
             assert_eq!(app.resolved_theme.typography.font, font);
             assert_eq!(app.preferences.writing_font, font);
-            assert_eq!(app.document.source(), source);
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.document.source(), source);
+            assert_eq!(app.session.selection, selection);
             assert_eq!(app.editor.selection(), native_selection);
-            assert_eq!(app.document.collaboration().generation(), generation);
+            assert_eq!(
+                app.session.document.collaboration().generation(),
+                generation
+            );
             assert_eq!(app.preserve_viewport_generation, Some(generation));
-            assert!(app.document.can_undo());
+            assert!(app.session.document.can_undo());
             let restored: Preferences =
                 toml::from_str(&toml::to_string(&app.preferences).unwrap()).unwrap();
             assert_eq!(restored.writing_font, font);
@@ -187,11 +190,12 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
 fn saved_snapshot_completion_keeps_later_edits_and_failed_saves_visible() {
     let mut app = app("café and 🦀");
     assert_eq!(app.save_state(), SaveState::Unsaved);
-    app.path = Some("/tmp/quiet.md".into());
+    app.session.path = Some("/tmp/quiet.md".into());
     assert_eq!(app.save_state(), SaveState::Saved);
-    let source = Arc::new(app.document.source().to_owned());
-    let generation = app.document.collaboration().generation();
-    let version = crate::io::collaboration_store::version(&app.document.collaboration().state());
+    let source = Arc::new(app.session.document.source().to_owned());
+    let generation = app.session.document.collaboration().generation();
+    let version =
+        crate::io::collaboration_store::version(&app.session.document.collaboration().state());
     app.chrome.saving = true;
     assert_eq!(app.save_state(), SaveState::Saving);
     send(&mut app, AppMessage::Edit(Action::Edit(Edit::Insert('!'))));
@@ -260,21 +264,21 @@ fn hide_sidebars_preserves_reverse_utf8_selection_native_buffer_and_history() {
                 AppMessage::Edit(Action::Move(iced::widget::text_editor::Motion::DocumentEnd)),
             );
             send(&mut app, AppMessage::Edit(Action::Edit(Edit::Insert('!'))));
-            let edited = app.document.source().to_owned();
+            let edited = app.session.document.source().to_owned();
             send(&mut app, AppMessage::SetMode(mode));
             app.chrome.files.open = sidebar;
             app.chrome.outline.open = true;
             let selection = reverse_selection(&edited);
-            app.selection = selection;
+            app.session.selection = selection;
             app.sync_editor();
             let native_source = app.editor.snapshot().to_owned();
             let native_selection = app.editor.selection();
-            let collaboration = app.document.collaboration();
+            let collaboration = app.session.document.collaboration();
             let identity = (collaboration.id(), collaboration.replica_id());
             let generation = collaboration.generation();
             let state = collaboration.state().update;
-            assert!(app.document.can_undo());
-            assert!(!app.document.can_redo());
+            assert!(app.session.document.can_undo());
+            assert!(!app.session.document.can_redo());
 
             for expected_focus in [true, false, true, false] {
                 send(&mut app, AppMessage::HideSidebars);
@@ -282,25 +286,25 @@ fn hide_sidebars_preserves_reverse_utf8_selection_native_buffer_and_history() {
                 assert_eq!(app.chrome.files.open, sidebar);
                 assert!(app.chrome.outline.open);
                 assert_eq!(app.mode, mode);
-                assert_eq!(app.document.source(), edited);
-                assert_eq!(app.selection, selection);
-                assert!(app.selection.anchor > app.selection.head);
+                assert_eq!(app.session.document.source(), edited);
+                assert_eq!(app.session.selection, selection);
+                assert!(app.session.selection.anchor > app.session.selection.head);
                 assert_eq!(app.editor.snapshot(), native_source);
                 assert_eq!(app.editor.selection(), native_selection);
-                let collaboration = app.document.collaboration();
+                let collaboration = app.session.document.collaboration();
                 assert_eq!((collaboration.id(), collaboration.replica_id()), identity);
                 assert_eq!(collaboration.generation(), generation);
                 assert_eq!(collaboration.state().update, state);
                 assert_eq!(app.preserve_viewport_generation, Some(generation));
-                assert!(app.dirty);
-                assert!(app.document.can_undo());
-                assert!(!app.document.can_redo());
+                assert!(app.session.dirty);
+                assert!(app.session.document.can_undo());
+                assert!(!app.session.document.can_redo());
             }
 
             send(&mut app, AppMessage::Undo);
-            assert_eq!(app.document.source(), source);
+            assert_eq!(app.session.document.source(), source);
             send(&mut app, AppMessage::Redo);
-            assert_eq!(app.document.source(), edited);
+            assert_eq!(app.session.document.source(), edited);
         }
     }
 }
@@ -318,10 +322,10 @@ fn titlebar_commands_preserve_the_existing_unsaved_document_guard() {
     {
         let source = "café and 🦀";
         let mut app = app(source);
-        app.selection = reverse_selection(source);
+        app.session.selection = reverse_selection(source);
         app.sync_editor();
-        app.dirty = true;
-        let selection = app.selection;
+        app.session.dirty = true;
+        let selection = app.session.selection;
         send(&mut app, AppMessage::Chrome(Message::Menu(Menu::File)));
         assert_eq!(app.overlay, Some(Overlay::Chrome));
         send(
@@ -330,9 +334,9 @@ fn titlebar_commands_preserve_the_existing_unsaved_document_guard() {
         );
         assert_eq!(app.overlay, Some(Overlay::Unsaved));
         assert!(app.chrome.menu.is_none());
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert!(app.dirty);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert!(app.session.dirty);
         assert!(!app.loading);
         match (&app.pending, index) {
             (Some(Pending::New), 0) | (Some(Pending::Open(None)), 1) => {}
@@ -364,12 +368,12 @@ fn opening_and_saving_files_never_adds_document_paths_to_preferences() {
                 collaboration: None,
             })),
         );
-        assert_eq!(app.path.as_ref(), Some(&path));
+        assert_eq!(app.session.path.as_ref(), Some(&path));
         assert_eq!(toml::to_string(&app.preferences).unwrap(), appearance);
-        let source = std::sync::Arc::new(app.document.source().to_owned());
+        let source = std::sync::Arc::new(app.session.document.source().to_owned());
         let version =
-            crate::io::collaboration_store::version(&app.document.collaboration().state());
-        let generation = app.document.collaboration().generation();
+            crate::io::collaboration_store::version(&app.session.document.collaboration().state());
+        let generation = app.session.document.collaboration().generation();
         send(
             &mut app,
             AppMessage::Saved {
@@ -380,7 +384,7 @@ fn opening_and_saving_files_never_adds_document_paths_to_preferences() {
             },
         );
         assert_eq!(toml::to_string(&app.preferences).unwrap(), appearance);
-        assert!(!app.dirty);
+        assert!(!app.session.dirty);
     }
 }
 
@@ -395,22 +399,22 @@ fn loading_blocks_search_replacement_and_document_navigation_without_losing_hist
             AppMessage::Edit(Action::Move(iced::widget::text_editor::Motion::DocumentEnd)),
         );
         send(&mut app, AppMessage::Edit(Action::Edit(Edit::Insert('!'))));
-        app.document.break_history_group();
+        app.session.document.break_history_group();
         send(&mut app, AppMessage::Edit(Action::Edit(Edit::Insert('?'))));
         send(&mut app, AppMessage::Undo);
-        let edited = app.document.source().to_owned();
+        let edited = app.session.document.source().to_owned();
         send(&mut app, AppMessage::Query("café".into()));
         send(&mut app, AppMessage::Replacement("changed".into()));
         send(&mut app, AppMessage::SetMode(mode));
         let selection = reverse_selection(&edited);
-        app.selection = selection;
+        app.session.selection = selection;
         app.sync_editor();
         let native_source = app.editor.snapshot().to_owned();
         let native_selection = app.editor.selection();
-        let generation = app.document.collaboration().generation();
-        let replica = app.document.collaboration().state();
-        assert!(app.document.can_undo());
-        assert!(app.document.can_redo());
+        let generation = app.session.document.collaboration().generation();
+        let replica = app.session.document.collaboration().state();
+        assert!(app.session.document.can_undo());
+        assert!(app.session.document.can_redo());
         // A move holds this guard while its worker uses the captured source.
         app.loading = true;
         app.busy = true;
@@ -423,24 +427,30 @@ fn loading_blocks_search_replacement_and_document_navigation_without_losing_hist
             AppMessage::Navigate(-1),
         ] {
             send(&mut app, command);
-            assert_eq!(app.document.source(), edited);
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.document.source(), edited);
+            assert_eq!(app.session.selection, selection);
             assert_eq!(app.editor.snapshot(), native_source);
             assert_eq!(app.editor.selection(), native_selection);
-            assert_eq!(app.document.collaboration().generation(), generation);
-            assert_eq!(app.document.collaboration().state().update, replica.update);
-            assert_eq!(app.document.collaboration().id(), replica.document);
+            assert_eq!(
+                app.session.document.collaboration().generation(),
+                generation
+            );
+            assert_eq!(
+                app.session.document.collaboration().state().update,
+                replica.update
+            );
+            assert_eq!(app.session.document.collaboration().id(), replica.document);
             assert_eq!(app.mode, mode);
-            assert!(app.document.can_undo());
-            assert!(app.document.can_redo());
+            assert!(app.session.document.can_undo());
+            assert!(app.session.document.can_redo());
         }
         app.loading = false;
         app.busy = false;
         send(&mut app, AppMessage::Redo);
-        assert_eq!(app.document.source(), format!("{edited}?"));
+        assert_eq!(app.session.document.source(), format!("{edited}?"));
         send(&mut app, AppMessage::Undo);
         send(&mut app, AppMessage::Undo);
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
     }
 }
 
@@ -537,7 +547,7 @@ async fn quick_open_keyboard_input_and_cancel_restore_the_previous_focus_and_sel
             harness.app.chrome.files.open = true;
             harness.app.chrome.outline.open = true;
             harness.focus(target);
-            let selection = harness.app.selection;
+            let selection = harness.app.session.selection;
             let native_selection = harness.app.editor.selection();
             let editor_bounds = harness.editor().0;
             press(
@@ -585,11 +595,11 @@ async fn quick_open_keyboard_input_and_cancel_restore_the_previous_focus_and_sel
             assert!(harness.app.overlay.is_none());
             assert!(focused(&mut harness, target));
             assert_eq!(harness.editor().0, editor_bounds);
-            assert_eq!(harness.app.document.source(), source);
-            assert_eq!(harness.app.selection, selection);
+            assert_eq!(harness.app.session.document.source(), source);
+            assert_eq!(harness.app.session.selection, selection);
             assert_eq!(harness.app.editor.selection(), native_selection);
             assert!(harness.app.chrome.files.open && harness.app.chrome.outline.open);
-            assert!(!harness.app.document.can_undo());
+            assert!(!harness.app.session.document.can_undo());
         }
     }
 }
@@ -599,7 +609,7 @@ impl Harness {
         let mut app = app(source);
         app.mode = mode;
         app.editor_focused = true;
-        app.selection = reverse_selection(source);
+        app.session.selection = reverse_selection(source);
         app.sync_editor();
         let tree = widget::Tree::new(app.view().as_widget());
         Self {
@@ -633,8 +643,8 @@ impl Harness {
         let task = self.app.update_message(message);
         self.effects(task);
         assert_eq!(
-            self.app.document.source(),
-            self.app.document.collaboration().materialize()
+            self.app.session.document.source(),
+            self.app.session.document.collaboration().materialize()
         );
     }
 
@@ -675,8 +685,8 @@ impl Harness {
             }
         }
         assert_eq!(
-            self.app.document.source(),
-            self.app.document.collaboration().materialize()
+            self.app.session.document.source(),
+            self.app.session.document.collaboration().materialize()
         );
     }
 
@@ -784,8 +794,8 @@ fn sidebar_toggles_preserve_selection_and_navigation_geometry() {
         let mut harness = Harness::new(source, EditorMode::Live, size);
         harness.focus(EDITOR);
         let before = harness.editor().0;
-        let selection = harness.app.selection;
-        let generation = harness.app.document.collaboration().generation();
+        let selection = harness.app.session.selection;
+        let generation = harness.app.session.document.collaboration().generation();
         workspace(&mut harness.app);
         harness.message(AppMessage::ToggleSidebar(Sidebar::Files));
         let docked = harness.editor().0;
@@ -804,12 +814,12 @@ fn sidebar_toggles_preserve_selection_and_navigation_geometry() {
         assert_eq!(harness.editor().0, before);
         assert!(!harness.app.chrome.files.open);
         assert_eq!(harness.editor().0, before);
-        assert_eq!(harness.app.selection, selection);
+        assert_eq!(harness.app.session.selection, selection);
         assert_eq!(
-            harness.app.document.collaboration().generation(),
+            harness.app.session.document.collaboration().generation(),
             generation
         );
-        assert!(!harness.app.document.can_undo());
+        assert!(!harness.app.session.document.can_undo());
     }
 }
 
@@ -824,7 +834,7 @@ fn hide_sidebars_shortcut_and_titlebar_reveal_preserve_the_writing_viewport() {
             harness.focus(EDITOR);
             let (before, focused) = harness.editor();
             assert!(focused);
-            let selection = harness.app.selection;
+            let selection = harness.app.session.selection;
             let native_selection = harness.app.editor.selection();
             let native_source = harness.app.editor.snapshot().to_owned();
             harness.key(
@@ -860,11 +870,11 @@ fn hide_sidebars_shortcut_and_titlebar_reveal_preserve_the_writing_viewport() {
             let (restored, focused) = harness.editor();
             assert!(focused);
             assert_eq!(restored, before);
-            assert_eq!(harness.app.document.source(), source);
-            assert_eq!(harness.app.selection, selection);
+            assert_eq!(harness.app.session.document.source(), source);
+            assert_eq!(harness.app.session.selection, selection);
             assert_eq!(harness.app.editor.selection(), native_selection);
             assert_eq!(harness.app.editor.snapshot(), native_source);
-            assert!(!harness.app.document.can_undo());
+            assert!(!harness.app.session.document.can_undo());
         }
     }
 }
@@ -903,7 +913,10 @@ fn statistics_stay_centered_in_the_writing_area_when_preferences_change() {
             harness.operate(&mut hidden_statistics);
             assert_eq!(hidden_statistics.0, Some(statistics));
             assert_eq!(harness.editor().0, before);
-            assert_eq!(harness.app.document.source(), "# Draft\n\ncafé and 🦀");
+            assert_eq!(
+                harness.app.session.document.source(),
+                "# Draft\n\ncafé and 🦀"
+            );
         }
     }
 }
@@ -918,8 +931,8 @@ fn both_sidebars_are_independent_and_narrow_windows_keep_a_usable_writing_column
     workspace(&mut harness.app);
     harness.app.chrome.files.open = true;
     harness.app.chrome.outline.open = true;
-    let source = harness.app.document.source().to_owned();
-    let selection = harness.app.selection;
+    let source = harness.app.session.document.source().to_owned();
+    let selection = harness.app.session.selection;
     assert_eq!(harness.app.docked_sidebars(1180.0), (true, true));
     assert_eq!(harness.app.docked_sidebars(760.0), (true, false));
     let wide = harness.editor().0;
@@ -939,9 +952,9 @@ fn both_sidebars_are_independent_and_narrow_windows_keep_a_usable_writing_column
     harness.message(AppMessage::ToggleSearch);
     harness.message(AppMessage::HideSidebars);
     assert!(harness.app.chrome.files.open && harness.app.chrome.outline.open);
-    assert_eq!(harness.app.document.source(), source);
-    assert_eq!(harness.app.selection, selection);
-    assert!(!harness.app.document.can_undo());
+    assert_eq!(harness.app.session.document.source(), source);
+    assert_eq!(harness.app.session.selection, selection);
+    assert!(!harness.app.session.document.can_undo());
     harness.message(AppMessage::Outline(super::super::outline::Message::Jump(1)));
     assert!(harness.app.chrome.files.open && harness.app.chrome.outline.open);
 }
@@ -972,7 +985,7 @@ fn format_menu_pointer_actions_preserve_unicode_selection_and_undo() {
         }));
         harness.message(AppMessage::Chrome(Message::Menu(Menu::Format)));
         assert_eq!(
-            harness.app.selection,
+            harness.app.session.selection,
             Selection {
                 anchor: source.len(),
                 head: 0
@@ -991,12 +1004,12 @@ fn format_menu_pointer_actions_preserve_unicode_selection_and_undo() {
             }
         }
         assert!(harness.app.overlay.is_none());
-        assert_eq!(harness.app.document.source(), "**café and 🦀**");
+        assert_eq!(harness.app.session.document.source(), "**café and 🦀**");
         assert!(harness.app.chrome.files.open && harness.app.chrome.outline.open);
         harness.message(AppMessage::Undo);
-        assert_eq!(harness.app.document.source(), source);
+        assert_eq!(harness.app.session.document.source(), source);
         assert_eq!(
-            harness.app.selection,
+            harness.app.session.selection,
             Selection {
                 anchor: source.len(),
                 head: 0
@@ -1018,24 +1031,27 @@ fn native_edit_requests_preserve_focused_selection_and_are_consumed_once_in_orde
         ) {
             harness.message(message);
         }
-        assert_eq!(harness.app.selection.range(), 0.."café and 🦀".len());
+        assert_eq!(
+            harness.app.session.selection.range(),
+            0.."café and 🦀".len()
+        );
         harness.message(AppMessage::Edit(Action::Edit(Edit::Insert('A'))));
-        harness.app.document.break_history_group();
+        harness.app.session.document.break_history_group();
         harness.message(AppMessage::Edit(Action::Edit(Edit::Insert('B'))));
-        assert_eq!(harness.app.document.source(), "AB");
+        assert_eq!(harness.app.session.document.source(), "AB");
         harness.message(AppMessage::MenuEdit(menu_input::Command::Undo));
         harness.message(AppMessage::MenuEdit(menu_input::Command::Undo));
         let redraw = Event::Window(iced::window::Event::RedrawRequested(Instant::now()));
         for message in harness.input(redraw.clone(), mouse::Cursor::Unavailable) {
             harness.message(message);
         }
-        assert_eq!(harness.app.document.source(), "café and 🦀");
+        assert_eq!(harness.app.session.document.source(), "café and 🦀");
         assert!(harness.app.menu_input.is_empty());
         for message in harness.input(redraw, mouse::Cursor::Unavailable) {
             harness.message(message);
         }
-        assert_eq!(harness.app.document.source(), "café and 🦀");
-        assert!(harness.app.document.can_redo());
+        assert_eq!(harness.app.session.document.source(), "café and 🦀");
+        assert!(harness.app.session.document.can_redo());
     }
 }
 
@@ -1060,7 +1076,7 @@ fn replacing_a_document_discards_undelivered_native_edit_requests() {
     ) {
         harness.message(message);
     }
-    assert!(harness.app.selection.is_caret());
+    assert!(harness.app.session.selection.is_caret());
     harness.message(AppMessage::MenuEdit(menu_input::Command::SelectAll));
     for message in harness.input(
         Event::Window(iced::window::Event::RedrawRequested(Instant::now())),
@@ -1068,7 +1084,10 @@ fn replacing_a_document_discards_undelivered_native_edit_requests() {
     ) {
         harness.message(message);
     }
-    assert_eq!(harness.app.selection.range(), 0.."new café 🦀".len());
+    assert_eq!(
+        harness.app.session.selection.range(),
+        0.."new café 🦀".len()
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -1082,10 +1101,10 @@ async fn rapid_native_undo_then_save_captures_the_restored_document() {
         let path = directory.path().join("Draft.md");
         std::fs::write(&path, source).unwrap();
         let mut harness = Harness::new(source, mode, Size::new(760.0, 520.0));
-        harness.app.path = Some(path.clone());
+        harness.app.session.path = Some(path.clone());
         harness.focus(EDITOR);
         harness.message(AppMessage::Edit(Action::Edit(Edit::Insert('A'))));
-        harness.app.document.break_history_group();
+        harness.app.session.document.break_history_group();
         harness.message(AppMessage::Edit(Action::Edit(Edit::Insert('B'))));
         for command in [
             Command::Edit(menu_input::Command::Undo),
@@ -1105,9 +1124,9 @@ async fn rapid_native_undo_then_save_captures_the_restored_document() {
                 .await;
         }
         assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
-        assert_eq!(harness.app.document.source(), source);
+        assert_eq!(harness.app.session.document.source(), source);
         assert_eq!(harness.app.mode, EditorMode::Read);
-        assert!(!harness.app.dirty);
+        assert!(!harness.app.session.dirty);
         assert!(harness.app.menu_input.is_empty());
         assert!(harness.app.native_menu_queue.is_empty());
     }
@@ -1146,7 +1165,7 @@ fn native_cut_copy_paste_target_the_focused_search_field_instead_of_the_document
     }
     assert_eq!(clipboard.0, "find café 🦀");
     assert_eq!(harness.app.query, "");
-    assert_eq!(harness.app.document.source(), source);
+    assert_eq!(harness.app.session.document.source(), source);
     clipboard.0 = "replacement 🦀".into();
     harness.message(AppMessage::MenuEdit(menu_input::Command::Paste));
     for message in harness.input_with_clipboard(
@@ -1157,8 +1176,8 @@ fn native_cut_copy_paste_target_the_focused_search_field_instead_of_the_document
         harness.message(message);
     }
     assert_eq!(harness.app.query, "replacement 🦀");
-    assert_eq!(harness.app.document.source(), source);
-    assert!(!harness.app.document.can_undo());
+    assert_eq!(harness.app.session.document.source(), source);
+    assert!(!harness.app.session.document.can_undo());
 }
 
 #[test]
@@ -1182,7 +1201,7 @@ fn long_names_leave_the_save_indicator_visible() {
         }
     }
     let mut harness = Harness::new("café and 🦀", EditorMode::Live, Size::new(760.0, 520.0));
-    harness.app.display_name = "AnExtremelyLongUnbrokenDocumentName".repeat(10);
+    harness.app.session.display_name = "AnExtremelyLongUnbrokenDocumentName".repeat(10);
     let mut bounds = Bounds::default();
     harness.operate(&mut bounds);
     let name = bounds.name.unwrap();
@@ -1198,8 +1217,8 @@ fn native_escape_dismisses_a_folder_name_field_without_changing_the_document() {
     let source = "café and 🦀";
     for mode in [EditorMode::Live, EditorMode::Source] {
         let mut harness = Harness::new(source, mode, Size::new(760.0, 520.0));
-        let selection = harness.app.selection;
-        let identity = harness.app.document.collaboration().id();
+        let selection = harness.app.session.selection;
+        let identity = harness.app.session.document.collaboration().id();
         send(
             &mut harness.app,
             AppMessage::Folder(folder::Message::NewFolder(
@@ -1210,11 +1229,11 @@ fn native_escape_dismisses_a_folder_name_field_without_changing_the_document() {
         harness.focus("folder-name");
         harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
         assert!(harness.app.overlay.is_none());
-        assert_eq!(harness.app.document.source(), source);
-        assert_eq!(harness.app.selection, selection);
-        assert_eq!(harness.app.document.collaboration().id(), identity);
-        assert!(!harness.app.dirty);
-        assert!(!harness.app.document.can_undo());
+        assert_eq!(harness.app.session.document.source(), source);
+        assert_eq!(harness.app.session.selection, selection);
+        assert_eq!(harness.app.session.document.collaboration().id(), identity);
+        assert!(!harness.app.session.dirty);
+        assert!(!harness.app.session.document.can_undo());
     }
 }
 
@@ -1276,7 +1295,7 @@ fn native_titlebar_menu_keyboard_choices_stay_visible_in_a_short_window() {
     let source = "# Heading\n\ncafé and 🦀";
     for mode in [EditorMode::Live, EditorMode::Source] {
         let mut harness = Harness::new(source, mode, Size::new(760.0, 300.0));
-        let selection = harness.app.selection;
+        let selection = harness.app.session.selection;
         harness.focus(EDITOR);
         harness.message(AppMessage::Chrome(Message::Menu(Menu::File)));
         assert_eq!(visible_choice(&mut harness), 0.0);
@@ -1327,9 +1346,9 @@ fn native_titlebar_menu_keyboard_choices_stay_visible_in_a_short_window() {
         harness.key(Key::Named(key::Named::Enter), keyboard::Modifiers::empty());
         assert_eq!(harness.app.mode, EditorMode::Source);
         assert!(harness.app.overlay.is_none());
-        assert_eq!(harness.app.document.source(), source);
-        assert_eq!(harness.app.selection, selection);
-        assert!(!harness.app.document.can_undo());
+        assert_eq!(harness.app.session.document.source(), source);
+        assert_eq!(harness.app.session.selection, selection);
+        assert!(!harness.app.session.document.can_undo());
     }
 }
 
@@ -1454,28 +1473,28 @@ async fn native_file_drag_survives_undo_editing_and_cancelled_new_with_hover_exp
         .await
         .unwrap();
         let mut harness = Harness::new(source, mode, Size::new(1180.0, 820.0));
-        harness.app.path = Some(from.clone());
-        harness.app.display_name = "The quiet hour.md".into();
+        harness.app.session.path = Some(from.clone());
+        harness.app.session.display_name = "The quiet hour.md".into();
         harness.app.chrome.files.open = true;
         harness.message(AppMessage::Folder(folder::Message::Scanned {
             generation: 0,
             result: Ok(snapshot),
         }));
-        let identity = harness.app.document.collaboration().id();
-        let selection = harness.app.selection;
+        let identity = harness.app.session.document.collaboration().id();
+        let selection = harness.app.session.selection;
         drag(&mut harness, &from, &archive).await;
         assert!(!from.exists());
         assert!(to.exists());
-        assert_eq!(harness.app.path.as_ref(), Some(&to));
-        assert_eq!(harness.app.document.source(), source);
-        assert_eq!(harness.app.selection, selection);
+        assert_eq!(harness.app.session.path.as_ref(), Some(&to));
+        assert_eq!(harness.app.session.document.source(), source);
+        assert_eq!(harness.app.session.selection, selection);
         assert!(harness.app.folder.can_undo());
         harness
             .message_async(AppMessage::Folder(folder::Message::UndoMove))
             .await;
         assert!(from.exists());
         assert!(!to.exists());
-        assert_eq!(harness.app.path.as_ref(), Some(&from));
+        assert_eq!(harness.app.session.path.as_ref(), Some(&from));
 
         // Close Archive through its actual row gesture before the second drag.
         let archive_point = row_point(tree_bounds(&mut harness), 0);
@@ -1513,10 +1532,10 @@ async fn native_file_drag_survives_undo_editing_and_cancelled_new_with_hover_exp
         harness.message(AppMessage::Edit(Action::Edit(Edit::Paste(
             std::sync::Arc::new("\n\nDirty café 🦀".into()),
         ))));
-        let edited = harness.app.document.source().to_owned();
-        let selection = harness.app.selection;
-        let generation = harness.app.document.collaboration().generation();
-        assert!(harness.app.dirty);
+        let edited = harness.app.session.document.source().to_owned();
+        let selection = harness.app.session.selection;
+        let generation = harness.app.session.document.collaboration().generation();
+        assert!(harness.app.session.dirty);
         harness.key(Key::Character("n".into()), keyboard::Modifiers::COMMAND);
         assert_eq!(harness.app.overlay, Some(Overlay::Unsaved));
         harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
@@ -1524,21 +1543,21 @@ async fn native_file_drag_survives_undo_editing_and_cancelled_new_with_hover_exp
         drag(&mut harness, &from, &archive).await;
         assert!(!from.exists());
         assert!(to.exists());
-        assert_eq!(harness.app.path.as_ref(), Some(&to));
-        assert_eq!(harness.app.document.source(), edited);
+        assert_eq!(harness.app.session.path.as_ref(), Some(&to));
+        assert_eq!(harness.app.session.document.source(), edited);
         assert_eq!(harness.app.editor.snapshot(), edited);
-        assert_eq!(harness.app.selection, selection);
-        assert_eq!(harness.app.document.collaboration().id(), identity);
+        assert_eq!(harness.app.session.selection, selection);
+        assert_eq!(harness.app.session.document.collaboration().id(), identity);
         assert_eq!(
-            harness.app.document.collaboration().generation(),
+            harness.app.session.document.collaboration().generation(),
             generation
         );
-        assert!(harness.app.dirty);
-        assert!(harness.app.document.can_undo());
+        assert!(harness.app.session.dirty);
+        assert!(harness.app.session.document.can_undo());
         assert_eq!(std::fs::read_to_string(&to).unwrap(), source);
         harness.message(AppMessage::Undo);
-        assert_eq!(harness.app.document.source(), source);
+        assert_eq!(harness.app.session.document.source(), source);
         harness.message(AppMessage::Redo);
-        assert_eq!(harness.app.document.source(), edited);
+        assert_eq!(harness.app.session.document.source(), edited);
     }
 }

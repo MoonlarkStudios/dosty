@@ -262,7 +262,8 @@ impl App {
         }
         self.chrome.sidebars_hidden = false;
         self.chrome.panel_mut(side).open = true;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         if side == Sidebar::Files {
             self.editor_focused = false;
             operation::focus(crate::editor::file_tree::ID)
@@ -279,7 +280,8 @@ impl App {
             return self.show_sidebar(side);
         }
         self.chrome.panel_mut(side).open = false;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         operation::focus(EDITOR)
     }
 
@@ -458,14 +460,16 @@ impl App {
             return Task::none();
         }
         self.chrome.sidebars_hidden = !self.chrome.sidebars_hidden;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         operation::focus(EDITOR)
     }
 
     pub(super) fn reveal_navigation(&mut self) {
         self.chrome.sidebars_hidden = false;
         self.chrome.files.open = true;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
     }
 
     /// Whether an Edit command can act on the widget that will receive it.
@@ -481,8 +485,8 @@ impl App {
         !self.loading
             && (field_focused
                 || match command {
-                    menu_input::Command::Undo => self.document.can_undo(),
-                    menu_input::Command::Redo => self.document.can_redo(),
+                    menu_input::Command::Undo => self.session.document.can_undo(),
+                    menu_input::Command::Redo => self.session.document.can_redo(),
                     _ => self.mode != EditorMode::Read,
                 })
     }
@@ -492,9 +496,9 @@ impl App {
             SaveState::Saving
         } else if self.chrome.save_error.is_some() {
             SaveState::Failed
-        } else if self.path.is_none() {
+        } else if self.session.path.is_none() {
             SaveState::Unsaved
-        } else if self.dirty {
+        } else if self.session.dirty {
             SaveState::Modified
         } else {
             SaveState::Saved
@@ -502,7 +506,7 @@ impl App {
     }
 
     fn writing_statistics(&self) -> String {
-        let words = self.document.words();
+        let words = self.session.document.words();
         let mut parts = Vec::with_capacity(2);
         if self.preferences.show_word_count {
             parts.push(format!(
@@ -614,7 +618,7 @@ impl App {
             let name =
                 tooltip(
                     button(
-                        text(&self.display_name)
+                        text(&self.session.display_name)
                             .size(12)
                             .wrapping(text::Wrapping::None),
                     )
@@ -622,7 +626,7 @@ impl App {
                     .on_press(AppMessage::Chrome(Message::Menu(Menu::Document)))
                     .style(styles::button_style(tokens, Button::Quiet)),
                     container(
-                        text(self.path.as_ref().map_or_else(
+                        text(self.session.path.as_ref().map_or_else(
                             || "Not saved yet".into(),
                             |path| path.display().to_string(),
                         ))
@@ -855,7 +859,7 @@ impl App {
                     Command::action("Save", Icon::Save, AppMessage::Save, ready),
                     Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                 ];
-                if let Some(path) = &self.path {
+                if let Some(path) = &self.session.path {
                     commands.extend([
                         Command::action(
                             "Rename…",

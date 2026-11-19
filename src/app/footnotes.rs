@@ -63,9 +63,9 @@ impl App {
                 }
                 let offset = match message {
                     Message::OpenAt(offset) => offset,
-                    _ => self.selection.head,
+                    _ => self.session.selection.head,
                 };
-                if offset > self.document.source().len() {
+                if offset > self.session.document.source().len() {
                     return Task::none();
                 }
                 self.open_footnote(offset);
@@ -106,13 +106,13 @@ impl App {
                 if !form.existing {
                     return Task::none();
                 }
-                match form
-                    .target
-                    .resolve(self.document.collaboration(), self.document.source())
-                {
+                match form.target.resolve(
+                    self.session.document.collaboration(),
+                    self.session.document.source(),
+                ) {
                     Ok(range) => {
                         self.footnotes.back = Some((
-                            self.document.collaboration().replica_id(),
+                            self.session.document.collaboration().replica_id(),
                             form.return_to.clone(),
                         ));
                         self.footnotes.close();
@@ -131,9 +131,12 @@ impl App {
                     return Task::none();
                 }
                 if let Some((owner, selection)) = self.footnotes.back.take()
-                    && owner == self.document.collaboration().replica_id()
-                    && let Some(selection) =
-                        self.document.collaboration().resolve_selection(&selection)
+                    && owner == self.session.document.collaboration().replica_id()
+                    && let Some(selection) = self
+                        .session
+                        .document
+                        .collaboration()
+                        .resolve_selection(&selection)
                 {
                     return self.footnote_jump(selection);
                 }
@@ -143,7 +146,7 @@ impl App {
     }
 
     fn open_footnote(&mut self, offset: usize) {
-        let source = self.document.source();
+        let source = self.session.document.source();
         let notes = self.projection.footnotes();
         let reference = notes
             .reference_at(offset)
@@ -157,16 +160,19 @@ impl App {
             .or_else(|| definition.map(|note| note.label.clone()))
             .unwrap_or_else(|| notes.next_label());
         let range = definition.map(|note| note.body.clone()).unwrap_or_else(|| {
-            let offset =
-                reference.map_or(self.selection.range().end, |reference| reference.range.end);
+            let offset = reference.map_or(self.session.selection.range().end, |reference| {
+                reference.range.end
+            });
             offset..offset
         });
         let body = definition.map_or("", |note| &source[note.body.clone()]);
         let continuation_columns =
             definition.map_or(0, |note| footnotes::continuation_columns(source, note));
-        let return_selection = reference.map_or(self.selection, |note| {
-            if note.range.contains(&self.selection.head) || self.selection.head == note.range.end {
-                self.selection
+        let return_selection = reference.map_or(self.session.selection, |note| {
+            if note.range.contains(&self.session.selection.head)
+                || self.session.selection.head == note.range.end
+            {
+                self.session.selection
             } else {
                 Selection::caret(note.range.start)
             }
@@ -176,30 +182,41 @@ impl App {
             number: reference
                 .and_then(|note| note.number)
                 .or_else(|| definition.and_then(|note| note.number)),
-            target: Target::new(self.document.collaboration(), source, range),
-            reference: reference
-                .map(|note| Target::new(self.document.collaboration(), source, note.range.clone())),
+            target: Target::new(self.session.document.collaboration(), source, range),
+            reference: reference.map(|note| {
+                Target::new(
+                    self.session.document.collaboration(),
+                    source,
+                    note.range.clone(),
+                )
+            }),
             body: text_editor::Content::with_text(body),
             preview: preview(&footnotes::display_body(body, continuation_columns)),
             existing: definition.is_some(),
             ambiguous: definition.is_some_and(|note| note.ambiguous),
             source_body: body.to_owned(),
             continuation_columns,
-            return_to: self.document.collaboration().selection(return_selection),
+            return_to: self
+                .session
+                .document
+                .collaboration()
+                .selection(return_selection),
             error: None,
         });
         self.overlay = Some(Overlay::Footnote);
-        self.document.break_history_group();
+        self.session.document.break_history_group();
     }
 
     fn apply_footnote(&mut self, form: &Form) -> Result<(), String> {
         if form.ambiguous {
             return Err("Multiple definitions use this label. Go to the definition and resolve them in the document before editing these details.".into());
         }
-        let source = self.document.source();
-        let range = form.target.resolve(self.document.collaboration(), source)?;
+        let source = self.session.document.source();
+        let range = form
+            .target
+            .resolve(self.session.document.collaboration(), source)?;
         if let Some(reference) = &form.reference {
-            reference.resolve(self.document.collaboration(), source)?;
+            reference.resolve(self.session.document.collaboration(), source)?;
         }
         let body = form.body.text();
         if form.existing && body == form.source_body {
@@ -299,23 +316,25 @@ impl App {
             }
             edits
         };
-        let mut after = selection_after(self.selection, &edits);
+        let mut after = selection_after(self.session.selection, &edits);
         if let Some((at, length)) = inserted_reference
-            && self.selection.is_caret()
-            && self.selection.head == at
+            && self.session.selection.is_caret()
+            && self.session.selection.head == at
         {
             after = Selection::caret(at + length);
         }
-        self.document
+        self.session
+            .document
             .transact(
                 &edits,
                 EditOrigin::Human,
-                Some((self.selection, after)),
+                Some((self.session.selection, after)),
                 true,
             )
             .map_err(|error| error.to_string())?;
-        self.selection = after;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.session.selection = after;
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         self.sync_editor();
         self.changed();
         Ok(())
@@ -325,9 +344,9 @@ impl App {
         if self.mode == EditorMode::Read {
             self.mode = EditorMode::Live;
         }
-        self.selection = selection.clamp(self.document.source());
+        self.session.selection = selection.clamp(self.session.document.source());
         self.editor_focused = true;
-        self.document.break_history_group();
+        self.session.document.break_history_group();
         self.sync_editor();
         operation::focus(EDITOR)
     }

@@ -35,16 +35,16 @@ fn value(app: &App, row: usize, column: usize) -> &str {
 }
 fn synced(app: &App) {
     let fresh = Projection::with_editing_cell(
-        app.document.source(),
-        Some(app.selection.head),
+        app.session.document.source(),
+        Some(app.session.selection.head),
         app.editing_cell_range(),
     );
     assert_eq!(app.projection.text, fresh.text);
     assert_eq!(app.projection.rich, fresh.rich);
     assert_eq!(app.editor.snapshot(), fresh.text);
     assert_eq!(
-        app.document.source(),
-        app.document.collaboration().materialize()
+        app.session.document.source(),
+        app.session.document.collaboration().materialize()
     );
 }
 
@@ -59,12 +59,15 @@ fn grid_selection_preserves_source_and_direction_and_clear_only_touches_the_rect
         };
         select(&mut app, a.0, a.1, false);
         select(&mut app, h.0, h.1, true);
-        assert_eq!(app.document.source(), SOURCE);
-        assert!(!app.document.can_undo());
+        assert_eq!(app.session.document.source(), SOURCE);
+        assert!(!app.session.document.can_undo());
         let view = app.grid_view().unwrap();
         assert_eq!(view.anchor, a);
         assert_eq!(view.head, h);
-        assert_eq!(app.selection.anchor > app.selection.head, reverse);
+        assert_eq!(
+            app.session.selection.anchor > app.session.selection.head,
+            reverse
+        );
         send(&mut app, Message::Clear);
         for row in 1..4 {
             assert_eq!(value(&app, row, 1), "");
@@ -77,17 +80,23 @@ fn grid_selection_preserves_source_and_direction_and_clear_only_touches_the_rect
             "Ready",
             "Planned",
         ] {
-            assert!(app.document.source().contains(word));
+            assert!(app.session.document.source().contains(word));
         }
-        assert!(app.document.source().starts_with("# Launch plan\n\nKeep"));
         assert!(
-            app.document
+            app.session
+                .document
+                .source()
+                .starts_with("# Launch plan\n\nKeep")
+        );
+        assert!(
+            app.session
+                .document
                 .source()
                 .ends_with("Notes and decisions continue below the table.\n")
         );
         synced(&app);
         drop(app.update_message(AppMessage::Undo));
-        assert_eq!(app.document.source(), SOURCE);
+        assert_eq!(app.session.document.source(), SOURCE);
         assert_eq!(app.grid_view().unwrap().anchor, a);
         assert_eq!(app.grid_view().unwrap().head, h);
         drop(app.update_message(AppMessage::Redo));
@@ -108,12 +117,12 @@ fn pending_cell_edit_cancel_and_local_undo_never_modify_markdown() {
     assert_eq!(app.grid.draft.as_ref().unwrap().buffer.snapshot(), "Maya");
     send(&mut app, Message::DraftUndo(true));
     assert_eq!(app.grid.draft.as_ref().unwrap().buffer.snapshot(), "Maya!");
-    assert_eq!(app.document.source(), SOURCE);
-    assert!(!app.document.can_undo());
+    assert_eq!(app.session.document.source(), SOURCE);
+    assert!(!app.session.document.can_undo());
     send(&mut app, Message::Cancel);
     assert!(app.grid.draft.is_none());
-    assert_eq!(app.document.source(), SOURCE);
-    assert!(!app.document.can_undo());
+    assert_eq!(app.session.document.source(), SOURCE);
+    assert!(!app.session.document.can_undo());
     send(&mut app, Message::Begin(Some(" replacement ".into())));
     send(&mut app, Message::Cancel);
     assert_eq!(value(&app, 1, 1), "Maya");
@@ -128,11 +137,11 @@ fn cell_commit_is_one_undo_step_keeps_formatting_and_serializes_literal_unicode(
         send(&mut app, Message::Commit(None));
         assert_eq!(value(&app, 1, 1), text);
         assert!(app.grid.draft.is_none());
-        assert!(app.document.source().contains("**"));
+        assert!(app.session.document.source().contains("**"));
         synced(&app);
         drop(app.update_message(AppMessage::Undo));
-        assert_eq!(app.document.source(), SOURCE);
-        assert!(!app.document.can_undo());
+        assert_eq!(app.session.document.source(), SOURCE);
+        assert!(!app.session.document.can_undo());
         drop(app.update_message(AppMessage::Redo));
         assert_eq!(value(&app, 1, 1), text);
         synced(&app);
@@ -147,17 +156,17 @@ fn implicit_cells_are_selected_without_source_edits_and_materialized_only_on_com
         );
         let mut app = app(&source);
         select(&mut app, 1, 2, false);
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
         send(&mut app, Message::Begin(Some("café | 🧑‍💻".into())));
         send(&mut app, Message::Cancel);
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
         send(&mut app, Message::Begin(Some("café | 🧑‍💻".into())));
         send(&mut app, Message::Commit(None));
         assert_eq!(value(&app, 1, 2), "café | 🧑‍💻");
         assert_eq!(value(&app, 1, 1), "");
         synced(&app);
         drop(app.update_message(AppMessage::Undo));
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
     }
 }
 
@@ -202,14 +211,14 @@ fn grid_navigation_clamps_and_final_tab_adds_a_row_with_one_structural_undo() {
     );
     assert_eq!(app.grid_view().unwrap().active, (0, 0));
     send(&mut app, Message::Tab(true));
-    assert_eq!(app.document.source(), SOURCE);
+    assert_eq!(app.session.document.source(), SOURCE);
     select(&mut app, 3, 2, false);
     send(&mut app, Message::Tab(false));
     assert_eq!(app.grid_view().unwrap().active, (4, 0));
     assert_eq!(app.projection.rich.tables[0].rows.len(), 5);
     drop(app.update_message(AppMessage::Undo));
-    assert_eq!(app.document.source(), SOURCE);
-    assert!(!app.document.can_undo());
+    assert_eq!(app.session.document.source(), SOURCE);
+    assert!(!app.session.document.can_undo());
     synced(&app);
 }
 
@@ -219,7 +228,8 @@ fn drafts_follow_unrelated_source_changes_and_reject_changed_cells_and_stale_cli
     select(&mut app, 1, 1, false);
     send(&mut app, Message::Begin(Some("New owner".into())));
     let revision = Arc::clone(&app.projection.source_id);
-    app.document
+    app.session
+        .document
         .transact(
             &[SourceEdit {
                 range: 0..0,
@@ -246,11 +256,12 @@ fn drafts_follow_unrelated_source_changes_and_reject_changed_cells_and_stale_cli
     assert!(app.grid.draft.is_some());
     send(&mut app, Message::Commit(None));
     assert_eq!(value(&app, 1, 1), "New owner");
-    assert!(app.document.source().starts_with("Intro\n\n"));
+    assert!(app.session.document.source().starts_with("Intro\n\n"));
     select(&mut app, 2, 1, false);
     send(&mut app, Message::Begin(Some("My draft".into())));
-    let start = app.document.source().find("Noah").unwrap();
-    app.document
+    let start = app.session.document.source().find("Noah").unwrap();
+    app.session
+        .document
         .transact(
             &[SourceEdit {
                 range: start..start + 4,
@@ -479,7 +490,7 @@ fn real_widget_click_type_enter_arrows_newline_escape_and_ime_use_the_cell_edito
     assert!(h.app.grid.draft.is_none());
     h.key(Key::Character("Z".into()), Modifiers::empty(), Some("Z"));
     assert_eq!(h.app.grid.draft.as_ref().unwrap().buffer.snapshot(), "Z");
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
     h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
     assert_eq!(h.app.grid.draft.as_ref().unwrap().buffer.snapshot(), "Maya");
     h.key(
@@ -546,7 +557,7 @@ fn real_widget_drag_shift_click_gutters_and_keyboard_selection_keep_the_grid() {
     let view = h.app.grid_view().unwrap();
     assert_eq!(view.anchor, (1, 1));
     assert_eq!(view.head, (3, 2));
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
     h.key(Key::Named(Named::ArrowUp), Modifiers::SHIFT, None);
     assert_eq!(h.app.grid_view().unwrap().head, (2, 2));
     h.event(
@@ -617,6 +628,7 @@ fn selecting_a_large_column_keeps_the_active_cell_and_viewport_and_drafts_surviv
     h.frame();
     let table = h.app.projection.rich.tables[0].source_range.clone();
     h.app
+        .session
         .document
         .transact(
             &[SourceEdit {
@@ -666,7 +678,7 @@ fn keyboard_region_edges_row_column_shortcuts_and_double_click_keep_text_editing
     let view = h.app.grid_view().unwrap();
     assert_eq!(view.anchor, (0, 1));
     assert_eq!(view.head, (3, 1));
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
 }
 
 #[test]
@@ -687,7 +699,7 @@ fn right_clicking_another_cell_commits_the_draft_and_opens_controls_on_the_first
     h.frame();
     assert!(h.app.overlay.is_none());
     drop(h.app.update_message(AppMessage::Undo));
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
 }
 
 #[test]
@@ -707,7 +719,7 @@ fn right_clicking_table_handles_and_the_pending_cell_opens_the_targeted_context_
         } else {
             Point::new(cell.x - 14.0, cell.center_y())
         };
-        let selection = h.app.selection;
+        let selection = h.app.session.selection;
         h.event(
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
             point,
@@ -722,7 +734,7 @@ fn right_clicking_table_handles_and_the_pending_cell_opens_the_targeted_context_
                 ((2, 0), (2, 2))
             }
         );
-        assert_eq!(h.app.selection, selection);
+        assert_eq!(h.app.session.selection, selection);
         let task = h.app.update_message(AppMessage::CloseOverlay);
         h.effects(task);
         h.frame();
@@ -750,7 +762,7 @@ fn hover_chevrons_open_scoped_menus_without_moving_cells_or_changing_selection()
                 h.size.height = 900.0;
                 h.frame();
                 h.click(1, 1);
-                let selection = h.app.selection;
+                let selection = h.app.session.selection;
                 let before = (0..4)
                     .flat_map(|r| (0..3).map(move |c| (r, c)))
                     .map(|(r, c)| h.cell(r, c))
@@ -770,7 +782,7 @@ fn hover_chevrons_open_scoped_menus_without_moving_cells_or_changing_selection()
                     point,
                 );
                 assert_eq!(h.interaction(point), mouse::Interaction::Pointer);
-                assert_eq!(h.app.selection, selection);
+                assert_eq!(h.app.session.selection, selection);
                 h.event(
                     Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                     point,
@@ -785,9 +797,9 @@ fn hover_chevrons_open_scoped_menus_without_moving_cells_or_changing_selection()
                         ((2, 0), (2, 2))
                     }
                 );
-                assert_eq!(h.app.selection, selection);
-                assert_eq!(h.app.document.source(), SOURCE);
-                assert!(!h.app.document.can_undo());
+                assert_eq!(h.app.session.selection, selection);
+                assert_eq!(h.app.session.document.source(), SOURCE);
+                assert!(!h.app.session.document.can_undo());
                 for (index, rect) in before.iter().enumerate() {
                     assert_eq!(h.cell(index / 3, index % 3), *rect);
                 }
@@ -863,7 +875,7 @@ fn column_chevron_commits_a_header_draft_once_and_shift_click_still_extends_sele
     h.effects(task);
     h.frame();
     drop(h.app.update_message(AppMessage::Undo));
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
     h.frame();
     h.click(1, 0);
     h.event(
@@ -884,7 +896,7 @@ fn column_chevron_commits_a_header_draft_once_and_shift_click_still_extends_sele
     let grid = h.app.grid_view().unwrap();
     assert_eq!(grid.anchor.1.min(grid.head.1), 0);
     assert_eq!(grid.anchor.1.max(grid.head.1), 2);
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
 }
 
 #[test]
@@ -905,15 +917,21 @@ fn native_draft_paste_normalizes_crlf_without_creating_physical_table_rows() {
     send(&mut app, Message::Commit(None));
     assert_eq!(value(&app, 1, 1), expected);
     assert_eq!(app.projection.rich.tables[0].rows.len(), 4);
-    assert!(app.document.source().contains("\r\n| Review together"));
     assert!(
-        app.document
+        app.session
+            .document
+            .source()
+            .contains("\r\n| Review together")
+    );
+    assert!(
+        app.session
+            .document
             .source()
             .ends_with("Notes and decisions continue below the table.\r\n")
     );
     synced(&app);
     drop(app.update_message(AppMessage::Undo));
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
 }
 
 #[test]
@@ -933,16 +951,16 @@ fn table_activation_and_escape_keep_content_geometry_source_and_viewport() {
             .collect::<Vec<_>>();
         let scroll = RichEditor::intent_stats(&h.tree).0;
         h.click(1, 1);
-        let selected = h.app.selection;
+        let selected = h.app.session.selection;
         for (index, rect) in cells.iter().enumerate() {
             assert_eq!(h.cell(index / 3, index % 3), *rect);
         }
         assert_eq!(RichEditor::intent_stats(&h.tree).0, scroll);
         h.key(Key::Named(Named::Escape), Modifiers::empty(), None);
         assert!(h.app.grid_view().is_none());
-        assert_eq!(h.app.selection, selected);
-        assert_eq!(h.app.document.source(), SOURCE);
-        assert!(!h.app.document.can_undo());
+        assert_eq!(h.app.session.selection, selected);
+        assert_eq!(h.app.session.document.source(), SOURCE);
+        assert!(!h.app.session.document.can_undo());
         for (index, rect) in cells.iter().enumerate() {
             assert_eq!(h.cell(index / 3, index % 3), *rect);
         }
@@ -964,14 +982,14 @@ fn table_handles_outside_the_viewport_do_not_select_hidden_rows() {
     let cell = h.cell(3, 0);
     let point = Point::new(cell.x - 14.0, cell.center_y());
     assert!(point.y > h.size.height);
-    let selected = h.app.selection;
+    let selected = h.app.session.selection;
     h.event(
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
         point,
     );
-    assert_eq!(h.app.selection, selected);
-    assert_eq!(h.app.document.source(), SOURCE);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.selection, selected);
+    assert_eq!(h.app.session.document.source(), SOURCE);
+    assert!(!h.app.session.document.can_undo());
 }
 
 #[test]
@@ -980,7 +998,12 @@ fn clicking_prose_commits_and_returns_the_table_to_reading_presentation() {
     h.click(1, 1);
     h.key(Key::Character("A".into()), Modifiers::empty(), Some("A"));
     let point = SOURCE.find("Notes and decisions").unwrap() + 3;
-    let stable = h.app.document.collaboration().position(point, Assoc::After);
+    let stable = h
+        .app
+        .session
+        .document
+        .collaboration()
+        .position(point, Assoc::After);
     drop(
         h.app
             .update_message(AppMessage::SelectSource(Selection::caret(point))),
@@ -990,11 +1013,16 @@ fn clicking_prose_commits_and_returns_the_table_to_reading_presentation() {
     assert!(h.app.grid.draft.is_none());
     assert_eq!(value(&h.app, 1, 1), "A");
     assert_eq!(
-        h.app.selection.head,
-        h.app.document.collaboration().resolve(&stable).unwrap()
+        h.app.session.selection.head,
+        h.app
+            .session
+            .document
+            .collaboration()
+            .resolve(&stable)
+            .unwrap()
     );
     drop(h.app.update_message(AppMessage::Undo));
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
     synced(&h.app);
 }
 
@@ -1031,7 +1059,7 @@ fn quiet_tables_remember_implicit_cell_targets_for_keyboard_and_ime_reentry() {
         h.app.grid.draft.as_ref().unwrap().buffer.snapshot(),
         "日本語"
     );
-    assert_eq!(h.app.document.source(), source);
+    assert_eq!(h.app.session.document.source(), source);
     h.key(Key::Named(Named::Enter), Modifiers::empty(), None);
     assert_eq!(value(&h.app, 1, 2), "日本語");
     synced(&h.app);
@@ -1066,32 +1094,32 @@ fn plain_vertical_table_escape_reaches_prose_and_typing_keeps_the_table_unchange
                         h.app.grid_view().is_none(),
                         "{ending:?}, width {width}, row {row}, column {column}"
                     );
-                    let at = h.app.selection.head;
+                    let at = h.app.session.selection.head;
                     let start = source.find(prose).unwrap();
                     assert!(
                         (start..=start + prose.len()).contains(&at),
                         "{ending:?}, width {width}, row {row}, column {column}: caret {at} is outside adjacent prose {start}..{}",
                         start + prose.len()
                     );
-                    assert!(h.app.selection.is_caret());
-                    assert_eq!(h.app.document.source(), source);
-                    assert!(!h.app.document.can_undo());
-                    let selected = h.app.selection;
+                    assert!(h.app.session.selection.is_caret());
+                    assert_eq!(h.app.session.document.source(), source);
+                    assert!(!h.app.session.document.can_undo());
+                    let selected = h.app.session.selection;
                     h.key(Key::Character("Ω".into()), Modifiers::empty(), Some("Ω"));
                     let mut expected = source.clone();
                     expected.insert(at, 'Ω');
-                    assert_eq!(h.app.document.source(), expected);
+                    assert_eq!(h.app.session.document.source(), expected);
                     assert!(h.app.grid.draft.is_none());
                     assert_eq!(
-                        &h.app.document.source()
+                        &h.app.session.document.source()
                             [h.app.projection.rich.tables[0].source_range.clone()],
                         table
                     );
                     synced(&h.app);
                     h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
-                    assert_eq!(h.app.document.source(), source);
-                    assert_eq!(h.app.selection, selected);
-                    assert!(!h.app.document.can_undo());
+                    assert_eq!(h.app.session.document.source(), source);
+                    assert_eq!(h.app.session.selection, selected);
+                    assert!(!h.app.session.document.can_undo());
                 }
             }
         }
@@ -1133,27 +1161,28 @@ fn plain_vertical_table_escape_preserves_quoted_and_nested_table_containers() {
                     h.app.grid_view().is_none(),
                     "{ending:?}, prefix {prefix:?}, {key:?}"
                 );
-                let at = h.app.selection.head;
+                let at = h.app.session.selection.head;
                 let start = source.find(prose).unwrap();
                 assert!(
                     (start..=start + prose.len()).contains(&at),
                     "{ending:?}, prefix {prefix:?}, {key:?}: caret {at} outside prose {start}..{}",
                     start + prose.len()
                 );
-                assert_eq!(h.app.document.source(), source);
-                assert!(!h.app.document.can_undo());
+                assert_eq!(h.app.session.document.source(), source);
+                assert!(!h.app.session.document.can_undo());
                 h.key(Key::Character("Ω".into()), Modifiers::empty(), Some("Ω"));
                 let mut expected = source.clone();
                 expected.insert(at, 'Ω');
-                assert_eq!(h.app.document.source(), expected);
+                assert_eq!(h.app.session.document.source(), expected);
                 assert_eq!(
-                    &h.app.document.source()[h.app.projection.rich.tables[0].source_range.clone()],
+                    &h.app.session.document.source()
+                        [h.app.projection.rich.tables[0].source_range.clone()],
                     table
                 );
                 synced(&h.app);
                 h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
-                assert_eq!(h.app.document.source(), source);
-                assert!(!h.app.document.can_undo());
+                assert_eq!(h.app.session.document.source(), source);
+                assert!(!h.app.session.document.can_undo());
             }
         }
     }
@@ -1172,8 +1201,8 @@ fn plain_vertical_table_escape_crosses_adjacent_tables_in_the_same_measured_colu
         h.key(Key::Named(Named::ArrowUp), Modifiers::empty(), None);
         let grid = h.app.grid_view().unwrap();
         assert_eq!((grid.table, grid.active), (0, (1, 2)));
-        assert_eq!(h.app.document.source(), source);
-        assert!(!h.app.document.can_undo());
+        assert_eq!(h.app.session.document.source(), source);
+        assert!(!h.app.session.document.can_undo());
         synced(&h.app);
     }
 }
@@ -1183,7 +1212,7 @@ fn plain_vertical_table_escape_preserves_modifier_ranges_and_native_draft_arrows
     let source = "| Header<br>second line | B |\n|---|---|\n| Last<br>second line | value |";
     let mut h = Harness::new(source);
     h.focus_cell(0, 0, 0);
-    let selected = h.app.selection;
+    let selected = h.app.session.selection;
     let grid = h.app.grid_view().unwrap();
     for (revision, table, row, column) in [
         (Arc::new(()), 0, 0, 0),
@@ -1202,9 +1231,9 @@ fn plain_vertical_table_escape_preserves_modifier_ranges_and_native_draft_arrows
             },
         );
         assert_eq!(h.app.grid_view().unwrap(), grid);
-        assert_eq!(h.app.selection, selected);
-        assert_eq!(h.app.document.source(), source);
-        assert!(!h.app.document.can_undo());
+        assert_eq!(h.app.session.selection, selected);
+        assert_eq!(h.app.session.document.source(), source);
+        assert!(!h.app.session.document.can_undo());
     }
     h.key(Key::Named(Named::ArrowUp), Modifiers::SHIFT, None);
     assert_eq!(h.app.grid_view().unwrap().active, (0, 0));
@@ -1224,7 +1253,7 @@ fn plain_vertical_table_escape_preserves_modifier_ranges_and_native_draft_arrows
         let draft = h.app.grid.draft.as_ref().unwrap();
         let text = draft.buffer.snapshot().to_owned();
         let end = draft.buffer.selection().head;
-        let selected = h.app.selection;
+        let selected = h.app.session.selection;
         let revision = Arc::clone(&h.app.projection.source_id);
         send(
             &mut h.app,
@@ -1241,9 +1270,9 @@ fn plain_vertical_table_escape_preserves_modifier_ranges_and_native_draft_arrows
             h.app.grid.draft.as_ref().unwrap().buffer.selection().head,
             end
         );
-        assert_eq!(h.app.selection, selected);
-        assert_eq!(h.app.document.source(), source);
-        assert!(!h.app.document.can_undo());
+        assert_eq!(h.app.session.selection, selected);
+        assert_eq!(h.app.session.document.source(), source);
+        assert!(!h.app.session.document.can_undo());
         h.key(Key::Named(Named::ArrowUp), Modifiers::empty(), None);
         assert!(h.app.grid.draft.as_ref().unwrap().buffer.selection().head < end);
         h.key(Key::Named(Named::ArrowUp), Modifiers::empty(), None);
@@ -1253,8 +1282,8 @@ fn plain_vertical_table_escape_preserves_modifier_ranges_and_native_draft_arrows
         assert_eq!(h.app.grid_view().unwrap().active, (row, 0));
         h.key(Key::Named(Named::Escape), Modifiers::empty(), None);
     }
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
 }
 
 fn assert_arrow_creates_paragraph_with_separate_typing_history(
@@ -1264,20 +1293,20 @@ fn assert_arrow_creates_paragraph_with_separate_typing_history(
     caret: usize,
     key: Named,
 ) {
-    let original_selection = h.app.selection;
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    let original_selection = h.app.session.selection;
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
     h.key(Key::Named(key), Modifiers::empty(), None);
     assert!(h.app.grid_view().is_none());
     assert!(h.app.grid.draft.is_none());
-    assert_eq!(h.app.document.source(), expected);
-    assert_eq!(h.app.selection, Selection::caret(caret));
-    assert!(h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), expected);
+    assert_eq!(h.app.session.selection, Selection::caret(caret));
+    assert!(h.app.session.document.can_undo());
     synced(&h.app);
     for _ in 0..3 {
         h.key(Key::Named(key), Modifiers::empty(), None);
         assert_eq!(
-            h.app.document.source(),
+            h.app.session.document.source(),
             expected,
             "repeated outward arrows must not add paragraphs"
         );
@@ -1285,38 +1314,38 @@ fn assert_arrow_creates_paragraph_with_separate_typing_history(
     h.key(Key::Character("Ω".into()), Modifiers::empty(), Some("Ω"));
     let mut typed = expected.to_owned();
     typed.insert(caret, 'Ω');
-    assert_eq!(h.app.document.source(), typed);
+    assert_eq!(h.app.session.document.source(), typed);
     assert!(h.app.grid.draft.is_none());
     synced(&h.app);
     h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
-    assert_eq!(h.app.document.source(), expected);
-    assert_eq!(h.app.selection, Selection::caret(caret));
+    assert_eq!(h.app.session.document.source(), expected);
+    assert_eq!(h.app.session.selection, Selection::caret(caret));
     assert!(
-        h.app.document.can_undo(),
+        h.app.session.document.can_undo(),
         "typing undo must retain the paragraph creation step"
     );
     h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
-    assert_eq!(h.app.document.source(), source);
-    assert_eq!(h.app.selection, original_selection);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert_eq!(h.app.session.selection, original_selection);
+    assert!(!h.app.session.document.can_undo());
     h.key(
         Key::Character("Z".into()),
         Modifiers::COMMAND | Modifiers::SHIFT,
         None,
     );
-    assert_eq!(h.app.document.source(), expected);
-    assert_eq!(h.app.selection, Selection::caret(caret));
+    assert_eq!(h.app.session.document.source(), expected);
+    assert_eq!(h.app.session.selection, Selection::caret(caret));
     h.key(
         Key::Character("Z".into()),
         Modifiers::COMMAND | Modifiers::SHIFT,
         None,
     );
-    assert_eq!(h.app.document.source(), typed);
+    assert_eq!(h.app.session.document.source(), typed);
     synced(&h.app);
     h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
     h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
 }
 
 #[test]
@@ -1380,19 +1409,19 @@ fn plain_vertical_table_escape_uses_existing_blank_paragraphs_without_source_or_
             for _ in 0..3 {
                 h.key(Key::Named(key), Modifiers::empty(), None);
                 assert!(h.app.grid_view().is_none());
-                assert_eq!(h.app.selection, Selection::caret(caret));
-                assert_eq!(h.app.document.source(), source);
-                assert!(!h.app.document.can_undo());
+                assert_eq!(h.app.session.selection, Selection::caret(caret));
+                assert_eq!(h.app.session.document.source(), source);
+                assert!(!h.app.session.document.can_undo());
             }
             h.key(Key::Character("Ω".into()), Modifiers::empty(), Some("Ω"));
             let mut expected = source.clone();
             expected.insert(caret, 'Ω');
-            assert_eq!(h.app.document.source(), expected);
+            assert_eq!(h.app.session.document.source(), expected);
             assert_eq!(h.app.projection.rich.tables.len(), 1);
             assert_eq!(h.app.projection.rich.tables[0].rows.len(), 2);
             h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
-            assert_eq!(h.app.document.source(), source);
-            assert!(!h.app.document.can_undo());
+            assert_eq!(h.app.session.document.source(), source);
+            assert!(!h.app.session.document.can_undo());
         }
     }
 }
@@ -1463,22 +1492,22 @@ fn plain_vertical_table_escape_reaches_prose_from_a_virtualized_last_implicit_ce
     let table = source[h.app.projection.rich.tables[0].source_range.clone()].to_owned();
     h.key(Key::Named(Named::ArrowDown), Modifiers::empty(), None);
     assert!(h.app.grid_view().is_none());
-    let at = h.app.selection.head;
+    let at = h.app.session.selection.head;
     assert!((source.find("After café paragraph").unwrap()..=source.len()).contains(&at));
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
     h.key(Key::Character("Ω".into()), Modifiers::empty(), Some("Ω"));
     let mut expected = source.clone();
     expected.insert(at, 'Ω');
-    assert_eq!(h.app.document.source(), expected);
+    assert_eq!(h.app.session.document.source(), expected);
     assert_eq!(
-        &h.app.document.source()[h.app.projection.rich.tables[0].source_range.clone()],
+        &h.app.session.document.source()[h.app.projection.rich.tables[0].source_range.clone()],
         table
     );
     synced(&h.app);
     h.key(Key::Character("z".into()), Modifiers::COMMAND, None);
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
 }
 
 #[path = "table_clipboard_tests.rs"]

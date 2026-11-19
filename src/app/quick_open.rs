@@ -175,7 +175,8 @@ impl App {
             .unwrap_or_else(|| widget::Id::from(EDITOR));
         self.quick_open.clear();
         self.overlay = None;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         operation::focus(previous)
     }
 
@@ -196,14 +197,15 @@ impl App {
             self.quick_open.index(root, self.folder.files(), &recent);
             // The active document leads the recent list; preselect the one
             // before it so Quick Open then Enter switches back.
-            if self.quick_open.selected_path() == self.path.as_deref()
+            if self.quick_open.selected_path() == self.session.path.as_deref()
                 && self.quick_open.results.len() > 1
             {
                 self.quick_open.selected = 1;
             }
             self.chrome.menu = None;
             self.overlay = Some(Overlay::QuickOpen);
-            self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+            self.preserve_viewport_generation =
+                Some(self.session.document.collaboration().generation());
             let request = self.quick_open.request;
             struct Focused(Option<widget::Id>);
             impl widget::Operation<Option<widget::Id>> for Focused {
@@ -278,7 +280,7 @@ impl App {
                     return Task::none();
                 }
                 let focus = self.cancel_quick_open();
-                if self.path.as_ref() == Some(&path) {
+                if self.session.path.as_ref() == Some(&path) {
                     return focus;
                 }
                 // This is a known file choice. Reuse Files' guarded loader;

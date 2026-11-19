@@ -171,19 +171,19 @@ impl App {
                 );
             }
             Message::Tick => {
-                let generation = self.document.collaboration().generation();
-                if self.dirty
+                let generation = self.session.document.collaboration().generation();
+                if self.session.dirty
                     && !self.loading
                     && self.recovery.checkpoint_due(generation, Instant::now())
                 {
                     let snapshot = recovery::Snapshot {
-                        state: self.document.collaboration().state(),
-                        path: self.path.clone(),
-                        name: self.display_name.clone(),
-                        baseline: self.saved_source.clone(),
-                        baseline_version: self.saved_version.clone(),
-                        anchor: self.selection.anchor,
-                        head: self.selection.head,
+                        state: self.session.document.collaboration().state(),
+                        path: self.session.path.clone(),
+                        name: self.session.display_name.clone(),
+                        baseline: self.session.saved_source.clone(),
+                        baseline_version: self.session.saved_version.clone(),
+                        anchor: self.session.selection.anchor,
+                        head: self.session.selection.head,
                     };
                     let id = self.recovery.id;
                     self.recovery.inflight = Some(id);
@@ -276,14 +276,14 @@ impl App {
         match Document::from_state(&snapshot.state) {
             Ok(document) => {
                 self.install_document(document, snapshot.path, snapshot.name);
-                self.saved_source = snapshot.baseline;
-                self.saved_version = snapshot.baseline_version;
-                self.selection = Selection {
+                self.session.saved_source = snapshot.baseline;
+                self.session.saved_version = snapshot.baseline_version;
+                self.session.selection = Selection {
                     anchor: snapshot.anchor,
                     head: snapshot.head,
                 }
-                .clamp(self.document.source());
-                self.dirty = true;
+                .clamp(self.session.document.source());
+                self.session.dirty = true;
                 self.sync_editor();
                 self.notification = Some("Recovery copy opened. Save checks the last disk version; Save As keeps both. The original recovery copy is retained.".into());
             }
@@ -427,11 +427,11 @@ mod tests {
             Some(path.clone()),
             "note.md".into(),
         );
-        let state = app.document.collaboration().state();
-        app.saved_version = Some(collaboration_store::version(&state));
+        let state = app.session.document.collaboration().state();
+        app.session.saved_version = Some(collaboration_store::version(&state));
         collaboration_store::save_document(
             path.clone(),
-            app.document.source().into(),
+            app.session.document.source().into(),
             state,
             None,
             None,
@@ -439,10 +439,10 @@ mod tests {
         .await
         .unwrap();
         let selection = Selection {
-            anchor: app.document.source().len(),
+            anchor: app.session.document.source().len(),
             head: 2,
         };
-        app.selection = selection;
+        app.session.selection = selection;
         app.sync_editor();
         drop(
             app.update(AppMessage::Edit(Action::Edit(Edit::Paste(Arc::new(
@@ -450,35 +450,35 @@ mod tests {
             ))))),
         );
         let snapshot = recovery::Snapshot {
-            state: app.document.collaboration().state(),
-            path: app.path.clone(),
-            name: app.display_name.clone(),
-            baseline: app.saved_source.clone(),
-            baseline_version: app.saved_version.clone(),
+            state: app.session.document.collaboration().state(),
+            path: app.session.path.clone(),
+            name: app.session.display_name.clone(),
+            baseline: app.session.saved_source.clone(),
+            baseline_version: app.session.saved_version.clone(),
             anchor: 10,
             head: 2,
         };
-        let expected = app.document.source().to_owned();
-        let writer = app.document.collaboration().replica_id();
+        let expected = app.session.document.source().to_owned();
+        let writer = app.session.document.collaboration().replica_id();
         let id = Uuid::new_v4();
         recovery::write(dir.path(), id, &snapshot).unwrap();
         std::fs::write(&path, "External work must survive.").unwrap();
         app.restore_draft(recovery::read(dir.path(), id).unwrap());
-        assert_eq!(app.document.source(), expected);
+        assert_eq!(app.session.document.source(), expected);
         assert_eq!(
-            app.document.source(),
-            app.document.collaboration().materialize()
+            app.session.document.source(),
+            app.session.document.collaboration().materialize()
         );
         assert_eq!(app.editor.snapshot(), app.projection.text);
-        assert!(app.selection.anchor > app.selection.head);
-        assert_ne!(app.document.collaboration().replica_id(), writer);
-        assert!(app.dirty);
+        assert!(app.session.selection.anchor > app.session.selection.head);
+        assert_ne!(app.session.document.collaboration().replica_id(), writer);
+        assert!(app.session.dirty);
         let result = collaboration_store::save_document(
             path.clone(),
-            app.document.source().into(),
-            app.document.collaboration().state(),
-            Some(app.saved_source.clone()),
-            app.saved_version.clone(),
+            app.session.document.source().into(),
+            app.session.document.collaboration().state(),
+            Some(app.session.saved_source.clone()),
+            app.session.saved_version.clone(),
         )
         .await;
         assert!(matches!(result, Err(storage::FileError::Conflict)));

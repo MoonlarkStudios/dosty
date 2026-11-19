@@ -211,13 +211,17 @@ impl App {
             return None;
         }
         let grid = self.grid.grid.as_ref()?;
-        let position = self.document.collaboration().resolve(&grid.table)?;
+        let position = self.session.document.collaboration().resolve(&grid.table)?;
         let table_index = self.projection.rich.tables.iter().position(|table| {
             table.source_range.start <= position && position <= table.source_range.end
         })?;
         let table = &self.projection.rich.tables[table_index];
         let resolve = |cell: &Cell| {
-            let point = self.document.collaboration().resolve(&cell.position)?;
+            let point = self
+                .session
+                .document
+                .collaboration()
+                .resolve(&cell.position)?;
             if Arc::ptr_eq(&grid.revision, &self.projection.source_id) {
                 return table
                     .source_rows
@@ -260,13 +264,14 @@ impl App {
     }
 
     pub(super) fn grid_resume(&self) -> Option<View> {
-        if !self.grid.quiet || !self.selection.is_caret() {
+        if !self.grid.quiet || !self.session.selection.is_caret() {
             return None;
         }
         let view = self.grid_position()?;
         let cell =
             &self.projection.rich.tables[view.table].source_rows[view.active.0][view.active.1];
-        (cell.start <= self.selection.head && self.selection.head <= cell.end).then_some(view)
+        (cell.start <= self.session.selection.head && self.session.selection.head <= cell.end)
+            .then_some(view)
     }
 
     fn set_grid(
@@ -288,7 +293,7 @@ impl App {
         tab_column: Option<usize>,
     ) {
         let table = &self.projection.rich.tables[table_index];
-        let collaboration = self.document.collaboration();
+        let collaboration = self.session.document.collaboration();
         let cell = |(row, column): (usize, usize)| Cell {
             position: collaboration.position(table.source_rows[row][column].start, Assoc::After),
             row,
@@ -296,7 +301,7 @@ impl App {
         };
         let a = &table.source_rows[anchor.0][anchor.1];
         let h = &table.source_rows[head.0][head.1];
-        self.selection = if anchor == head {
+        self.session.selection = if anchor == head {
             Selection::caret(h.start)
         } else if anchor <= head {
             Selection {
@@ -321,10 +326,10 @@ impl App {
         // Cell selection has no text caret affinity in concealed padding.
         self.table_editing = None;
         if active != anchor {
-            self.selection = Selection::caret(table.source_rows[active.0][active.1].start);
+            self.session.selection = Selection::caret(table.source_rows[active.0][active.1].start);
         }
         self.editor_focused = true;
-        self.document.break_history_group();
+        self.session.document.break_history_group();
         self.sync_editor();
     }
 
@@ -333,7 +338,7 @@ impl App {
     }
 
     pub(super) fn restore_grid(&mut self, view: View) {
-        let selection = self.selection;
+        let selection = self.session.selection;
         if let Some(table) = self.projection.rich.tables.get(view.table) {
             let clamp = |(r, c): (usize, usize)| {
                 (
@@ -348,7 +353,7 @@ impl App {
                 clamp(view.active),
                 None,
             );
-            self.selection = selection;
+            self.session.selection = selection;
             self.sync_editor();
         } else {
             self.clear_grid();
@@ -371,15 +376,15 @@ impl App {
                 head: view.head,
                 active: view.active,
             };
-            match self.document.transact_table(
+            match self.session.document.transact_table(
                 &edit.edits,
                 crate::document::collaboration::EditOrigin::Human,
-                Some((self.selection, edit.selection)),
+                Some((self.session.selection, edit.selection)),
                 (target(before), target(after)),
                 true,
             ) {
                 Ok(()) => {
-                    self.selection = edit.selection;
+                    self.session.selection = edit.selection;
                     self.sync_editor();
                     self.changed();
                 }
@@ -560,7 +565,7 @@ impl App {
                 {
                     return Task::none();
                 }
-                let source = self.document.source();
+                let source = self.session.document.source();
                 let edge = if up {
                     source[..target.source_range.start]
                         .rfind(['\r', '\n'])
@@ -600,7 +605,7 @@ impl App {
                 let at = if up { 0 } else { source.len() };
                 let selection = Selection::caret(if up { 0 } else { at + text.len() });
                 let applied = if text.is_empty() {
-                    self.selection = selection;
+                    self.session.selection = selection;
                     true
                 } else {
                     self.apply_table_plan(
@@ -718,8 +723,8 @@ impl App {
                 };
                 self.grid.draft = Some(Draft {
                     target: Target::new(
-                        self.document.collaboration(),
-                        self.document.source(),
+                        self.session.document.collaboration(),
+                        self.session.document.source(),
                         source_range,
                     ),
                     original,
@@ -851,11 +856,11 @@ impl App {
                         let table = &self.projection.rich.tables[view.table];
                         if view.active.0 + 1 == table.rows.len() {
                             let plan = table_edit::command_at(
-                                self.document.source(),
+                                self.session.document.source(),
                                 table,
                                 view.active.0,
                                 view.active.1,
-                                self.selection,
+                                self.session.selection,
                                 table_edit::Command::RowAfter,
                             );
                             if let Ok(plan) = plan {
@@ -1002,11 +1007,11 @@ impl App {
                 };
                 if index == table.rows.len() * columns {
                     let plan = table_edit::command_at(
-                        self.document.source(),
+                        self.session.document.source(),
                         table,
                         view.active.0,
                         view.active.1,
-                        self.selection,
+                        self.session.selection,
                         table_edit::Command::RowAfter,
                     );
                     if let Ok(plan) = plan {
@@ -1029,7 +1034,7 @@ impl App {
                 }
                 if let Some(edit) = table_edit::clear_rectangle(
                     &self.projection,
-                    self.document.source(),
+                    self.session.document.source(),
                     view.table,
                     view.anchor,
                     view.head,
@@ -1258,7 +1263,7 @@ impl App {
                 };
                 let edit = match table_edit::paste_rectangle(
                     &self.projection,
-                    self.document.source(),
+                    self.session.document.source(),
                     view.table,
                     start,
                     &values,
@@ -1313,7 +1318,7 @@ impl App {
 
     fn focus_grid_active(&mut self) {
         if let Some(view) = self.grid_view() {
-            self.selection = Selection::caret(
+            self.session.selection = Selection::caret(
                 self.projection.rich.tables[view.table].source_rows[view.active.0][view.active.1]
                     .start,
             );
@@ -1327,10 +1332,10 @@ impl App {
         let Some(draft) = self.grid.draft.as_ref() else {
             return true;
         };
-        let range = match draft
-            .target
-            .resolve(self.document.collaboration(), self.document.source())
-        {
+        let range = match draft.target.resolve(
+            self.session.document.collaboration(),
+            self.session.document.source(),
+        ) {
             Ok(range) => range,
             Err(_) => {
                 self.notification=Some("This cell changed while you were editing. Copy your draft or press Escape to keep the newer value.".into());
@@ -1352,7 +1357,7 @@ impl App {
         }
         let plan = table_edit::commit_cell(
             &self.projection,
-            self.document.source(),
+            self.session.document.source(),
             view.table,
             view.active,
             text,
