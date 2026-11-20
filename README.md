@@ -12,15 +12,19 @@ A quiet, native Markdown editor built with Rust and Iced. Write with headings,
 emphasis, strikethrough, editable tables, images, task checkboxes, footnotes, and
 themes, or switch to the Markdown source at any time.
 
-Start with a blank document, open one file, or open a folder as a workspace.
-Within a workspace, Files live in the left sidebar; an optional Outline lives on the right.
-The folder-name menu manages the workspace. Quick Open (Cmd/Ctrl+P) finds files
-by name or relative path, including files in collapsed folders.
+Start with a blank document, open one file, or add a folder to your library as a
+place. Files shows the open place in the left sidebar; an optional Outline lives on
+the right. The place-name menu moves between places and manages the open one. Quick Open (Cmd/Ctrl+P) is the
+one surface for moving between documents: unsaved and recent documents, the open
+place's folders to step through, and search across every place by name or path.
 An always-visible titlebar offers formatting on demand and a document menu for editing
 modes. Writing uses sans-serif text by default, with serif available in Settings. macOS uses native application menus. Configurable word count and reading
-time sit below the writing area. A folder is a remembered workspace: Dosty reopens
-the last one with its document, caret, expanded folders and sidebars, and lists
-recent folders under Open Recent.
+time sit below the writing area. Places stay in the library until you remove them:
+Dosty reopens the last one with its document, caret, expanded folders and sidebars,
+lists them all under Places, and shows the place that holds the document you are in.
+Images in a place can be previewed and referenced from a
+document where they already live. Moving between documents never asks about unsaved changes; each stays open in the
+background, and Back and Forward retrace your steps.
 
 See the [writing guide](assets/guide.md) for everyday editing and
 [table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.

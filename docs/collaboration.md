@@ -47,7 +47,7 @@ Open **Appearance → Collaboration…**:
 - **Export agent snapshot…** writes immutable JSON containing source, document ID, encoded base state, and version digest. Encoded update bytes use base64.
 - **Accept agent proposal…** reads a JSON proposal and applies it only after validation. Choosing this action/file approves applying that proposal; there is no preview merge.
 - **Export replica…** writes a binary `.dostyreplica` containing full compatible state. Existing `.koanreplica` and `.daytripreplica` files remain supported when opening or importing.
-- **Open replica as offline copy…** opens that state with a fresh active writer identity, using the ordinary unsaved-document guard. Save a separate Markdown copy and export its approved state to merge later.
+- **Open replica as offline copy…** opens that state with a fresh active writer identity, keeping the outgoing document [open in the background](writing-workflows.md#moving-between-documents). Save a separate Markdown copy and export its approved state to merge later.
 - **Merge approved replica…** admits a compatible replica; **Undo agent / Redo agent** operate on accepted local proposals.
 
 A proposal has this shape, with `base` copied intact from the exported snapshot:
