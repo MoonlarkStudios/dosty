@@ -135,6 +135,52 @@ fn create_document_blocking(parent: &Path, value: &str) -> Result<PathBuf, FileE
     Ok(destination)
 }
 
+/// How many numbered names a draft's first save tries before giving up.
+const MAX_UNIQUE_NAMES: usize = 99;
+
+/// Creates an empty document named `value` in `parent`, or `value 2`,
+/// `value 3`, and so on when that name is taken. Nothing is ever replaced.
+pub async fn create_unique_document(parent: PathBuf, value: String) -> Result<PathBuf, FileError> {
+    tokio::task::spawn_blocking(move || {
+        let value = name(&value, true)?;
+        let (stem, extension) = value
+            .rsplit_once('.')
+            .expect("validated document names have a Markdown extension");
+        let mut occupied = None;
+        for attempt in 1..=MAX_UNIQUE_NAMES {
+            let candidate = if attempt == 1 {
+                value.clone()
+            } else {
+                format!("{stem} {attempt}.{extension}")
+            };
+            match create_document_blocking(&parent, &candidate) {
+                Ok(path) => return Ok(path),
+                // Any failure while the name is taken means "try the next one".
+                Err(failure) if parent.join(&candidate).symlink_metadata().is_ok() => {
+                    occupied = Some(failure);
+                }
+                Err(failure) => return Err(failure),
+            }
+        }
+        Err(occupied.unwrap_or_else(|| error("No free name was found.")))
+    })
+    .await
+    .map_err(|e| error(e.to_string()))?
+}
+
+/// Removes a document created by [`create_unique_document`] whose first save
+/// failed, if nothing has been written to it since.
+pub async fn discard_empty_document(path: PathBuf) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == 0)
+        {
+            let _ = fs::remove_file(&path);
+        }
+    })
+    .await;
+}
+
 pub async fn create_folder(parent: PathBuf, value: String) -> Result<PathBuf, FileError> {
     tokio::task::spawn_blocking(move || create_folder_blocking(&parent, &value))
         .await
@@ -770,6 +816,21 @@ mod tests {
         for value in ["", ".", "..", "../outside", "a/b", "a\\b", ".hidden"] {
             assert!(create_folder_blocking(directory.path(), value).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn draft_save_preserves_the_chosen_markdown_extension() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let first = create_unique_document(root.clone(), "Essay.MARKDOWN".into())
+            .await
+            .unwrap();
+        let second = create_unique_document(root, "Essay.MARKDOWN".into())
+            .await
+            .unwrap();
+
+        assert_eq!(first.file_name().unwrap(), "Essay.MARKDOWN");
+        assert_eq!(second.file_name().unwrap(), "Essay 2.MARKDOWN");
     }
 
     #[test]

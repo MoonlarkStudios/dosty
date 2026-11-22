@@ -39,6 +39,18 @@ pub enum Asset {
     Failed(String),
 }
 
+/// The image and link destinations one document's undo history can restore.
+///
+/// The ledger belongs to a document rather than to the decoded-image cache, so
+/// it travels with a document that leaves the page and later returns.
+#[derive(Default)]
+pub(crate) struct References {
+    history: HashSet<String>,
+    links: HashSet<String>,
+    bytes: usize,
+    incomplete: bool,
+}
+
 #[derive(Default)]
 pub struct ImageStore {
     assets: HashMap<String, Asset>,
@@ -60,10 +72,25 @@ impl ImageStore {
         }
     }
     pub fn clear_history(&mut self) {
-        self.history.clear();
-        self.links.clear();
-        self.history_bytes = 0;
-        self.history_incomplete = false;
+        drop(self.take_references());
+    }
+
+    /// Detaches the current document's ledger, leaving an empty one behind.
+    pub(crate) fn take_references(&mut self) -> References {
+        References {
+            history: std::mem::take(&mut self.history),
+            links: std::mem::take(&mut self.links),
+            bytes: std::mem::take(&mut self.history_bytes),
+            incomplete: std::mem::take(&mut self.history_incomplete),
+        }
+    }
+
+    /// Replaces the ledger with one detached earlier by `take_references`.
+    pub(crate) fn restore_references(&mut self, references: References) {
+        self.history = references.history;
+        self.links = references.links;
+        self.history_bytes = references.bytes;
+        self.history_incomplete = references.incomplete;
     }
 
     /// Retain local hyperlink destinations that Undo or Redo can restore.
@@ -179,6 +206,32 @@ fn key(url: &str, base: Option<&Path>) -> String {
     )
 }
 
+/// Reads and decodes one local image on workers, under the same size limits
+/// and concurrency bound as a document's images, without entering the cache.
+pub(crate) async fn load_path(path: PathBuf) -> Result<LoadedImage, String> {
+    let _permit = LOADS.acquire().await.map_err(|error| error.to_string())?;
+    let bytes = read_local(path).await?;
+    tokio::task::spawn_blocking(move || decode(&bytes))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+async fn read_local(path: PathBuf) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(MAX_ENCODED_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_ENCODED_BYTES {
+            return Err("Image exceeds 16 MiB".into());
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 async fn load(url: String, base: Option<PathBuf>) -> Result<LoadedImage, String> {
     let _permit = LOADS.acquire().await.map_err(|error| error.to_string())?;
     let bytes = if url.starts_with("https://") || url.starts_with("http://") {
@@ -231,19 +284,7 @@ async fn load(url: String, base: Option<PathBuf>) -> Result<LoadedImage, String>
             }
             base.as_deref().unwrap_or_else(|| Path::new(".")).join(path)
         };
-        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-            let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-            let mut bytes = Vec::new();
-            file.take(MAX_ENCODED_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| error.to_string())?;
-            if bytes.len() > MAX_ENCODED_BYTES {
-                return Err("Image exceeds 16 MiB".into());
-            }
-            Ok(bytes)
-        })
-        .await
-        .map_err(|error| error.to_string())??
+        read_local(path).await?
     };
     tokio::task::spawn_blocking(move || decode(&bytes))
         .await
@@ -305,10 +346,42 @@ mod tests {
         let next = crate::document::projection::Projection::new("[Another](next.md)");
         store.record_links(&next.rich.links);
         assert!(!store.history().complete);
-        store.clear_history();
+        let exhausted = store.take_references();
         store.record_links(&next.rich.links);
         assert_eq!(store.history().links, ["next.md"]);
         assert!(store.history().complete);
+        let next_ledger = store.take_references();
+        store.restore_references(exhausted);
+        assert_eq!(store.history().links, ["other.md"]);
+        assert!(!store.history().complete);
+        store.restore_references(next_ledger);
+        assert_eq!(store.history().links, ["next.md"]);
+        assert!(store.history().complete);
+    }
+
+    #[tokio::test]
+    async fn a_single_path_loads_under_the_document_limits_without_entering_the_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("100% cover.png");
+        std::fs::write(&path, png()).unwrap();
+        let loaded = load_path(path).await.unwrap();
+        assert!(loaded.size.width > 0 && loaded.size.height > 0);
+
+        let oversized = directory.path().join("huge.png");
+        std::fs::write(&oversized, vec![0; MAX_ENCODED_BYTES + 1]).unwrap();
+        assert_eq!(
+            load_path(oversized).await.unwrap_err(),
+            "Image exceeds 16 MiB"
+        );
+        assert!(
+            load_path(directory.path().join("missing.png"))
+                .await
+                .is_err()
+        );
+        assert!(
+            load_path(directory.path().to_owned()).await.is_err(),
+            "a folder is not an image"
+        );
     }
 
     #[tokio::test]
