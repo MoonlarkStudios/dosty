@@ -47,6 +47,10 @@ fn render(app: &App, size: Size, name: &str) {
 }
 
 fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) {
+    render_scaled(app, size, name, cursor, 1.0);
+}
+
+fn render_scaled(app: &App, size: Size, name: &str, cursor: mouse::Cursor, scale: f32) {
     let mut renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
         styles::BODY_FONT,
         18.0.into(),
@@ -89,14 +93,17 @@ fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) 
         cursor,
         &clip,
     );
-    let size = Size::new(size.width as u32, size.height as u32);
+    let size = Size::new(
+        (size.width * scale).round() as u32,
+        (size.height * scale).round() as u32,
+    );
     let mut pixels = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
     let mut mask = tiny_skia::Mask::new(size.width, size.height).unwrap();
     if let Renderer::Secondary(renderer) = &mut renderer {
         renderer.draw(
             &mut pixels.as_mut(),
             &mut mask,
-            &iced_tiny_skia::graphics::Viewport::with_physical_size(size, 1.0),
+            &iced_tiny_skia::graphics::Viewport::with_physical_size(size, scale),
             &[clip],
             app.resolved_theme.tokens.canvas,
         );
@@ -392,11 +399,7 @@ fn native_quiet_previews() {
     let mut fonts = iced_tiny_skia::graphics::text::font_system()
         .write()
         .unwrap();
-    for font in [
-        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
-    ] {
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
         fonts.load_font(std::borrow::Cow::Borrowed(font));
     }
     drop(fonts);
@@ -404,6 +407,24 @@ fn native_quiet_previews() {
     let (mut app, initial) = App::new();
     drop(initial);
     app.preferences = Preferences::default();
+    app.resolved_theme = Preset::Paper.resolve();
+    app.resolved_theme.typography.font = WritingFont::SourceSans3;
+    for (suffix, name) in [
+        ("", "heading-marker"),
+        (" A clear heading", "heading-title"),
+    ] {
+        let source = format!("A line of prose.\n\n#{suffix}");
+        let end = source.len();
+        app.set_document(source, None, "Untitled.md".into());
+        drop(app.update_message(Message::SelectSource(Selection::caret(end))));
+        render_scaled(
+            &app,
+            Size::new(760.0, 520.0),
+            name,
+            mouse::Cursor::Unavailable,
+            2.0,
+        );
+    }
     app.set_document("# The quiet hour\n\n*A small field note on making room to notice.*\n\nAt the edge of the morning, the coast is almost colourless. Water folds around the rocks. A path disappears into the grass. For a few minutes, there is nothing to answer and nowhere else to be.\n\n## Making room\n\nWe came here to write about attention. We stayed because the light kept changing.\n".into(), Some("/tmp/The quiet hour.md".into()), "The quiet hour.md".into());
     for preset in Preset::ALL {
         app.resolved_theme = preset.resolve();
@@ -451,6 +472,13 @@ fn native_quiet_previews() {
     app.chrome.files.open = true;
     render(&app, Size::new(1180.0, 820.0), "native-quiet-both-sidebars");
     render(&app, Size::new(760.0, 520.0), "native-quiet-both-narrow");
+    drop(app.show_sidebar(Sidebar::Outline));
+    render(
+        &app,
+        Size::new(760.0, 520.0),
+        "native-quiet-narrow-outline-active",
+    );
+    drop(app.show_sidebar(Sidebar::Files));
     app.workspace.remember_for_preview(&[
         "/writing/Field notes",
         "/Users/writer/Essays",
@@ -477,6 +505,13 @@ fn native_quiet_previews() {
         app.resolved_theme.typography.font = font;
         app.preferences.writing_font = font;
         render(&app, Size::new(1180.0, 820.0), &format!("typeface-{font}"));
+        render_scaled(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("typeface-{font}-2x"),
+            mouse::Cursor::Unavailable,
+            2.0,
+        );
         app.mode = EditorMode::Read;
         render(
             &app,
@@ -485,8 +520,8 @@ fn native_quiet_previews() {
         );
         app.mode = EditorMode::Live;
     }
-    app.resolved_theme.typography.font = WritingFont::SansSerif;
-    app.preferences.writing_font = WritingFont::SansSerif;
+    app.resolved_theme.typography.font = WritingFont::SourceSans3;
+    app.preferences.writing_font = WritingFont::SourceSans3;
     app.chrome.files.open = false;
     app.chrome.outline.open = false;
     app.overlay = Some(Overlay::Settings);
@@ -496,7 +531,21 @@ fn native_quiet_previews() {
         "native-quiet-settings-narrow",
     );
     render(&app, Size::new(1180.0, 1000.0), "typeface-settings");
+    for (section, name) in [
+        (SettingsSection::Appearance, "appearance-settings"),
+        (SettingsSection::Shortcuts, "shortcut-settings"),
+    ] {
+        drop(app.update_message(Message::SettingsSection(section)));
+        render(&app, Size::new(760.0, 520.0), name);
+    }
+    app.resolved_theme = Preset::Midnight.resolve();
+    drop(app.update_message(Message::SettingsSection(SettingsSection::Writing)));
+    render(&app, Size::new(760.0, 520.0), "writing-settings-midnight");
+    app.resolved_theme = Preset::Paper.resolve();
     app.overlay = None;
+    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Format)));
+    render(&app, Size::new(760.0, 520.0), "format-narrow");
+    drop(app.update_message(Message::CloseOverlay));
     app.session.display_name =
         "A very long document name that must never push the save indicator outside the titlebar.md"
             .into();

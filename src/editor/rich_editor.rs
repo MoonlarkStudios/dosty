@@ -2310,7 +2310,10 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         }
                     }
                     FragmentKind::Text {
-                        paragraph, origin, ..
+                        paragraph,
+                        centered_markers,
+                        origin,
+                        ..
                     } => {
                         renderer.fill_paragraph(
                             paragraph,
@@ -2318,6 +2321,14 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                             tokens.text,
                             clip,
                         );
+                        for (marker, offset) in centered_markers.iter() {
+                            renderer.fill_paragraph(
+                                marker,
+                                *origin + (*offset - Point::ORIGIN) + translation,
+                                tokens.muted,
+                                clip,
+                            );
+                        }
                         if self.projection.rich.code_line(&fragment.range).is_some_and(
                             |(_, block)| {
                                 block.fenced

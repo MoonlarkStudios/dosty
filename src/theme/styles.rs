@@ -198,7 +198,7 @@ pub fn checkbox_style(tokens: Tokens) -> impl Fn(&Theme, checkbox::Status) -> ch
     }
 }
 
-pub fn typeface_picker(tokens: Tokens) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style {
+pub fn preference_picker(tokens: Tokens) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style {
     move |_, status| pick_list::Style {
         text_color: tokens.text,
         placeholder_color: tokens.muted,
@@ -216,7 +216,7 @@ pub fn typeface_picker(tokens: Tokens) -> impl Fn(&Theme, pick_list::Status) -> 
     }
 }
 
-pub fn typeface_menu(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::overlay::menu::Style {
+pub fn preference_menu(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::overlay::menu::Style {
     move |_| iced::widget::overlay::menu::Style {
         background: tokens.elevated.into(),
         text_color: tokens.text,
