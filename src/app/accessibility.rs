@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use accesskit::ActionRequest;
 use iced::advanced::widget::{Id, Operation, operation};
-use iced::futures::{StreamExt, channel::mpsc};
+use iced::futures::StreamExt;
+use iced::futures::channel::mpsc;
 use iced::{Rectangle, Task};
 use iced_winit::accessibility::Config;
 
@@ -115,8 +116,8 @@ impl App {
             return Task::none();
         };
         let owner = (
-            self.document.collaboration().id(),
-            self.document.collaboration().replica_id(),
+            self.session.document.collaboration().id(),
+            self.session.document.collaboration().replica_id(),
         );
         if self.mode != EditorMode::Source
             || state.composition.is_some_and(|pending| pending != owner)
@@ -128,9 +129,9 @@ impl App {
             && self.overlay.is_none()
             && state.composition.is_none();
         let key = (
-            self.document.collaboration().id(),
-            self.document.collaboration().replica_id(),
-            self.document.revision(),
+            self.session.document.collaboration().id(),
+            self.session.document.collaboration().replica_id(),
+            self.session.document.revision(),
             enabled,
         );
         let bounds = state.layout.bounds.unwrap_or_default();
@@ -142,8 +143,8 @@ impl App {
                 .checked_add(1)
                 .expect("accessibility epoch overflow");
             state.snapshot = Snapshot::new(
-                self.document.source(),
-                self.selection,
+                self.session.document.source(),
+                self.session.selection,
                 state.epoch,
                 enabled,
                 state.layout.focused,
@@ -151,9 +152,12 @@ impl App {
             );
             state.key = Some(key);
         } else {
-            state
-                .snapshot
-                .update_state(self.selection, enabled, state.layout.focused, bounds);
+            state.snapshot.update_state(
+                self.session.selection,
+                enabled,
+                state.layout.focused,
+                bounds,
+            );
         }
         state.config.update(state.snapshot.tree(&title));
         if measure {
@@ -176,8 +180,8 @@ impl App {
         pending: bool,
     ) {
         let owner = (
-            self.document.collaboration().id(),
-            self.document.collaboration().replica_id(),
+            self.session.document.collaboration().id(),
+            self.session.document.collaboration().replica_id(),
         );
         if (document, replica) == owner
             && let Some(state) = self.accessibility.as_mut()
@@ -209,28 +213,28 @@ impl App {
         match intent {
             Intent::Focus => {}
             Intent::Select(selection) => {
-                self.selection = selection;
-                self.document.break_history_group();
+                self.session.selection = selection;
+                self.session.document.break_history_group();
                 self.sync_editor();
             }
             Intent::Replace(text) => {
                 // Native clients can resend AXValue while reconciling a
                 // control. An identical value must leave the directed source
                 // selection, typing group and recovery state untouched.
-                if text == self.document.source() {
+                if text == self.session.document.source() {
                     return Task::none();
                 }
-                let before = self.selection;
-                self.document.break_history_group();
+                let before = self.session.selection;
+                self.session.document.break_history_group();
                 self.commit_local(
-                    0..self.document.source().len(),
+                    0..self.session.document.source().len(),
                     &text,
                     before,
                     Selection::caret(text.len()),
                 );
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 if self.edit_error.is_none() {
-                    self.selection = Selection::caret(text.len());
+                    self.session.selection = Selection::caret(text.len());
                 }
                 self.sync_editor();
                 self.changed();
@@ -422,9 +426,9 @@ mod tests {
                 );
                 for request in [stale_select.clone(), stale_replace.clone()] {
                     let _task = app.update(Message::Accessibility(request));
-                    assert_eq!(app.document.source(), source);
-                    assert_eq!(app.selection, Selection::caret(0));
-                    assert_eq!(app.editor.selection(), app.selection);
+                    assert_eq!(app.session.document.source(), source);
+                    assert_eq!(app.session.selection, Selection::caret(0));
+                    assert_eq!(app.editor.selection(), app.session.selection);
                 }
             }
             source_event(
@@ -443,19 +447,19 @@ mod tests {
             } else {
                 source.into()
             };
-            assert_eq!(app.document.source(), expected);
+            assert_eq!(app.session.document.source(), expected);
             assert_eq!(app.editor.snapshot(), expected);
-            let selection = app.selection;
+            let selection = app.session.selection;
             let _task = app.update(Message::Accessibility(stale_select));
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.selection, selection);
             let current = select(&app, 7, 7);
             let _task = app.update(Message::Accessibility(current));
-            assert_ne!(app.selection, selection);
+            assert_ne!(app.session.selection, selection);
             if commit {
                 let _task = app.update(Message::Undo);
-                assert_eq!(app.document.source(), source);
-                assert_eq!(app.selection, Selection::caret(0));
-                assert!(!app.document.can_undo());
+                assert_eq!(app.session.document.source(), source);
+                assert_eq!(app.session.selection, Selection::caret(0));
+                assert!(!app.session.document.can_undo());
             }
         }
     }
@@ -463,8 +467,8 @@ mod tests {
     #[test]
     fn composition_notifications_cannot_disable_another_session() {
         let mut app = app("Before");
-        let document = app.document.collaboration().id();
-        let replica = app.document.collaboration().replica_id();
+        let document = app.session.document.collaboration().id();
+        let replica = app.session.document.collaboration().replica_id();
         let _task = app.update(Message::AccessibilityComposition {
             document,
             replica,
@@ -482,7 +486,7 @@ mod tests {
         assert!(app.accessibility.as_ref().unwrap().composition.is_none());
         let request = select(&app, 2, 1);
         let _task = app.update(Message::Accessibility(request));
-        assert_eq!(app.selection, Selection { anchor: 2, head: 1 });
+        assert_eq!(app.session.selection, Selection { anchor: 2, head: 1 });
     }
 
     #[test]
@@ -497,11 +501,11 @@ mod tests {
             anchor: source.len(),
             head: 2,
         };
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(app.session.document.source(), source);
         assert_eq!(app.editor.snapshot(), source);
         let _task = app.update(Message::Undo);
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
 
         let request = ActionRequest {
             target: editor(&app),
@@ -509,13 +513,13 @@ mod tests {
             data: Some(ActionData::Value("Replacement 日本語\n".into())),
         };
         let _task = app.update(Message::Accessibility(request));
-        assert_eq!(app.document.source(), "Replacement 日本語\n");
-        assert_eq!(app.editor.snapshot(), app.document.source());
+        assert_eq!(app.session.document.source(), "Replacement 日本語\n");
+        assert_eq!(app.editor.snapshot(), app.session.document.source());
         let _task = app.update(Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         let _task = app.update(Message::Redo);
-        assert_eq!(app.document.source(), "Replacement 日本語\n");
+        assert_eq!(app.session.document.source(), "Replacement 日本語\n");
     }
 
     #[test]
@@ -532,18 +536,18 @@ mod tests {
         for (index, offsets) in boundaries.windows(2).enumerate() {
             let request = select(&app, index, index);
             let _task = app.update(Message::Accessibility(request));
-            assert_eq!(app.selection, Selection::caret(offsets[0]));
-            assert_eq!(app.editor.selection(), app.selection);
+            assert_eq!(app.session.selection, Selection::caret(offsets[0]));
+            assert_eq!(app.editor.selection(), app.session.selection);
             // These are the real Iced/cosmic-text Source buffer motions. An AX
             // stop inside a combining/ZWJ cluster can make them stall.
             let _task = app.update(Message::Edit(Action::Move(Motion::Right)));
-            assert_eq!(app.selection, Selection::caret(offsets[1]));
+            assert_eq!(app.session.selection, Selection::caret(offsets[1]));
             let _task = app.update(Message::Edit(Action::Move(Motion::Left)));
-            assert_eq!(app.selection, Selection::caret(offsets[0]));
-            assert_eq!(app.document.source(), source);
+            assert_eq!(app.session.selection, Selection::caret(offsets[0]));
+            assert_eq!(app.session.document.source(), source);
             assert_eq!(app.editor.snapshot(), source);
         }
-        assert!(!app.document.can_undo());
+        assert!(!app.session.document.can_undo());
     }
 
     #[test]
@@ -554,22 +558,25 @@ mod tests {
         let mut app = app(source);
         let request = select(&app, source.graphemes(true).count(), 0);
         let _task = app.update(Message::Accessibility(request));
-        let selection = app.selection;
-        let revision = app.document.revision();
-        let generation = app.document.collaboration().generation();
+        let selection = app.session.selection;
+        let revision = app.session.document.revision();
+        let generation = app.session.document.collaboration().generation();
         let request = ActionRequest {
             target: editor(&app),
             action: accesskit::Action::SetValue,
             data: Some(ActionData::Value(source.into())),
         };
         let _task = app.update(Message::Accessibility(request));
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
         assert_eq!(app.editor.selection(), selection);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.document.revision(), revision);
-        assert_eq!(app.document.collaboration().generation(), generation);
-        assert!(!app.document.can_undo());
-        assert!(!app.dirty);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.document.revision(), revision);
+        assert_eq!(
+            app.session.document.collaboration().generation(),
+            generation
+        );
+        assert!(!app.session.document.can_undo());
+        assert!(!app.session.dirty);
 
         let request = select(
             &app,
@@ -581,14 +588,14 @@ mod tests {
         let request = ActionRequest {
             target: editor(&app),
             action: accesskit::Action::SetValue,
-            data: Some(ActionData::Value(app.document.source().into())),
+            data: Some(ActionData::Value(app.session.document.source().into())),
         };
         let _task = app.update(Message::Accessibility(request));
         let _task = app.update(Message::Edit(Action::Edit(Edit::Insert('b'))));
-        assert_eq!(app.document.source(), format!("{source}ab"));
+        assert_eq!(app.session.document.source(), format!("{source}ab"));
         let _task = app.update(Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, Selection::caret(source.len()));
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, Selection::caret(source.len()));
     }
 
     #[test]
@@ -597,9 +604,9 @@ mod tests {
         let stale = select(&app, 3, 1);
         app.set_document("After 日本語".into(), None, "Other.md".into());
         let _task = app.update(Message::Dismiss);
-        let selection = app.selection;
+        let selection = app.session.selection;
         let _task = app.update(Message::Accessibility(stale));
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
 
         for unavailable in 0..3 {
             app.mode = EditorMode::Source;
@@ -613,8 +620,8 @@ mod tests {
                 _ => app.mode = EditorMode::Live,
             }
             let _task = app.update(Message::Accessibility(request));
-            assert_eq!(app.document.source(), "After 日本語");
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.document.source(), "After 日本語");
+            assert_eq!(app.session.selection, selection);
             let tree = app.accessibility.as_ref().unwrap().snapshot.tree("Test");
             assert_eq!(tree.nodes.len(), 1);
         }
