@@ -21,6 +21,8 @@ use crate::io::image_store::{Asset, ImageStore};
 use crate::theme::styles;
 use crate::theme::{ResolvedTheme, Tokens, Typography, WritingFont};
 
+const FALLBACK_CARET: Rectangle = Rectangle::new(Point::ORIGIN, Size::new(1.5, 24.0));
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParagraphKey {
     text: String,
@@ -90,6 +92,7 @@ pub struct ParagraphStyle {
     size: f32,
     bold: bool,
     alignment: u8,
+    caret_height: Option<f32>,
 }
 
 /// A physical paragraph or one table row, with global display offsets.
@@ -232,6 +235,7 @@ pub enum Decoration {
 
 pub struct VisualRow {
     pub bounds: Rectangle,
+    caret_height: f32,
     display_range: Range<usize>,
     display_stops: Arc<[(usize, f32)]>,
     display_start: usize,
@@ -580,14 +584,7 @@ impl RichLayout {
             zoom: metrics.zoom,
             syntax: HashMap::new(),
         };
-        let height = builder.paragraph(
-            range,
-            bounds.position(),
-            bounds.width,
-            style.size,
-            style.bold,
-            style.alignment,
-        );
+        let height = builder.paragraph(range, bounds.position(), bounds.width, style);
         let dy = height - bounds.height;
         let first = self
             .rows
@@ -664,16 +661,24 @@ impl RichLayout {
         &self.rows[first..first + count]
     }
 
-    pub fn source_caret(&self, source: usize, y: Option<f32>) -> Rectangle {
+    fn source_caret_row(
+        &self,
+        source: usize,
+        y: Option<f32>,
+        upstream: Option<bool>,
+    ) -> Option<(&VisualRow, usize)> {
         let offset = self
             .mapping
             .as_ref()
             .map_or(source, |map| map.to_display(source));
         let rows = self.rows_at(offset);
-        let row = y
-            .and_then(|y| {
-                rows.iter()
-                    .min_by(|a, b| (a.bounds.y - y).abs().total_cmp(&(b.bounds.y - y).abs()))
+        let row = upstream
+            .and_then(|upstream| if upstream { rows.first() } else { rows.last() })
+            .or_else(|| {
+                y.and_then(|y| {
+                    rows.iter()
+                        .min_by(|a, b| (a.bounds.y - y).abs().total_cmp(&(b.bounds.y - y).abs()))
+                })
             })
             .or_else(|| {
                 rows.iter()
@@ -687,9 +692,22 @@ impl RichLayout {
                         .saturating_sub(1),
                 )
             });
-        row.map_or(Rectangle::new(Point::ORIGIN, Size::new(1.5, 24.0)), |row| {
-            row.display_caret(offset)
-        })
+        row.map(|row| (row, offset))
+    }
+
+    pub fn source_caret(&self, source: usize, y: Option<f32>) -> Rectangle {
+        self.source_caret_row(source, y, None)
+            .map_or(FALLBACK_CARET, |(row, offset)| row.display_caret(offset))
+    }
+
+    pub(super) fn painted_caret(&self, source: usize, upstream: Option<bool>) -> Rectangle {
+        let Some((row, offset)) = self.source_caret_row(source, None, upstream) else {
+            return FALLBACK_CARET;
+        };
+        let mut caret = row.display_caret(offset);
+        caret.y += (caret.height - row.caret_height) / 2.0;
+        caret.height = row.caret_height;
+        caret
     }
 
     pub fn visible_fragments(&self, y: Range<f32>) -> impl Iterator<Item = &Fragment> {
@@ -707,20 +725,8 @@ impl RichLayout {
 
     /// Resolves wrap affinity independently of the previous row's vertical position.
     pub fn source_caret_on_side(&self, source: usize, upstream: bool) -> Rectangle {
-        let offset = self
-            .mapping
-            .as_ref()
-            .map_or(source, |map| map.to_display(source));
-        let mut rows = self.rows_at(offset).iter();
-        let row = if upstream {
-            rows.next()
-        } else {
-            rows.next_back()
-        };
-        row.map_or_else(
-            || self.source_caret(source, None),
-            |row| row.display_caret(offset),
-        )
+        self.source_caret_row(source, None, Some(upstream))
+            .map_or(FALLBACK_CARET, |(row, offset)| row.display_caret(offset))
     }
 
     pub fn upstream_affinity(&self, source: usize, y: f32) -> bool {
@@ -1042,6 +1048,12 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    fn prose_caret_height(&self) -> f32 {
+        // Keep the caret inside even a compact blank paragraph at this zoom.
+        let blank_height = styles::line_size(self.size, None, true) * self.line_height;
+        self.size.min(blank_height)
+    }
+
     fn line(&mut self, range: Range<usize>, size: f32, bold: bool) {
         if let Some((index, block)) = self.projection.rich.code_line(&range) {
             let first = range.start <= block.range.start;
@@ -1071,9 +1083,12 @@ impl Builder<'_> {
                 range,
                 Point::new(padding, self.y),
                 (self.width - 2.0 * padding).max(1.0),
-                size,
-                false,
-                0,
+                ParagraphStyle {
+                    size,
+                    bold: false,
+                    alignment: 0,
+                    caret_height: None,
+                },
             );
             self.y += height + if last { 10.0 * self.zoom } else { 0.0 };
             self.layout.decorations.push((
@@ -1082,7 +1097,17 @@ impl Builder<'_> {
             ));
             return;
         }
-        let height = self.flow(range, Point::new(0.0, self.y), self.width, size, bold, 0);
+        let height = self.flow(
+            range,
+            Point::new(0.0, self.y),
+            self.width,
+            ParagraphStyle {
+                size,
+                bold,
+                alignment: 0,
+                caret_height: (!bold).then(|| self.prose_caret_height()),
+            },
+        );
         self.y += height;
     }
 
@@ -1091,9 +1116,7 @@ impl Builder<'_> {
         range: Range<usize>,
         position: Point,
         width: f32,
-        size: f32,
-        bold: bool,
-        alignment: u8,
+        style: ParagraphStyle,
     ) -> f32 {
         let mut y = position.y;
         let mut part = range.start;
@@ -1111,9 +1134,7 @@ impl Builder<'_> {
                     part..image.range.start,
                     Point::new(position.x, y),
                     width,
-                    size,
-                    bold,
-                    alignment,
+                    style,
                 );
             }
             let asset = self.images.get(&image.url, self.base);
@@ -1138,6 +1159,7 @@ impl Builder<'_> {
             self.layout.rows.push(VisualRow {
                 display_range: image.range.clone(),
                 bounds: Rectangle::new(Point::new(position.x, bounds.y), Size::new(width, height)),
+                caret_height: height,
                 display_stops: Arc::from([
                     (0, bounds.x),
                     (image.range.len(), bounds.x + bounds.width),
@@ -1161,14 +1183,7 @@ impl Builder<'_> {
             part = image.range.end;
         }
         if part < range.end || part == range.start {
-            y += self.paragraph(
-                part..range.end,
-                Point::new(position.x, y),
-                width,
-                size,
-                bold,
-                alignment,
-            );
+            y += self.paragraph(part..range.end, Point::new(position.x, y), width, style);
         }
         y - position.y
     }
@@ -1178,10 +1193,14 @@ impl Builder<'_> {
         range: Range<usize>,
         position: Point,
         width: f32,
-        size: f32,
-        bold: bool,
-        alignment: u8,
+        style: ParagraphStyle,
     ) -> f32 {
+        let ParagraphStyle {
+            size,
+            bold,
+            alignment,
+            caret_height,
+        } = style;
         let line_index = self
             .line_starts
             .partition_point(|&start| start <= range.start)
@@ -1460,6 +1479,7 @@ impl Builder<'_> {
         for row in &cached.rows {
             self.layout.rows.push(VisualRow {
                 display_range: range.start + row.range.start..range.start + row.range.end,
+                caret_height: caret_height.unwrap_or(row.height),
                 display_stops: Arc::clone(&row.stops),
                 display_start: range.start,
                 origin_x: origin.x,
@@ -1477,11 +1497,7 @@ impl Builder<'_> {
                 paragraph: paragraph.clone(),
                 origin,
                 display_start: range.start,
-                style: ParagraphStyle {
-                    size,
-                    bold,
-                    alignment,
-                },
+                style: ParagraphStyle { size, ..style },
             },
         });
         height
@@ -1518,9 +1534,12 @@ impl Builder<'_> {
                 cell.clone(),
                 Point::new(column as f32 * cell_width + padding, y + padding),
                 (cell_width - padding * 2.0).max(1.0),
-                self.size,
-                row_index == 0,
-                alignment,
+                ParagraphStyle {
+                    size: self.size,
+                    bold: row_index == 0,
+                    alignment,
+                    caret_height: None,
+                },
             );
             height = height.max(h + padding * 2.0);
         }

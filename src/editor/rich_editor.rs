@@ -965,10 +965,24 @@ impl State {
             && self.scroll_drag.is_none()
     }
     fn caret(&self, source: usize) -> Rectangle {
-        if let Some((_, upstream)) = self.visual_cursor.filter(|(head, _)| *head == source) {
+        if let Some(upstream) = self.caret_affinity(source) {
             self.rich.source_caret_on_side(source, upstream)
         } else {
             self.rich.source_caret(source, None)
+        }
+    }
+    fn caret_affinity(&self, source: usize) -> Option<bool> {
+        self.visual_cursor
+            .filter(|(head, _)| *head == source)
+            .map(|(_, upstream)| upstream)
+    }
+    fn painted_caret(&self, source: usize) -> Rectangle {
+        if self.rich.contains_source(source) {
+            self.rich
+                .resident()
+                .painted_caret(source, self.caret_affinity(source))
+        } else {
+            self.caret(source)
         }
     }
     fn set_visual_cursor(&mut self, source: usize, y: f32) {
@@ -2442,7 +2456,7 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             if self.grid.is_none() && self.display_selection().is_caret() && state.caret_visible() {
                 renderer.fill_quad(
                     renderer::Quad {
-                        bounds: state.caret(self.source_selection.head) + translation,
+                        bounds: state.painted_caret(self.source_selection.head) + translation,
                         ..renderer::Quad::default()
                     },
                     tokens.accent,

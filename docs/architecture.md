@@ -37,6 +37,8 @@ Live editing uses one document-wide native buffer and one source selection.
 and input-method positioning over that buffer. `RichLayout` supplies the same
 measured geometry to drawing, caret placement, and navigation. Drawing does not
 parse Markdown. The optional Read renderer is separate and initialized lazily.
+The painted prose caret uses a consistent height at each zoom, including on
+compact blank lines. Navigation and scrolling use measured row bounds.
 
 Source/display mappings use UTF-8 byte offsets. Hidden syntax occupies no space;
 images are atomic objects, and tables retain structural mappings. Both selection
