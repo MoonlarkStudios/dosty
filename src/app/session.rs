@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::document::Document;
+use crate::document::collaboration::StableSelection;
 use crate::document::selection::Selection;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -24,6 +25,9 @@ pub(super) struct Session {
     pub(super) document: Document,
     /// UTF-8 byte offsets into the document source, with anchor/head direction.
     pub(super) selection: Selection,
+    /// User-toggled Write folds travel with an open document. The layout
+    /// ranges derived from these stable headings belong to the active page.
+    pub(super) fold_anchors: Vec<StableSelection>,
     /// `None` until the document is first saved.
     pub(super) path: Option<PathBuf>,
     pub(super) display_name: String,
@@ -82,6 +86,7 @@ impl Session {
             id: SessionId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
             document,
             selection: Selection::default(),
+            fold_anchors: Vec::new(),
             path,
             display_name,
             saved_source,

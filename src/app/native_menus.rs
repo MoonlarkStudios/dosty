@@ -41,6 +41,7 @@ pub enum Command {
     FilterOutline,
     HideSidebars,
     DocumentStatistics,
+    ToggleSectionFold,
     Mode(EditorMode),
     Preference(chrome::Preference),
     WritingFont(WritingFont),
@@ -295,6 +296,12 @@ impl State {
                 false,
             ),
             (
+                "Toggle Section Fold",
+                Command::ToggleSectionFold,
+                Some("Meta+Alt+l"),
+                false,
+            ),
+            (
                 "Hide Sidebars",
                 Command::HideSidebars,
                 Some("Meta+Shift+f"),
@@ -437,6 +444,10 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
             app.chrome.outline.open && !app.chrome.sidebars_hidden,
         ),
         Command::FilterOutline => (ready && !app.outline.sections.is_empty(), false),
+        Command::ToggleSectionFold => (
+            ready && app.mode == EditorMode::Live && app.current_section_fold().is_some(),
+            false,
+        ),
         Command::HideSidebars => (
             ready && (app.chrome.files.open || app.chrome.outline.open),
             false,
@@ -536,6 +547,7 @@ impl App {
             Command::FilterOutline => Message::Outline(super::outline::Message::Filter),
             Command::HideSidebars => Message::HideSidebars,
             Command::DocumentStatistics => Message::Chrome(chrome::Message::Statistics),
+            Command::ToggleSectionFold => Message::ToggleSectionFold(None),
             Command::Mode(mode) => Message::SetMode(mode),
             Command::WritingFont(font) => Message::WritingFont(font),
             Command::Preference(preference) => Message::Chrome(chrome::Message::Preference(

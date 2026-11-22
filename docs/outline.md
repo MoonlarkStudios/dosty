@@ -11,6 +11,12 @@ Open Outline with the right titlebar button, View → Outline on macOS, or Cmd/C
 - While the filter input is focused, Up/Down selects a match and Enter jumps. Escape clears and closes the filter, returning to the editor without changing its source selection. Jumping expands the target's ancestors. Clear the filter before collapsing or rearranging rows.
 - Cmd/Ctrl+Alt+Left collapses the current branch, or its parent if the current heading has no children or is already collapsed. Cmd/Ctrl+Alt+Right expands it. These commands affect the outline only.
 
+## Folding the writing surface
+
+In Write mode, hover in the left margin beside a heading to show its fold chevron. Click it or press Cmd/Ctrl+Alt+L in the current section to toggle the section body. The heading stays visible, including its chevron while folded. Folding a section containing the caret moves the caret to its heading. A text selection that crosses the body takes priority over folding.
+
+Editor folds stay with open documents, including those in the background. They are separate from the Outline's branch disclosure. A search or navigation target inside a hidden body opens the necessary folds. Extending a text selection across a fold opens it so the full selection is visible. Delete or Backspace at a fold boundary reveals the body before an edit. Source and Read show the complete document.
+
 ## Rearranging
 
 Drag the grip on the right of a heading row. The upper and lower halves of a target row mean before and after that target's **whole section**, respectively. An accent line marks a valid destination. Targets must have the same heading level; a move can cross parents, but never rewrites heading markers. Wheel scrolling remains available during a drag. Releasing outside a row, Escape, loss of window focus, or a source revision cancels the drag.

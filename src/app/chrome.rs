@@ -1031,6 +1031,12 @@ impl App {
                     !self.outline.sections.is_empty(),
                 ),
                 Command::action(
+                    "Toggle section fold",
+                    Icon::Heading,
+                    AppMessage::ToggleSectionFold(None),
+                    ready && self.mode == EditorMode::Live && self.current_section_fold().is_some(),
+                ),
+                Command::action(
                     "Document statistics…",
                     Icon::Document,
                     AppMessage::Chrome(Message::Statistics),

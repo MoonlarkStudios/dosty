@@ -47,6 +47,11 @@ span. It preserves source selection, wrap affinity, preferred horizontal caret
 position, and a source-based viewport anchor through local reflow. An offscreen
 caret does not force the viewport to jump when focus or disclosure changes.
 
+Open document sessions store Write mode folds against stable heading positions.
+The active layout height index omits folded body units while the projection and native buffer
+retain their complete text and mappings. A source selection meeting a folded
+body opens it before layout, so editing operates on a visible source range.
+
 ## Selection, formatting, and history
 
 Source selections retain distinct anchor/head positions. Visual wrap affinity,
