@@ -31,6 +31,7 @@ pub enum Command {
     Close,
     Edit(menu_input::Command),
     Find,
+    FindInFolder,
     Format(Format),
     Image,
     Files,
@@ -255,6 +256,13 @@ impl State {
             Some("Meta+f"),
             false,
         )?;
+        state.add(
+            &edit,
+            "Find in Folder…",
+            Command::FindInFolder,
+            Some("Meta+Alt+f"),
+            false,
+        )?;
         state.root.append(&edit)?;
 
         let format = Submenu::new("Format", true);
@@ -413,6 +421,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
         Command::QuickOpen => (ready && app.folder.root().is_some(), false),
         Command::OpenRecent(index) => (ready && index < app.workspace.recent().len(), false),
         Command::ClearRecent => (!app.workspace.recent().is_empty(), false),
+        Command::FindInFolder => (ready && app.folder.root().is_some(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),
         Command::Mode(mode) => (ready, app.mode == mode),
         Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
@@ -511,6 +520,7 @@ impl App {
             Command::SaveAs => Message::SaveAs,
             Command::Export => Message::Export,
             Command::Find => Message::ToggleSearch,
+            Command::FindInFolder => Message::FolderSearch(super::folder_search::Message::Open),
             Command::Settings => Message::ShowSettings,
             Command::Welcome => Message::Welcome,
             Command::Guide => Message::Guide,

@@ -167,6 +167,12 @@ Moving an active file updates its path without reinstalling its document or
 discarding history. Recovery identities rotate when that path changes. See
 [files and folders](writing-workflows.md#files-and-folders) for limits and behavior.
 
+Find in Folder searches the same workspace paths on a bounded worker. The
+worker uses an immutable snapshot of the active file's buffer. A selected
+result goes through the ordinary opening and save guards, and its source
+digest is checked before selecting its byte range. Query changes and dialog
+dismissal cancel the worker.
+
 Markdown/checkpoint publication uses cooperative locks, checked baselines, atomic
 writes, and a recovery journal. Conflicts preserve files and surface an error.
 Each reopen uses a fresh writer identity. See [persistence and recovery](collaboration.md#persistence-and-recovery)

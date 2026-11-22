@@ -10,6 +10,8 @@ Within a workspace, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle F
 
 **Quick Open** (Cmd/Ctrl+P, or the search icon in Files) finds Markdown files by filename or relative path, including files in collapsed folders. Type one or more terms, use Up/Down to choose a result, and Enter to open it. Escape returns focus to where you were working. Opening a different file uses the usual Save/Discard/Cancel guard. The search is cleared when closed.
 
+**Find in Folder** (Cmd/Ctrl+Alt+F) searches Markdown text in the current workspace. Type a phrase and press Enter. Choose a result to open its file and select the match. Escape returns to writing.
+
 Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter.
 
 Hover a file or folder to reveal its actions, or right-click it. A folder's menu offers **New document…** and **New folder…**; items below the root also offer **Rename** and **Move to…**. **Show location** displays the full path and can open its containing folder. Drag a file or folder onto another folder, or into the tree’s empty space to move it to the workspace root. A small preview and highlighted destination show where it will go; pausing over a collapsed folder opens it. Escape cancels the drag. Moves preserve unsaved writing and text undo; collisions, cross-filesystem moves, and references that cannot be preserved produce an error. There is no delete action. **Undo move** appears in a contextual notice and remains available in the document-name menu.
@@ -55,6 +57,7 @@ fn main() {
 | Cmd/Ctrl + Shift + B | Toggle Files |
 | Cmd/Ctrl + Alt + O | Toggle Outline |
 | Cmd/Ctrl + F | Find and replace |
+| Cmd/Ctrl + Alt + F | Find in Folder |
 | Cmd/Ctrl + B | Bold selection |
 | Cmd/Ctrl + I | Italic selection |
 | Cmd/Ctrl + K | Create or edit a link |

@@ -200,6 +200,10 @@ impl State {
             .filter(|entry| !entry.is_directory)
             .map(|entry| entry.path.as_path())
     }
+    pub(super) fn incomplete(&self) -> bool {
+        self.limited || !self.warnings.is_empty()
+    }
+
     pub(super) fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
     }
@@ -365,9 +369,14 @@ impl App {
                         if reveal {
                             self.reveal_navigation();
                         }
+                        let search = if changed {
+                            self.cancel_folder_search()
+                        } else {
+                            Task::none()
+                        };
                         let root = self.folder.root.clone().expect("root was just set");
                         let workspace = self.workspace_scanned(&root);
-                        return Task::batch([workspace, self.refresh_quick_open()]);
+                        return Task::batch([workspace, self.refresh_quick_open(), search]);
                     }
                     Err(error) => {
                         let error = error.to_string();

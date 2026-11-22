@@ -20,7 +20,8 @@ An always-visible titlebar offers formatting on demand and a document menu for e
 modes. Writing uses sans-serif text by default, with serif available in Settings. macOS uses native application menus. Configurable word count and reading
 time sit below the writing area. A folder is a remembered workspace: Dosty reopens
 the last one with its document, caret, expanded folders and sidebars, and lists
-recent folders under Open Recent.
+recent folders under Open Recent. Find in Folder (Cmd/Ctrl+Alt+F) searches
+the contents of workspace Markdown files.
 
 See the [writing guide](assets/guide.md) for everyday editing and
 [table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.

@@ -114,6 +114,22 @@ Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/
 
 Up/Down selects a result without moving the query caret; Enter opens it through the existing file-loading and Save/Discard/Cancel guards. Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active workspace documents come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
 
+### Find in Folder
+
+Press Cmd/Ctrl+Alt+F to search the current workspace. Enter a literal,
+case-sensitive phrase and press Enter or choose **Search**. Results show a
+short excerpt, relative filename, and line number. Use Up/Down and Enter, or
+click a result, to select the match in its document. Matches in concealed
+Markdown syntax open in Source. Opening another file uses Save/Discard/Cancel.
+If a result changed after the search, run the search again to update its location.
+
+Find in Folder uses the current Files snapshot and includes unsaved text in the
+active workspace file. Refresh the folder to discover newly added files. A
+search examines up to 4,096 files and 128 MiB of text, and shows up to 100
+matches. The result status reports omissions due to scan limits and unreadable
+files. Search reads run off the UI thread and cancel when the query changes or
+the dialog closes.
+
 ## Writing and details
 
 - **Link:** select a phrase and use Cmd/Ctrl+K or the link control. Apply edits

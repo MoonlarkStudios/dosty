@@ -825,6 +825,12 @@ impl App {
                         AppMessage::ToggleSearch,
                         true,
                     ),
+                    Command::action(
+                        "Find in folder…",
+                        Icon::Search,
+                        AppMessage::FolderSearch(super::folder_search::Message::Open),
+                        ready && self.folder.root().is_some(),
+                    ),
                     Command::menu("Formatting…", Icon::Heading, Menu::Format),
                     Command::menu("Edit…", Icon::Document, Menu::Edit),
                     Command::menu("View…", Icon::Sidebar, Menu::Navigation),
