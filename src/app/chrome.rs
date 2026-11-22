@@ -9,6 +9,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Event, Fill, Padding, Size, Task, window};
 
+use super::trail::Direction;
 use super::{
     App, EDITOR, EditorMode, Format, Message as AppMessage, Overlay, Sidebar, folder, recovery,
     writing,
@@ -116,7 +117,7 @@ pub enum Menu {
     Help,
     Navigation,
     Preferences,
-    Recent,
+    Places,
     Workspace,
 }
 
@@ -272,13 +273,12 @@ fn reading_time(words: usize) -> String {
 
 impl App {
     pub(super) fn show_sidebar(&mut self, side: Sidebar) -> Task<AppMessage> {
-        if side == Sidebar::Files && self.folder.root().is_none() {
-            return Task::none();
-        }
         self.chrome.sidebars_hidden = false;
         self.chrome.panel_mut(side).open = true;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
-        if side == Sidebar::Files {
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
+        // Without an open place the sidebar has no tree to take the keyboard.
+        if side == Sidebar::Files && self.folder.root().is_some() {
             self.editor_focused = false;
             operation::focus(crate::editor::file_tree::ID)
         } else {
@@ -294,7 +294,8 @@ impl App {
             return self.show_sidebar(side);
         }
         self.chrome.panel_mut(side).open = false;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         operation::focus(EDITOR)
     }
 
@@ -302,9 +303,7 @@ impl App {
         if self.chrome.sidebars_hidden {
             return (false, false);
         }
-        let files = self.folder.root().is_some()
-            && self.chrome.files.open
-            && width >= FILES_WIDTH + MIN_WRITING_WIDTH;
+        let files = self.chrome.files.open && width >= FILES_WIDTH + MIN_WRITING_WIDTH;
         let remaining = width - if files { FILES_WIDTH } else { 0.0 };
         let outline = self.chrome.outline.open && remaining >= OUTLINE_WIDTH + MIN_WRITING_WIDTH;
         (files, outline)
@@ -333,10 +332,8 @@ impl App {
         ]
         .height(Fill);
         let mut layers = iced::widget::stack![writing];
-        let files_floating = self.folder.root().is_some()
-            && self.chrome.files.open
-            && !files_docked
-            && !self.chrome.sidebars_hidden;
+        let files_floating =
+            self.chrome.files.open && !files_docked && !self.chrome.sidebars_hidden;
         let outline_floating =
             self.chrome.outline.open && !outline_docked && !self.chrome.sidebars_hidden;
         if files_floating || outline_floating {
@@ -438,7 +435,7 @@ impl App {
                             | Menu::Format
                             | Menu::Navigation
                             | Menu::Preferences
-                            | Menu::Recent
+                            | Menu::Places
                             | Menu::Workspace
                     )
                 ) {
@@ -481,14 +478,16 @@ impl App {
             return Task::none();
         }
         self.chrome.sidebars_hidden = !self.chrome.sidebars_hidden;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         operation::focus(EDITOR)
     }
 
     pub(super) fn reveal_navigation(&mut self) {
         self.chrome.sidebars_hidden = false;
         self.chrome.files.open = true;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
     }
 
     /// Whether an Edit command can act on the widget that will receive it.
@@ -504,8 +503,8 @@ impl App {
         !self.loading
             && (field_focused
                 || match command {
-                    menu_input::Command::Undo => self.document.can_undo(),
-                    menu_input::Command::Redo => self.document.can_redo(),
+                    menu_input::Command::Undo => self.session.document.can_undo(),
+                    menu_input::Command::Redo => self.session.document.can_redo(),
                     _ => self.mode != EditorMode::Read,
                 })
     }
@@ -515,9 +514,9 @@ impl App {
             SaveState::Saving
         } else if self.chrome.save_error.is_some() {
             SaveState::Failed
-        } else if self.path.is_none() {
+        } else if self.session.path.is_none() {
             SaveState::Unsaved
-        } else if self.dirty {
+        } else if self.session.dirty {
             SaveState::Modified
         } else {
             SaveState::Saved
@@ -525,14 +524,14 @@ impl App {
     }
 
     fn writing_statistics(&self) -> String {
-        let words = self.document.words();
+        let words = self.session.document.words();
         let mut parts = Vec::with_capacity(2);
         if self.preferences.show_word_count {
             parts.push(
-                if self.mode != EditorMode::Read && !self.selection.is_caret() {
+                if self.mode != EditorMode::Read && !self.session.selection.is_caret() {
                     format!(
                         "{} selected",
-                        word_label(self.document.selected_words(self.selection))
+                        word_label(self.session.document.selected_words(self.session.selection))
                     )
                 } else {
                     word_label(words)
@@ -576,8 +575,8 @@ impl App {
 
     pub(super) fn statistics_popover(&self, size: Size) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let words = self.document.words();
-        let characters = self.document.source().chars().count();
+        let words = self.session.document.words();
+        let characters = self.session.document.source().chars().count();
         let close = self.titlebar_icon(
             Icon::Close,
             "Close statistics",
@@ -670,18 +669,13 @@ impl App {
                     ))
                     .into()
             };
-            let files: Element<'_, AppMessage> = if self.folder.root().is_some() {
-                container(self.titlebar_icon(
-                    Icon::Sidebar,
-                    "Workspace / Files · ⌘/Ctrl Shift B",
-                    AppMessage::ToggleSidebar(Sidebar::Files),
-                    self.chrome.files.open && !self.chrome.sidebars_hidden,
-                ))
-                .id("titlebar-files")
-                .into()
-            } else {
-                space().width(0).into()
-            };
+            let files = container(self.titlebar_icon(
+                Icon::Sidebar,
+                "Files · ⌘/Ctrl Shift B",
+                AppMessage::ToggleSidebar(Sidebar::Files),
+                self.chrome.files.open && !self.chrome.sidebars_hidden,
+            ))
+            .id("titlebar-files");
             let left = row![space().width(native_inset), files, file,]
                 .spacing(4)
                 .align_y(Alignment::Center)
@@ -689,7 +683,7 @@ impl App {
             let name =
                 tooltip(
                     button(
-                        text(&self.display_name)
+                        text(&self.session.display_name)
                             .size(12)
                             .wrapping(text::Wrapping::None),
                     )
@@ -697,7 +691,7 @@ impl App {
                     .on_press(AppMessage::Chrome(Message::Menu(Menu::Document)))
                     .style(styles::button_style(tokens, Button::Quiet)),
                     container(
-                        text(self.path.as_ref().map_or_else(
+                        text(self.session.path.as_ref().map_or_else(
                             || "Not saved yet".into(),
                             |path| path.display().to_string(),
                         ))
@@ -872,25 +866,34 @@ impl App {
         let ready = !self.busy;
         match menu {
             Menu::File => {
-                let new = self.folder.root().map_or(AppMessage::New, |root| {
-                    AppMessage::Folder(folder::Message::NewDocument(root.to_owned()))
-                });
                 vec![
-                    Command::action("New document", Icon::Plus, new, ready),
+                    Command::action("New document", Icon::Plus, AppMessage::New, ready),
                     Command::action("Open file…", Icon::Document, AppMessage::Open, ready),
                     Command::action(
                         "Quick Open…",
                         Icon::Search,
                         AppMessage::QuickOpen(super::quick_open::Message::Open),
-                        ready && self.folder.root().is_some(),
+                        ready,
                     ),
                     Command::action(
-                        "Open folder…",
+                        "Back",
+                        Icon::Document,
+                        AppMessage::Step(Direction::Back),
+                        ready && self.trail.can_step(Direction::Back),
+                    ),
+                    Command::action(
+                        "Forward",
+                        Icon::Document,
+                        AppMessage::Step(Direction::Forward),
+                        ready && self.trail.can_step(Direction::Forward),
+                    ),
+                    Command::action(
+                        "Add place…",
                         Icon::Folder,
                         AppMessage::Folder(folder::Message::Pick),
                         ready,
                     ),
-                    Command::menu("Open recent…", Icon::Folder, Menu::Recent),
+                    Command::menu("Places…", Icon::Folder, Menu::Places),
                     Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                     Command::menu("Document actions…", Icon::Document, Menu::Document),
                     Command::action("Export HTML…", Icon::Export, AppMessage::Export, ready),
@@ -930,7 +933,15 @@ impl App {
                     Command::action("Save", Icon::Save, AppMessage::Save, ready),
                     Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                 ];
-                if let Some(path) = &self.path {
+                if self.session.path.is_none() {
+                    commands.push(Command::action(
+                        "Name…",
+                        Icon::Document,
+                        AppMessage::Folder(folder::Message::NameDraft),
+                        ready,
+                    ));
+                }
+                if let Some(path) = &self.session.path {
                     commands.extend([
                         Command::action(
                             "Rename…",
@@ -991,7 +1002,7 @@ impl App {
                     "Files",
                     Icon::Folder,
                     AppMessage::ToggleSidebar(Sidebar::Files),
-                    self.folder.root().is_some(),
+                    true,
                 ),
                 Command::action(
                     "Outline",
@@ -1022,55 +1033,45 @@ impl App {
                     self.chrome.files.open || self.chrome.outline.open,
                 ),
             ],
-            Menu::Recent => {
-                let recent = self.workspace.recent();
-                let mut commands: Vec<_> = recent
+            Menu::Places => {
+                let places = self.workspace.places();
+                let mut commands: Vec<_> = places
                     .iter()
                     .enumerate()
                     .map(|(index, root)| {
                         Command::action(
-                            super::workspace::recent_label(root, recent),
+                            super::workspace::place_label(root, places),
                             if self.folder.root() == Some(root.as_path()) {
                                 Icon::Check
                             } else {
                                 Icon::Folder
                             },
-                            AppMessage::Workspace(super::workspace::Message::OpenRecent(index)),
+                            AppMessage::Workspace(super::workspace::Message::OpenPlace(index)),
                             ready,
                         )
                     })
                     .collect();
                 if commands.is_empty() {
                     commands.push(Command::action(
-                        "No recent folders",
+                        "No places yet",
                         Icon::Folder,
                         AppMessage::Dismiss,
                         false,
-                    ));
-                } else {
-                    commands.push(Command::action(
-                        "Clear recent folders",
-                        Icon::Close,
-                        AppMessage::Workspace(super::workspace::Message::ClearRecent),
-                        true,
                     ));
                 }
                 commands
             }
             Menu::Workspace => {
-                let mut commands = vec![Command::action(
-                    if self.folder.root().is_some() {
-                        "Switch folder…"
-                    } else {
-                        "Open folder…"
-                    },
+                let mut commands = Vec::new();
+                if self.workspace.places().len() > 1 {
+                    commands.push(Command::menu("Places…", Icon::Folder, Menu::Places));
+                }
+                commands.push(Command::action(
+                    "Add place…",
                     Icon::Folder,
                     AppMessage::Folder(folder::Message::Pick),
                     ready,
-                )];
-                if self.workspace.recent().len() > 1 {
-                    commands.push(Command::menu("Open recent…", Icon::Folder, Menu::Recent));
-                }
+                ));
                 if let Some(root) = self.folder.root() {
                     commands.extend([
                         Command::action(
@@ -1108,9 +1109,9 @@ impl App {
                             ready,
                         ),
                         Command::action(
-                            "Close folder",
+                            "Remove from library",
                             Icon::Close,
-                            AppMessage::Folder(folder::Message::Close),
+                            AppMessage::Folder(folder::Message::Remove),
                             ready,
                         ),
                     ]);

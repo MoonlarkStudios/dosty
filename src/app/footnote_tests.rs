@@ -13,19 +13,19 @@ fn app(source: &str) -> App {
 fn send(app: &mut App, message: AppMessage) {
     drop(app.update(message));
     assert_eq!(
-        app.document.source(),
-        app.document.collaboration().materialize()
+        app.session.document.source(),
+        app.session.document.collaboration().materialize()
     );
     let fresh = Projection::with_context(
-        app.document.source(),
-        (app.mode == EditorMode::Live && app.editor_focused).then_some(app.selection.head),
+        app.session.document.source(),
+        (app.mode == EditorMode::Live && app.editor_focused).then_some(app.session.selection.head),
     );
     assert_eq!(app.projection.text, fresh.text);
     assert_eq!(app.projection.footnotes(), fresh.footnotes());
     assert_eq!(
         app.editor.snapshot(),
         if app.mode == EditorMode::Source {
-            app.document.source()
+            app.session.document.source()
         } else {
             &app.projection.text
         }
@@ -68,23 +68,23 @@ fn insertion_preserves_prose_reverse_selection_crlf_and_one_undo_group() {
                 .as_ref()
                 .and_then(|form| form.error.as_ref())
         );
-        let edited = app.document.source().to_owned();
-        let after = app.selection;
+        let edited = app.session.document.source().to_owned();
+        let after = app.session.selection;
         assert_eq!(app.projection.footnotes().references.len(), 1);
         assert_eq!(app.projection.footnotes().definitions.len(), 1);
         assert!(edited.contains("[^note-1]"));
         if !selection.is_caret() {
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.selection, selection);
         }
         if source.contains("\r\n") {
             assert!(!edited.replace("\r\n", "").contains('\n'));
         }
         send(&mut app, AppMessage::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         send(&mut app, AppMessage::Redo);
-        assert_eq!(app.document.source(), edited);
-        assert_eq!(app.selection, after);
+        assert_eq!(app.session.document.source(), edited);
+        assert_eq!(app.session.selection, after);
     }
 }
 
@@ -97,8 +97,8 @@ fn existing_multiline_definition_is_unchanged_until_explicitly_edited() {
     tool(&mut app, Message::Details);
     assert_eq!(app.footnotes.form.as_ref().unwrap().number, Some(1));
     tool(&mut app, Message::Apply);
-    assert_eq!(app.document.source(), source);
-    assert!(!app.document.can_undo());
+    assert_eq!(app.session.document.source(), source);
+    assert!(!app.session.document.can_undo());
     tool(&mut app, Message::Details);
     body(
         &mut app,
@@ -107,14 +107,20 @@ fn existing_multiline_definition_is_unchanged_until_explicitly_edited() {
     tool(&mut app, Message::Apply);
     assert!(app.overlay.is_none());
     assert!(
-        app.document
+        app.session
+            .document
             .source()
             .contains("[^shared]: A changed **note**.")
     );
-    assert!(app.document.source().contains("[^SHARED]"));
-    assert!(app.document.source().contains("[^unused]: An unreferenced"));
+    assert!(app.session.document.source().contains("[^SHARED]"));
+    assert!(
+        app.session
+            .document
+            .source()
+            .contains("[^unused]: An unreferenced")
+    );
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
 }
 
 #[test]
@@ -128,8 +134,11 @@ fn navigation_returns_to_stable_reverse_selection_after_remote_edits() {
     send(&mut app, AppMessage::SelectSource(selection));
     tool(&mut app, Message::Details);
     tool(&mut app, Message::Definition);
-    assert_eq!(app.selection.head, source.find("Definition").unwrap());
-    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+    assert_eq!(
+        app.session.selection.head,
+        source.find("Definition").unwrap()
+    );
+    let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     peer.replace(0..0, "Remote.\n\n").unwrap();
     send(
         &mut app,
@@ -137,13 +146,13 @@ fn navigation_returns_to_stable_reverse_selection_after_remote_edits() {
     );
     tool(&mut app, Message::Back);
     assert_eq!(
-        app.selection,
+        app.session.selection,
         Selection {
             anchor: selection.anchor + 9,
             head: selection.head + 9
         }
     );
-    assert!(!app.document.can_undo());
+    assert!(!app.session.document.can_undo());
 }
 
 #[test]
@@ -154,7 +163,7 @@ fn stable_dialog_allows_unrelated_remote_edits_and_rejects_body_overlap() {
         send(&mut app, AppMessage::SelectSource(Selection::caret(5)));
         tool(&mut app, Message::Details);
         body(&mut app, "Revised note.");
-        let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+        let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
         let at = if overlap {
             source.find("Original").unwrap()
         } else {
@@ -165,17 +174,22 @@ fn stable_dialog_allows_unrelated_remote_edits_and_rejects_body_overlap() {
             &mut app,
             AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
         );
-        let before = app.document.source().to_owned();
+        let before = app.session.document.source().to_owned();
         tool(&mut app, Message::Apply);
         if overlap {
-            assert_eq!(app.document.source(), before);
+            assert_eq!(app.session.document.source(), before);
             assert!(app.footnotes.form.as_ref().unwrap().error.is_some());
         } else {
             assert!(app.overlay.is_none());
-            assert!(app.document.source().starts_with("Remote Prose"));
-            assert!(app.document.source().contains("[^n]: Revised note."));
+            assert!(app.session.document.source().starts_with("Remote Prose"));
+            assert!(
+                app.session
+                    .document
+                    .source()
+                    .contains("[^n]: Revised note.")
+            );
             send(&mut app, AppMessage::Undo);
-            assert_eq!(app.document.source(), before);
+            assert_eq!(app.session.document.source(), before);
         }
     }
 }
@@ -188,7 +202,7 @@ fn missing_notes_can_be_defined_and_duplicate_labels_cannot_be_overwritten() {
     tool(&mut missing, Message::Details);
     body(&mut missing, "Now defined.");
     tool(&mut missing, Message::Apply);
-    assert_eq!(missing.document.source().matches("[^n]").count(), 2);
+    assert_eq!(missing.session.document.source().matches("[^n]").count(), 2);
     assert_eq!(missing.projection.footnotes().references[0].number, Some(1));
     let source = "Note[^n].\n\n[^n]: One.\n\n[^N]: Two.\n";
     let mut duplicate = app(source);
@@ -199,7 +213,7 @@ fn missing_notes_can_be_defined_and_duplicate_labels_cannot_be_overwritten() {
     tool(&mut duplicate, Message::Details);
     body(&mut duplicate, "Overwrite neither.");
     tool(&mut duplicate, Message::Apply);
-    assert_eq!(duplicate.document.source(), source);
+    assert_eq!(duplicate.session.document.source(), source);
     assert!(duplicate.footnotes.form.as_ref().unwrap().error.is_some());
 }
 
@@ -212,7 +226,8 @@ fn label_collision_and_stale_session_or_reference_fail_without_source_edits() {
         body(&mut app, "New note.");
         let label = app.footnotes.form.as_ref().unwrap().label.clone();
         if scenario == 0 {
-            let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+            let mut peer =
+                Document::from_state(&app.session.document.collaboration().state()).unwrap();
             peer.replace(
                 source.len()..source.len(),
                 &format!("\n\n[^{label}]: Remote definition.\n"),
@@ -223,7 +238,8 @@ fn label_collision_and_stale_session_or_reference_fail_without_source_edits() {
                 AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
             );
         } else if scenario == 1 {
-            let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+            let mut peer =
+                Document::from_state(&app.session.document.collaboration().state()).unwrap();
             peer.replace(
                 source.len()..source.len(),
                 &format!("\n\nUnresolved[^{label}].\n"),
@@ -239,9 +255,9 @@ fn label_collision_and_stale_session_or_reference_fail_without_source_edits() {
             app.footnotes.form = form;
             app.overlay = Some(Overlay::Footnote);
         }
-        let before = app.document.source().to_owned();
+        let before = app.session.document.source().to_owned();
         tool(&mut app, Message::Apply);
-        assert_eq!(app.document.source(), before);
+        assert_eq!(app.session.document.source(), before);
         assert!(app.footnotes.form.as_ref().unwrap().error.is_some());
     }
 }
@@ -257,7 +273,7 @@ fn invalid_continuation_and_code_context_do_not_publish_broken_notes() {
         "Note.\n\nA paragraph outside the definition.",
     );
     tool(&mut existing, Message::Apply);
-    assert_eq!(existing.document.source(), source);
+    assert_eq!(existing.session.document.source(), source);
     assert!(existing.footnotes.form.as_ref().unwrap().error.is_some());
     let source = "```text\nLiteral text\n```\n";
     let mut code = app(source);
@@ -265,7 +281,7 @@ fn invalid_continuation_and_code_context_do_not_publish_broken_notes() {
     tool(&mut code, Message::Details);
     body(&mut code, "Cannot insert here.");
     tool(&mut code, Message::Apply);
-    assert_eq!(code.document.source(), source);
+    assert_eq!(code.session.document.source(), source);
     assert!(code.footnotes.form.as_ref().unwrap().error.is_some());
 }
 
@@ -286,14 +302,17 @@ fn opening_a_reference_elsewhere_returns_to_that_reference_after_navigation() {
             tool(&mut app, Message::OpenAt(at));
         }
         tool(&mut app, Message::Definition);
-        let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+        let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
         peer.replace(0..0, "Remote ").unwrap();
         send(
             &mut app,
             AppMessage::ReplicaLoaded(Ok(peer.collaboration().state())),
         );
         tool(&mut app, Message::Back);
-        assert_eq!(app.selection, Selection::caret(at + "Remote ".len()));
+        assert_eq!(
+            app.session.selection,
+            Selection::caret(at + "Remote ".len())
+        );
     }
 }
 
@@ -323,9 +342,14 @@ fn escaped_label_details_edit_the_complete_body_and_preview_removes_note_indenta
             .as_ref()
             .and_then(|form| form.error.as_ref())
     );
-    assert!(app.document.source().contains("[^a\\]:b]: Revised body."));
+    assert!(
+        app.session
+            .document
+            .source()
+            .contains("[^a\\]:b]: Revised body.")
+    );
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
 }
 
 #[test]
@@ -366,13 +390,13 @@ fn command_click_uses_measured_reference_bounds_and_does_not_move_the_caret() {
         let mut editor = RichEditor::new(
             app.editor.content(),
             &app.projection,
-            app.document.source(),
+            app.session.document.source(),
             &app.resolved_theme,
             &app.images,
             Binding::from_key_press,
         )
-        .collaboration(app.document.collaboration())
-        .selection(app.selection)
+        .collaboration(app.session.document.collaboration())
+        .selection(app.session.selection)
         .focused(true);
         let mut tree = widget::Tree::new(&editor as &dyn Widget<AppMessage, iced::Theme, Renderer>);
         let node = editor.layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
@@ -403,10 +427,10 @@ fn command_click_uses_measured_reference_bounds_and_does_not_move_the_caret() {
     for message in messages {
         send(&mut app, message)
     }
-    assert_eq!(app.selection, before);
+    assert_eq!(app.session.selection, before);
     tool(&mut app, Message::Definition);
     tool(&mut app, Message::Back);
-    assert_eq!(app.selection, Selection::caret(reference.start));
+    assert_eq!(app.session.selection, Selection::caret(reference.start));
 }
 
 #[test]
@@ -418,12 +442,13 @@ fn fenced_code_is_retained_in_read_and_cached_definition_preview() {
     assert!(form.preview.iter().any(|item| matches!(item, markdown::Item::CodeBlock { code, .. } if code.contains("let café = 1;"))));
     let definition = &app.projection.footnotes().definitions[0];
     let index = app
+        .session
         .document
         .blocks()
         .iter()
         .position(|block| block.range.start == definition.range.start)
         .unwrap();
-    assert!(app.document.rendered_with_footnotes(index, app.projection.footnotes()).iter().any(|item| matches!(item, markdown::Item::CodeBlock { code, .. } if code.contains("let café = 1;"))));
+    assert!(app.session.document.rendered_with_footnotes(index, app.projection.footnotes()).iter().any(|item| matches!(item, markdown::Item::CodeBlock { code, .. } if code.contains("let café = 1;"))));
 }
 
 #[test]
@@ -444,10 +469,10 @@ fn existing_notes_allow_harmless_trailing_lines_and_empty_no_op() {
                 .and_then(|form| form.error.as_ref())
         );
         if source.contains("Note.") {
-            assert!(app.document.source().contains("Revised note.\n\n"));
+            assert!(app.session.document.source().contains("Revised note.\n\n"));
             send(&mut app, AppMessage::Undo);
         }
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
     }
 }
 
