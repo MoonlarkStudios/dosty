@@ -28,13 +28,22 @@ use crate::io::image_store::{ImageStore, LoadedImage};
 use crate::io::storage::{self, FileError, LoadedFile, Preferences};
 use crate::theme::styles::{self, Button};
 use crate::theme::{Preset, ResolvedTheme, WritingFont};
+use background::{Background, Parked};
+use session::Session;
+use trail::{Direction, Trail};
 
+#[path = "background.rs"]
+mod background;
 #[path = "chrome.rs"]
 pub(super) mod chrome;
 #[path = "folder.rs"]
 pub(super) mod folder;
 #[path = "footnotes.rs"]
 pub(super) mod footnotes;
+#[path = "home.rs"]
+mod home;
+#[path = "image_preview.rs"]
+pub(super) mod image_preview;
 #[path = "document_links.rs"]
 pub(super) mod links;
 #[cfg(target_os = "macos")]
@@ -46,10 +55,14 @@ pub(super) mod outline;
 pub(super) mod quick_open;
 #[path = "recovery.rs"]
 mod recovery;
+#[path = "session.rs"]
+mod session;
 #[path = "table.rs"]
 pub(super) mod table;
 #[path = "table_grid.rs"]
 pub(super) mod table_grid;
+#[path = "trail.rs"]
+pub(super) mod trail;
 #[path = "workspace.rs"]
 pub(super) mod workspace;
 #[path = "writing.rs"]
@@ -78,10 +91,16 @@ mod theme_tests;
 #[path = "task_tests.rs"]
 mod task_tests;
 
+#[cfg(test)]
+#[path = "draft_tests.rs"]
+mod draft_tests;
+
 pub struct App {
     #[cfg(target_os = "macos")]
     accessibility: Option<accessibility::State>,
-    document: Document,
+    session: Session,
+    background: Background,
+    trail: Trail,
     editor: native_buffer::Buffer,
     native_edited: bool,
     edit_error: Option<String>,
@@ -94,13 +113,6 @@ pub struct App {
     projection_revision: Option<u64>,
     editor_focused: bool,
     images: ImageStore,
-    selection: Selection,
-    path: Option<PathBuf>,
-    display_name: String,
-    saved_source: String,
-    saved_version: Option<String>,
-    saved_generation: u64,
-    dirty: bool,
     busy: bool,
     loading: bool,
     resolved_theme: ResolvedTheme,
@@ -118,6 +130,7 @@ pub struct App {
     folder: folder::State,
     workspace: workspace::State,
     quick_open: quick_open::State,
+    image_preview: image_preview::State,
     overlay: Option<Overlay>,
     pending: Option<Pending>,
     search_open: bool,
@@ -150,6 +163,7 @@ pub enum Message {
     NativeMenusReady,
     Chrome(chrome::Message),
     Folder(folder::Message),
+    ImagePreview(image_preview::Message),
     Workspace(workspace::Message),
     QuickOpen(quick_open::Message),
     #[cfg(target_os = "macos")]
@@ -211,6 +225,10 @@ pub enum Message {
     },
     Append,
     Navigate(i32),
+    /// Go back or forward through the documents visited in this window.
+    Step(Direction),
+    /// Return an unsaved background document to the page.
+    Resume(session::SessionId),
     Format(Format),
     Undo,
     Redo,
@@ -223,7 +241,8 @@ pub enum Message {
     SaveAs,
     ChosenFile(Option<PathBuf>),
     Loaded(Result<LoadedFile, FileError>),
-    LoadedLinked(Result<LoadedFile, FileError>, Option<links::Jump>),
+    LoadedLinked(Result<LoadedFile, FileError>, links::Jump),
+    ResolvedLinked(Result<PathBuf, FileError>, Option<links::Jump>),
     Saved {
         result: Result<PathBuf, FileError>,
         source: Arc<String>,
@@ -303,6 +322,7 @@ enum Overlay {
     Backlinks,
     Footnote,
     Recovery,
+    Image,
 }
 
 #[derive(Debug, Clone)]
@@ -310,7 +330,6 @@ enum Pending {
     FolderNew(PathBuf),
     New,
     Open(Option<PathBuf>),
-    OpenLinked(PathBuf, Option<links::Jump>),
     Replica,
     Guide,
     Welcome,
@@ -333,12 +352,14 @@ impl App {
             .cloned()
             .unwrap_or_else(|| preset_themes[0].clone());
         resolved_theme.typography.font = preferences.writing_font;
-        let source = String::new();
-        let projection = Projection::new(&source);
+        let session = Session::new(Document::new(String::new()), None, "Untitled.md".into());
+        let projection = Projection::new(session.document.source());
         let mut app = Self {
             #[cfg(target_os = "macos")]
             accessibility: None,
-            document: Document::new(source.clone()),
+            session,
+            background: Background::default(),
+            trail: Trail::default(),
             editor: native_buffer::Buffer::new(&projection.text),
             native_edited: false,
             edit_error: None,
@@ -351,13 +372,6 @@ impl App {
             projection,
             projection_revision: Some(0),
             editor_focused: false,
-            selection: Selection::default(),
-            path: None,
-            display_name: "Untitled.md".into(),
-            saved_source: source,
-            saved_version: None,
-            saved_generation: 0,
-            dirty: false,
             busy: false,
             loading: false,
             resolved_theme,
@@ -375,6 +389,7 @@ impl App {
             folder: folder::State::default(),
             workspace: workspace::State::default(),
             quick_open: quick_open::State::default(),
+            image_preview: image_preview::State::default(),
             overlay: None,
             pending: None,
             search_open: false,
@@ -399,7 +414,8 @@ impl App {
                 .then(|| Arc::new(crate::io::table_clipboard::Clipboard::default())),
         };
         app.sync_editor();
-        app.selection = app.projection.normalize_caret(app.selection);
+        app.session.selection = app.projection.normalize_caret(app.session.selection);
+        app.trail.visit(app.session.id(), None);
         let theme_task = if let Some(path) = app.preferences.custom_theme.clone() {
             Task::perform(
                 async move {
@@ -441,8 +457,8 @@ impl App {
     pub fn title(&self) -> String {
         format!(
             "{}{} — Dosty",
-            if self.dirty { "● " } else { "" },
-            self.display_name
+            if self.session.dirty { "● " } else { "" },
+            self.session.display_name
         )
     }
 
@@ -460,11 +476,12 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            if self.dirty
-                && !self.loading
-                && self
-                    .recovery
-                    .needs_checkpoint(self.document.collaboration().generation())
+            if self.background.needing_checkpoint().is_some()
+                || (self.session.dirty
+                    && !self.loading
+                    && self
+                        .recovery
+                        .needs_checkpoint(self.session.document.collaboration().generation()))
             {
                 iced::time::every(std::time::Duration::from_secs(1))
                     .map(|_| Message::Recovery(recovery::Message::Tick))
@@ -492,7 +509,7 @@ impl App {
         let measure_accessibility = !matches!(message, Message::AccessibilityLayout(_));
         #[cfg(test)]
         {
-            self.document.costs = Default::default();
+            self.session.document.costs = Default::default();
         }
         let task = self.update_message(message);
         #[cfg(target_os = "macos")]
@@ -509,7 +526,10 @@ impl App {
         self.images
             .request(
                 &self.projection.rich.images,
-                self.path.as_deref().and_then(std::path::Path::parent),
+                self.session
+                    .path
+                    .as_deref()
+                    .and_then(std::path::Path::parent),
             )
             .map(|completion| Message::ImageLoaded {
                 key: completion.key,
@@ -627,7 +647,7 @@ impl App {
             let stable = if self.grid.draft.is_some()
                 && let Message::SelectSource(selection) = message
             {
-                Some(self.document.collaboration().selection(selection))
+                Some(self.session.document.collaboration().selection(selection))
             } else {
                 None
             };
@@ -637,7 +657,8 @@ impl App {
                         writing::Message::OpenAt(point) | writing::Message::ImageAt(point),
                     )
                     | Message::Footnote(footnotes::Message::OpenAt(point)) => Some(
-                        self.document
+                        self.session
+                            .document
                             .collaboration()
                             .position(*point, yrs::Assoc::After),
                     ),
@@ -650,13 +671,17 @@ impl App {
                 return Task::none();
             }
             if let Some(stable) = stable
-                && let Some(selection) = self.document.collaboration().resolve_selection(&stable)
+                && let Some(selection) = self
+                    .session
+                    .document
+                    .collaboration()
+                    .resolve_selection(&stable)
             {
                 message = Message::SelectSource(selection);
             }
             if let Some(point) = stable_point
                 .as_ref()
-                .and_then(|p| self.document.collaboration().resolve(p))
+                .and_then(|p| self.session.document.collaboration().resolve(p))
             {
                 match &mut message {
                     Message::Writing(
@@ -774,6 +799,7 @@ impl App {
             Message::NativeMenusReady => self.attach_native_menus(),
             Message::Chrome(message) => return self.update_chrome(message),
             Message::Folder(message) => return self.update_folder(message),
+            Message::ImagePreview(message) => return self.update_image_preview(message),
             Message::Workspace(message) => return self.update_workspace(message),
             Message::QuickOpen(message) => return self.update_quick_open(message),
             #[cfg(target_os = "macos")]
@@ -796,15 +822,19 @@ impl App {
             Message::Links(message) => return self.update_document_links(message),
             Message::Recovery(message) => return self.update_recovery(message),
             Message::CommitComposition { target, text } => {
-                if let Some(selection) = self.document.collaboration().resolve_composition(&target)
+                if let Some(selection) = self
+                    .session
+                    .document
+                    .collaboration()
+                    .resolve_composition(&target)
                 {
-                    self.selection = selection.clamp(self.document.source());
+                    self.session.selection = selection.clamp(self.session.document.source());
                     self.sync_editor();
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                     let task = self.edit(text_editor::Action::Edit(text_editor::Edit::Paste(
                         Arc::new(text),
                     )));
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                     return task;
                 }
                 self.notification =
@@ -832,7 +862,7 @@ impl App {
                 }) {
                     Ok(document) => {
                         self.install_document(document, None, "Offline copy.md".into());
-                        self.dirty = true;
+                        self.session.dirty = true;
                         self.notification = Some("Compatible offline replica opened. Save a Markdown copy to keep its state.".into());
                     }
                     Err(error) => self.notification = Some(error.to_string()),
@@ -841,9 +871,10 @@ impl App {
             Message::ShowCollaboration => self.overlay = Some(Overlay::Collaboration),
             Message::ExportReplica | Message::ExportAgentSnapshot => {
                 let snapshot = self
+                    .session
                     .document
                     .collaboration()
-                    .snapshot(self.document.source());
+                    .snapshot(self.session.document.source());
                 let agent = matches!(message, Message::ExportAgentSnapshot);
                 return Task::perform(
                     async move {
@@ -902,13 +933,18 @@ impl App {
                 );
             }
             Message::ReplicaLoaded(result) => {
-                let selection = self.document.collaboration().selection(self.selection);
+                let selection = self
+                    .session
+                    .document
+                    .collaboration()
+                    .selection(self.session.selection);
                 match result {
-                    Ok(state) => match self.document.receive(&state) {
+                    Ok(state) => match self.session.document.receive(&state) {
                         Ok(()) => {
                             self.preserve_viewport_generation =
-                                Some(self.document.collaboration().generation());
-                            self.selection = self
+                                Some(self.session.document.collaboration().generation());
+                            self.session.selection = self
+                                .session
                                 .document
                                 .collaboration()
                                 .resolve_selection(&selection)
@@ -923,13 +959,18 @@ impl App {
                 }
             }
             Message::ProposalLoaded(result) => {
-                let selection = self.document.collaboration().selection(self.selection);
+                let selection = self
+                    .session
+                    .document
+                    .collaboration()
+                    .selection(self.session.selection);
                 match result {
-                    Ok(proposal) => match self.document.accept(&proposal) {
+                    Ok(proposal) => match self.session.document.accept(&proposal) {
                         Ok(()) => {
                             self.preserve_viewport_generation =
-                                Some(self.document.collaboration().generation());
-                            self.selection = self
+                                Some(self.session.document.collaboration().generation());
+                            self.session.selection = self
+                                .session
                                 .document
                                 .collaboration()
                                 .resolve_selection(&selection)
@@ -938,7 +979,8 @@ impl App {
                             self.changed();
                             self.notification = Some(format!(
                                 "Accepted proposal from {}",
-                                self.document
+                                self.session
+                                    .document
                                     .collaboration()
                                     .last_agent_author()
                                     .unwrap_or(&proposal.author)
@@ -950,8 +992,13 @@ impl App {
                 }
             }
             Message::AgentUndo | Message::AgentRedo => {
-                let selection = self.document.collaboration().selection(self.selection);
+                let selection = self
+                    .session
+                    .document
+                    .collaboration()
+                    .selection(self.session.selection);
                 if self
+                    .session
                     .document
                     .history(EditOrigin::Agent, matches!(message, Message::AgentRedo))
                     .unwrap_or_else(|error| {
@@ -961,8 +1008,9 @@ impl App {
                     .is_some()
                 {
                     self.preserve_viewport_generation =
-                        Some(self.document.collaboration().generation());
-                    self.selection = self
+                        Some(self.session.document.collaboration().generation());
+                    self.session.selection = self
+                        .session
                         .document
                         .collaboration()
                         .resolve_selection(&selection)
@@ -986,19 +1034,22 @@ impl App {
             Message::Select(selection) => {
                 if self.mode == EditorMode::Live {
                     let selection = selection.clamp(&self.projection.text);
-                    self.selection = self.projection.source_selection(selection, self.selection);
-                    self.selection = self.projection.normalize_caret(self.selection);
+                    self.session.selection = self
+                        .projection
+                        .source_selection(selection, self.session.selection);
+                    self.session.selection =
+                        self.projection.normalize_caret(self.session.selection);
                     self.editor_focused = true;
                     self.sync_editor();
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                 }
             }
             Message::SelectSource(selection) => {
                 if self.mode == EditorMode::Live {
-                    self.selection = selection.clamp(self.document.source());
+                    self.session.selection = selection.clamp(self.session.document.source());
                     self.editor_focused = true;
                     self.sync_editor();
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                 }
             }
             // Focus must reconcile even under a modal/loading guard. Otherwise
@@ -1021,7 +1072,7 @@ impl App {
             }
             Message::ToggleTask { block, task } => {
                 let marker =
-                    self.document.blocks().get(block).and_then(|block| {
+                    self.session.document.blocks().get(block).and_then(|block| {
                         self.projection.task_markers(block.range.clone()).nth(task)
                     });
                 if let Some(marker) = marker {
@@ -1036,26 +1087,27 @@ impl App {
             }
             Message::ToggleCurrentTask => {
                 if self.mode != EditorMode::Read
-                    && let Some(marker) = self.projection.task_marker_at(self.selection.head)
+                    && let Some(marker) =
+                        self.projection.task_marker_at(self.session.selection.head)
                 {
                     self.toggle_task(marker);
                 }
             }
             Message::Append => return self.append(),
             Message::Navigate(direction) => {
-                let current = self.document.block_at(self.selection.head);
+                let current = self.session.document.block_at(self.session.selection.head);
                 let index = current
                     .saturating_add_signed(direction as isize)
-                    .min(self.document.blocks().len() - 1);
+                    .min(self.session.document.blocks().len() - 1);
                 return self.activate(index, direction < 0);
             }
             Message::Format(format) => return self.format(format),
             Message::Undo | Message::Redo => {
                 let grid = self.grid_view();
                 let selection = if matches!(message, Message::Undo) {
-                    self.document.history(EditOrigin::Human, false)
+                    self.session.document.history(EditOrigin::Human, false)
                 } else {
-                    self.document.history(EditOrigin::Human, true)
+                    self.session.document.history(EditOrigin::Human, true)
                 };
                 let selection = match selection {
                     Ok(selection) => selection,
@@ -1068,9 +1120,9 @@ impl App {
                     if self.mode == EditorMode::Read {
                         self.mode = EditorMode::Live;
                     }
-                    self.selection = selection;
+                    self.session.selection = selection;
                     self.sync_editor();
-                    if let Some(selection) = self.document.take_history_table_selection() {
+                    if let Some(selection) = self.session.document.take_history_table_selection() {
                         self.restore_clipboard_selection(selection);
                     } else if let Some(grid) = grid {
                         self.restore_grid(grid);
@@ -1089,20 +1141,52 @@ impl App {
             }
             Message::Guide => return self.request(Pending::Guide),
             Message::Welcome => return self.request(Pending::Welcome),
-            Message::Save | Message::SaveAs | Message::ConfirmSave => {
+            Message::Step(direction) => return self.step(direction),
+            Message::Resume(session) => {
+                if self.busy || self.overlay.is_some() || !self.commit_cell() {
+                    return Task::none();
+                }
+                if let Some(parked) = self.background.take_unsaved(session) {
+                    return self.resume(parked);
+                }
+            }
+            Message::Save | Message::SaveAs => {
                 let save_as = matches!(message, Message::SaveAs);
                 return self.save(save_as);
             }
-            Message::ChosenFile(path) => {
-                if let Some(path) = path {
-                    return Task::perform(storage::load(path), Message::Loaded);
+            Message::ConfirmSave => {
+                if self.session.dirty {
+                    return self.save(false);
                 }
+                // The page is clean, so the guard is about background documents.
+                if !self.busy
+                    && let Some(pending) = self.pending.take()
+                {
+                    self.overlay = None;
+                    return self.execute(pending);
+                }
+            }
+            Message::ChosenFile(path) => {
                 self.busy = false;
                 self.loading = false;
+                if let Some(path) = path {
+                    return self.execute(Pending::Open(Some(path)));
+                }
             }
             Message::Loaded(result) => return self.complete_document_load(result, None),
             Message::LoadedLinked(result, jump) => {
-                return self.complete_document_load(result, jump);
+                return self.complete_document_load(result, Some(jump));
+            }
+            Message::ResolvedLinked(result, jump) => {
+                self.busy = false;
+                self.loading = false;
+                match result {
+                    Ok(path) if self.session.path.as_ref() == Some(&path) => {
+                        return self.focus_link_target(jump);
+                    }
+                    Ok(path) => return self.open_file(path, jump),
+                    Err(error) => self.notification = Some(error.to_string()),
+                }
             }
             Message::Saved {
                 result,
@@ -1115,18 +1199,16 @@ impl App {
                 match result {
                     Ok(path) => {
                         self.chrome.save_error = None;
-                        self.path = Some(path.clone());
-                        self.display_name = filename(&path);
-                        self.saved_source = (*source).clone();
-                        self.saved_version = Some(version);
-                        self.saved_generation = generation;
-                        self.dirty = self.document.source() != self.saved_source
-                            || self.document.collaboration().generation() != self.saved_generation;
+                        self.session.path = Some(path.clone());
+                        self.session.display_name = filename(&path);
+                        self.session
+                            .mark_saved((*source).clone(), version, generation);
+                        self.page_settled();
                         let folder_task = self.folder_document_changed();
-                        if !self.dirty {
+                        if !self.session.dirty {
                             self.recovery.retire();
                         }
-                        if !self.dirty
+                        if !self.session.dirty
                             && let Some(pending) = self.pending.take()
                         {
                             self.overlay = None;
@@ -1152,12 +1234,13 @@ impl App {
                     return Task::none();
                 }
                 self.busy = true;
-                let source = self.document.source().to_owned();
-                let export_name = PathBuf::from(&self.display_name)
+                let source = self.session.document.source().to_owned();
+                let export_name = PathBuf::from(&self.session.display_name)
                     .with_extension("html")
                     .to_string_lossy()
                     .into_owned();
                 let base = self
+                    .session
                     .path
                     .as_deref()
                     .and_then(|p| p.parent())
@@ -1198,7 +1281,7 @@ impl App {
                 } else {
                     EditorMode::Source
                 };
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 self.sync_editor();
                 return operation::focus(EDITOR);
             }
@@ -1208,7 +1291,7 @@ impl App {
                 } else {
                     EditorMode::Read
                 };
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 if self.mode == EditorMode::Live {
                     self.sync_editor();
                     return operation::focus(EDITOR);
@@ -1217,9 +1300,9 @@ impl App {
             Message::SetMode(mode) => {
                 if self.mode != mode {
                     self.mode = mode;
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                     self.preserve_viewport_generation =
-                        Some(self.document.collaboration().generation());
+                        Some(self.session.document.collaboration().generation());
                     if mode != EditorMode::Read {
                         self.sync_editor();
                         return operation::focus(EDITOR);
@@ -1233,7 +1316,7 @@ impl App {
             Message::ShowSidebar(side) => return self.show_sidebar(side),
             Message::HideSidebars => return self.toggle_hidden_sidebars(),
             Message::ShowSettings => {
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 self.overlay = Some(Overlay::Settings);
             }
             Message::CloseOverlay => {
@@ -1258,7 +1341,7 @@ impl App {
                         if self.search_open {
                             self.search_open = false;
                         } else {
-                            self.document.break_history_group();
+                            self.session.document.break_history_group();
                         }
                     }
                     self.overlay = None;
@@ -1266,6 +1349,7 @@ impl App {
                     self.links.close();
                     self.footnotes.close();
                     self.table = table::State::default();
+                    self.image_preview.close();
                     self.pending = None;
                     if table {
                         self.editor_focused = true;
@@ -1273,7 +1357,7 @@ impl App {
                     }
                     if table || restore_focus {
                         self.preserve_viewport_generation =
-                            Some(self.document.collaboration().generation());
+                            Some(self.session.document.collaboration().generation());
                         return operation::focus(EDITOR);
                     }
                 }
@@ -1289,14 +1373,14 @@ impl App {
                 self.preferences.custom_theme = None;
                 self.resolved_theme.typography.font = self.preferences.writing_font;
                 self.preserve_viewport_generation =
-                    Some(self.document.collaboration().generation());
+                    Some(self.session.document.collaboration().generation());
                 return self.persist_preferences();
             }
             Message::WritingFont(font) => {
                 self.preferences.writing_font = font;
                 self.resolved_theme.typography.font = font;
                 self.preserve_viewport_generation =
-                    Some(self.document.collaboration().generation());
+                    Some(self.session.document.collaboration().generation());
                 return self.persist_preferences();
             }
             Message::LoadTheme => {
@@ -1328,7 +1412,7 @@ impl App {
                         theme.typography.font = self.preferences.writing_font;
                         self.resolved_theme = theme;
                         self.preserve_viewport_generation =
-                            Some(self.document.collaboration().generation());
+                            Some(self.session.document.collaboration().generation());
                         return self.persist_preferences();
                     }
                     Err(error) => self.notification = Some(error.to_string()),
@@ -1377,15 +1461,16 @@ impl App {
             }
             Message::Replace => {
                 if let Some(range) = self.matches.get(self.match_index).cloned() {
-                    if self.document.source().len() - range.len() + self.replacement.len()
+                    if self.session.document.source().len() - range.len() + self.replacement.len()
                         > storage::MAX_FILE_BYTES as usize
                     {
                         self.notification =
                             Some("Replacement would exceed the 16 MiB document limit.".into());
                         return Task::none();
                     }
-                    self.document.break_history_group();
-                    self.document
+                    self.session.document.break_history_group();
+                    self.session
+                        .document
                         .replace(range, &self.replacement)
                         .unwrap_or_else(|error| self.edit_error = Some(error.to_string()));
                     self.sync_editor();
@@ -1398,8 +1483,8 @@ impl App {
                 if self.query.is_empty() {
                     return Task::none();
                 }
-                let count = self.document.source().matches(&self.query).count();
-                let projected = self.document.source().len() as u128
+                let count = self.session.document.source().matches(&self.query).count();
+                let projected = self.session.document.source().len() as u128
                     + count as u128 * self.replacement.len() as u128;
                 let removed = count as u128 * self.query.len() as u128;
                 if projected.saturating_sub(removed) > u128::from(storage::MAX_FILE_BYTES) {
@@ -1407,21 +1492,27 @@ impl App {
                         Some("Replacement would exceed the 16 MiB document limit.".into());
                     return Task::none();
                 }
-                let selection = self.document.collaboration().selection(self.selection);
+                let selection = self
+                    .session
+                    .document
+                    .collaboration()
+                    .selection(self.session.selection);
                 let count = self
+                    .session
                     .document
                     .replace_all(&self.query, &self.replacement)
                     .unwrap_or_else(|error| {
                         self.edit_error = Some(error.to_string());
                         0
                     });
-                self.selection = self
+                self.session.selection = self
+                    .session
                     .document
                     .collaboration()
                     .resolve_selection(&selection)
                     .unwrap_or_default();
                 self.preserve_viewport_generation =
-                    Some(self.document.collaboration().generation());
+                    Some(self.session.document.collaboration().generation());
                 self.active = None;
                 let failed = self.edit_error.is_some();
                 self.changed();
@@ -1439,6 +1530,9 @@ impl App {
                     && let Some(pending) = self.pending.take()
                 {
                     self.overlay = None;
+                    for parked in self.background.discard_dirty() {
+                        self.recovery.discard(parked.checkpoint);
+                    }
                     return self.execute(pending);
                 }
             }
@@ -1470,7 +1564,11 @@ impl App {
         before: Selection,
         after: Selection,
     ) {
-        if let Err(error) = self.document.replace_edit(range, text, before, after) {
+        if let Err(error) = self
+            .session
+            .document
+            .replace_edit(range, text, before, after)
+        {
             self.edit_error = Some(error.to_string());
             self.edit_rollback = Some(before);
         }
@@ -1478,14 +1576,14 @@ impl App {
 
     fn changed(&mut self) {
         self.recovery.edited();
-        self.dirty = self.document.source() != self.saved_source
-            || self.document.collaboration().generation() != self.saved_generation;
+        self.session.refresh_dirty();
+        self.session.retitle();
         self.notification = self.edit_error.take();
         self.refresh_matches();
     }
 
     fn refresh_matches(&mut self) {
-        self.matches = self.document.matches(&self.query);
+        self.matches = self.session.document.matches(&self.query);
         self.match_index = self.match_index.min(self.matches.len().saturating_sub(1));
     }
 
@@ -1497,12 +1595,12 @@ impl App {
             self.editor_focused = true;
             self.sync_editor();
         }
-        let before = self.selection;
+        let before = self.session.selection;
         if let text_editor::Action::Edit(edit) = &action
             && let Some(edit) = (self.mode == EditorMode::Live)
                 .then(|| {
                     crate::document::code_edit::insert_at_fence(
-                        self.document.source(),
+                        self.session.document.source(),
                         &self.projection.rich,
                         before,
                         edit,
@@ -1511,22 +1609,22 @@ impl App {
                 .flatten()
                 .or_else(|| {
                     crate::document::code_edit::edit(
-                        self.document.source(),
+                        self.session.document.source(),
                         &self.projection.rich,
                         before,
                         edit,
                     )
                 })
         {
-            if self.document.source().len() - edit.range.len() + edit.text.len()
+            if self.session.document.source().len() - edit.range.len() + edit.text.len()
                 <= storage::MAX_FILE_BYTES as usize
             {
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 self.commit_local(edit.range, &edit.text, before, edit.selection);
-                self.selection = edit.selection;
+                self.session.selection = edit.selection;
                 self.sync_editor();
                 self.changed();
-                self.document.break_history_group();
+                self.session.document.break_history_group();
             } else {
                 self.notification = Some("The editor supports documents up to 16 MiB.".into());
             }
@@ -1547,7 +1645,7 @@ impl App {
             if let Some(text) = text {
                 if let Some(edit) = table_edit::replace_document_selection(
                     &self.projection,
-                    self.document.source(),
+                    self.session.document.source(),
                     before,
                     &text,
                 ) {
@@ -1577,7 +1675,7 @@ impl App {
             let display = self.projection.display_selection(before);
             let inline = match &action {
                 text_editor::Action::Edit(text_editor::Edit::Insert('|'))
-                    if self.document.source()[..before.head]
+                    if self.session.document.source()[..before.head]
                         .bytes()
                         .rev()
                         .take_while(|&byte| byte == b'\\')
@@ -1603,9 +1701,12 @@ impl App {
                 _ => None,
             };
             if let Some(text) = inline {
-                if let Some(edit) =
-                    table_edit::insert_text(&self.projection, self.document.source(), before, text)
-                {
+                if let Some(edit) = table_edit::insert_text(
+                    &self.projection,
+                    self.session.document.source(),
+                    before,
+                    text,
+                ) {
                     self.apply_table_input(
                         edit,
                         !matches!(
@@ -1630,7 +1731,7 @@ impl App {
             }
             let text = match &action {
                 text_editor::Action::Edit(text_editor::Edit::Insert('|'))
-                    if self.document.source()[..before.head]
+                    if self.session.document.source()[..before.head]
                         .bytes()
                         .rev()
                         .take_while(|&b| b == b'\\')
@@ -1648,9 +1749,12 @@ impl App {
                 _ => None,
             };
             if let Some(text) = text {
-                if let Some(edit) =
-                    table_edit::paste(&self.projection, self.document.source(), before, text)
-                {
+                if let Some(edit) = table_edit::paste(
+                    &self.projection,
+                    self.session.document.source(),
+                    before,
+                    text,
+                ) {
                     self.apply_table_edit(edit);
                 }
                 return Task::none();
@@ -1663,7 +1767,7 @@ impl App {
         let edited = action.is_edit();
         let moving = matches!(action, text_editor::Action::Move(_));
         if self.mode == EditorMode::Live && before.is_caret() {
-            let source = self.document.source();
+            let source = self.session.document.source();
             let line_start = source[..before.head].rfind('\n').map_or(0, |i| i + 1);
             let line_end = source[before.head..]
                 .find('\n')
@@ -1678,13 +1782,13 @@ impl App {
                     && self.projection.to_display(line_start)
                         == self.projection.to_display(line_start + prefix.length)
                 {
-                    self.document.break_history_group();
-                    self.selection = Selection::caret(line_start);
+                    self.session.document.break_history_group();
+                    self.session.selection = Selection::caret(line_start);
                     self.commit_local(
                         line_start..line_start + prefix.length,
                         "",
                         before,
-                        self.selection,
+                        self.session.selection,
                     );
                     self.sync_editor();
                     self.changed();
@@ -1696,7 +1800,7 @@ impl App {
                     let empty = source[line_start + prefix.length..line_end]
                         .trim()
                         .is_empty();
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                     let range = if empty {
                         line_start..before.head
                     } else {
@@ -1707,11 +1811,11 @@ impl App {
                     } else {
                         format!("\n{}", prefix.continuation)
                     };
-                    self.selection = Selection::caret(range.start + replacement.len());
-                    self.commit_local(range, &replacement, before, self.selection);
+                    self.session.selection = Selection::caret(range.start + replacement.len());
+                    self.commit_local(range, &replacement, before, self.session.selection);
                     self.sync_editor();
                     self.changed();
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                     return Task::none();
                 }
             }
@@ -1721,7 +1825,7 @@ impl App {
             text_editor::Action::Move(motion) | text_editor::Action::Select(motion) => {
                 let head = match motion {
                     text_editor::Motion::DocumentStart => Some(0),
-                    text_editor::Motion::DocumentEnd => Some(self.document.source().len()),
+                    text_editor::Motion::DocumentEnd => Some(self.session.document.source().len()),
                     _ => None,
                 };
                 head.map(|head| Selection {
@@ -1742,27 +1846,28 @@ impl App {
         let display_selection = self.editor.selection();
         if !edited || (!changed && before.is_caret()) {
             if select_all {
-                self.selection = Selection {
+                self.session.selection = Selection {
                     anchor: 0,
-                    head: self.document.source().len(),
+                    head: self.session.document.source().len(),
                 };
             } else if let Some(selection) = document_motion {
-                self.selection = selection;
+                self.session.selection = selection;
             } else if self.mode == EditorMode::Source {
-                self.selection = display_selection;
+                self.session.selection = display_selection;
             } else {
-                self.selection = self.projection.source_selection(display_selection, before);
+                self.session.selection =
+                    self.projection.source_selection(display_selection, before);
             }
-            self.active = Some(self.document.block_at(self.selection.head));
+            self.active = Some(self.session.document.block_at(self.session.selection.head));
             if !edited {
-                self.document.break_history_group();
+                self.session.document.break_history_group();
             }
             self.sync_editor();
             if moving
                 && self.mode == EditorMode::Live
-                && self.selection.is_caret()
+                && self.session.selection.is_caret()
                 && let Some((table, row, column)) =
-                    table_edit::cell_at(&self.projection, self.selection)
+                    table_edit::cell_at(&self.projection, self.session.selection)
             {
                 let table = self
                     .projection
@@ -1783,20 +1888,28 @@ impl App {
             return Task::none();
         }
         let mut edit = if self.mode == EditorMode::Source {
-            let diff = projection::difference(self.document.source(), after);
+            let diff = projection::difference(self.session.document.source(), after);
             projection::ProjectedEdit {
                 range: diff.old,
                 text: after[diff.new].to_owned(),
                 selection: display_selection,
             }
         } else {
-            self.projection
-                .edit(self.document.source(), after, before, display_selection)
+            self.projection.edit(
+                self.session.document.source(),
+                after,
+                before,
+                display_selection,
+            )
         };
         if self.mode == EditorMode::Live && inserted {
-            table_edit::interior_spaces(&self.projection, self.document.source(), &mut edit);
+            table_edit::interior_spaces(
+                &self.projection,
+                self.session.document.source(),
+                &mut edit,
+            );
         }
-        if self.document.source().len() - edit.range.len() + edit.text.len()
+        if self.session.document.source().len() - edit.range.len() + edit.text.len()
             > storage::MAX_FILE_BYTES as usize
         {
             self.notification = Some("The editor supports documents up to 16 MiB.".into());
@@ -1804,11 +1917,11 @@ impl App {
             return Task::none();
         }
         self.commit_local(edit.range, &edit.text, before, edit.selection);
-        self.selection = edit.selection;
+        self.session.selection = edit.selection;
         self.sync_editor();
         self.changed();
         if enter {
-            self.document.break_history_group();
+            self.session.document.break_history_group();
         }
         Task::none()
     }
@@ -1818,32 +1931,35 @@ impl App {
     fn sync_editor(&mut self) {
         self.sync_outline();
         if let Some(selection) = self.edit_rollback.take() {
-            self.selection = selection;
+            self.session.selection = selection;
         }
-        self.selection = self.selection.clamp(self.document.source());
-        let caret =
-            (self.mode == EditorMode::Live && self.editor_focused).then_some(self.selection.head);
+        self.session.selection = self.session.selection.clamp(self.session.document.source());
+        let caret = (self.mode == EditorMode::Live && self.editor_focused)
+            .then_some(self.session.selection.head);
         let cell = self.editing_cell_range();
         let previous_highlights = Arc::clone(&self.projection.highlights);
-        if self.projection_revision != Some(self.document.revision()) {
+        if self.projection_revision != Some(self.session.document.revision()) {
             let previous_revision = self.projection_revision;
-            self.projection_revision = Some(self.document.revision());
+            self.projection_revision = Some(self.session.document.revision());
             let updated = (cell.is_none()
-                && self.projection.update_words(self.document.source(), caret))
+                && self
+                    .projection
+                    .update_words(self.session.document.source(), caret))
                 || (self
+                    .session
                     .document
                     .block_changes()
                     .first()
                     .is_some_and(|change| Some(change.previous_revision) == previous_revision)
                     && self.projection.update_block_batch(
-                        self.document.source(),
-                        self.document.block_changes(),
+                        self.session.document.source(),
+                        self.session.document.block_changes(),
                         caret,
                         cell.clone(),
                     ));
             if !updated {
                 self.projection =
-                    Projection::with_editing_cell(self.document.source(), caret, cell);
+                    Projection::with_editing_cell(self.session.document.source(), caret, cell);
             }
         }
         self.sync_table_editing();
@@ -1856,14 +1972,14 @@ impl App {
         let native_edited = std::mem::take(&mut self.native_edited);
         let current = self.editor.snapshot();
         let target = if self.mode == EditorMode::Source {
-            self.document.source()
+            self.session.document.source()
         } else {
             &self.projection.text
         };
         let selection = if self.mode == EditorMode::Source {
-            self.selection
+            self.session.selection
         } else {
-            self.projection.display_selection(self.selection)
+            self.projection.display_selection(self.session.selection)
         };
         if current != target {
             // Distant disclosure can change two small spans with megabytes of
@@ -1910,38 +2026,38 @@ impl App {
             self.editor.select(selection);
         }
         self.editor_source = self.mode == EditorMode::Source;
-        self.active = Some(self.document.block_at(self.selection.head));
+        self.active = Some(self.session.document.block_at(self.session.selection.head));
     }
 
     fn apply_table_edit(&mut self, edit: projection::ProjectedEdit) {
-        if self.document.source().len() - edit.range.len() + edit.text.len()
+        if self.session.document.source().len() - edit.range.len() + edit.text.len()
             > storage::MAX_FILE_BYTES as usize
         {
             self.notification = Some("The editor supports documents up to 16 MiB.".into());
             return;
         }
-        self.document.break_history_group();
-        let before = self.selection;
-        self.selection = edit.selection;
-        self.commit_local(edit.range, &edit.text, before, self.selection);
+        self.session.document.break_history_group();
+        let before = self.session.selection;
+        self.session.selection = edit.selection;
+        self.commit_local(edit.range, &edit.text, before, self.session.selection);
         self.sync_editor();
         self.changed();
-        self.document.break_history_group();
+        self.session.document.break_history_group();
     }
 
     fn apply_table_plan(&mut self, edit: table_edit::TableEdit, separate: bool) -> bool {
         if edit.edits.is_empty() {
             return false;
         }
-        let before = self.selection;
-        match self.document.transact(
+        let before = self.session.selection;
+        match self.session.document.transact(
             &edit.edits,
             crate::document::collaboration::EditOrigin::Human,
             Some((before, edit.selection)),
             separate,
         ) {
             Ok(()) => {
-                self.selection = edit.selection;
+                self.session.selection = edit.selection;
                 self.sync_editor();
                 self.changed();
                 true
@@ -1957,20 +2073,21 @@ impl App {
         if self.projection.task_marker_at(marker.start) != Some(marker.clone()) {
             return;
         }
-        let replacement = match self.document.source().get(marker.clone()) {
+        let replacement = match self.session.document.source().get(marker.clone()) {
             Some("[ ]") => "[x]",
             Some("[x]" | "[X]") => "[ ]",
             _ => return,
         };
         // Both forms have the same byte length. Keep both source endpoints,
         // focus, and widget wrap intent; save the same selection in history.
-        let selection = self.selection;
-        self.document.break_history_group();
+        let selection = self.session.selection;
+        self.session.document.break_history_group();
         self.commit_local(marker, replacement, selection, selection);
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         self.sync_editor();
         self.changed();
-        self.document.break_history_group();
+        self.session.document.break_history_group();
     }
 
     fn table_tab(&mut self, backward: bool) -> Task<Message> {
@@ -1978,9 +2095,10 @@ impl App {
     }
 
     fn table_move(&mut self, backward: bool) -> Task<Message> {
-        let Some((table, row, column)) =
-            table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
-        else {
+        let Some((table, row, column)) = table_edit::cell_at(
+            &self.projection,
+            Selection::caret(self.session.selection.head),
+        ) else {
             return Task::none();
         };
         let columns = table.alignment.len();
@@ -1997,13 +2115,13 @@ impl App {
         };
         if let Some((row, column)) = target {
             if let Some(edit) =
-                table_edit::materialize_cell(self.document.source(), row, column, table)
+                table_edit::materialize_cell(self.session.document.source(), row, column, table)
             {
                 self.apply_table_plan(edit, true);
                 return Task::none();
             }
             let cell = &table.rows[row][column];
-            self.selection = Selection {
+            self.session.selection = Selection {
                 anchor: self
                     .projection
                     .to_source(cell.start, projection::Affinity::After, None),
@@ -2012,21 +2130,23 @@ impl App {
                     .to_source(cell.end, projection::Affinity::Before, None),
             };
             self.editor_focused = true;
-            self.document.break_history_group();
+            self.session.document.break_history_group();
             self.sync_editor();
             return Task::none();
         }
         if !backward {
             let end = table.source_range.end;
-            let prefix = table_edit::row_prefix(self.document.source(), table);
-            let ending = if self.document.source()[table.source_range.clone()].contains("\r\n") {
+            let prefix = table_edit::row_prefix(self.session.document.source(), table);
+            let ending = if self.session.document.source()[table.source_range.clone()]
+                .contains("\r\n")
+            {
                 "\r\n"
-            } else if self.document.source()[table.source_range.clone()].contains('\r') {
+            } else if self.session.document.source()[table.source_range.clone()].contains('\r') {
                 "\r"
             } else {
                 "\n"
             };
-            let newline = if self.document.source()[..end].ends_with(['\r', '\n']) {
+            let newline = if self.session.document.source()[..end].ends_with(['\r', '\n']) {
                 ""
             } else {
                 ending
@@ -2049,7 +2169,7 @@ impl App {
         if self.busy {
             return Task::none();
         }
-        let Some(block) = self.document.blocks().get(index) else {
+        let Some(block) = self.session.document.blocks().get(index) else {
             return Task::none();
         };
         let offset = if at_end {
@@ -2060,9 +2180,9 @@ impl App {
         if self.mode == EditorMode::Read {
             self.mode = EditorMode::Live;
         }
-        self.selection = Selection::caret(offset);
+        self.session.selection = Selection::caret(offset);
         self.editor_focused = true;
-        self.document.break_history_group();
+        self.session.document.break_history_group();
         self.sync_editor();
         operation::focus(EDITOR)
     }
@@ -2070,7 +2190,7 @@ impl App {
     fn append(&mut self) -> Task<Message> {
         self.mode = EditorMode::Live;
         self.editor_focused = true;
-        self.selection = Selection::caret(self.document.source().len());
+        self.session.selection = Selection::caret(self.session.document.source().len());
         self.sync_editor();
         operation::focus(EDITOR)
     }
@@ -2092,27 +2212,32 @@ impl App {
                 Format::Code => Some("`"),
                 _ => None,
             };
-            let concealed = Projection::new(self.document.source());
+            let concealed = Projection::new(self.session.document.source());
             if let Some(marker) = marker
                 && let Some(edit) = concealed.format_inline(
-                    self.document.source(),
-                    concealed.display_selection(self.selection),
+                    self.session.document.source(),
+                    concealed.display_selection(self.session.selection),
                     marker,
                 )
             {
-                if self.document.source().len() - edit.range.len() + edit.text.len()
+                if self.session.document.source().len() - edit.range.len() + edit.text.len()
                     > storage::MAX_FILE_BYTES as usize
                 {
                     self.notification =
                         Some("Formatting would exceed the 16 MiB document limit.".into());
                     return Task::none();
                 }
-                self.document.break_history_group();
-                self.commit_local(edit.range, &edit.text, self.selection, edit.selection);
-                self.selection = edit.selection;
+                self.session.document.break_history_group();
+                self.commit_local(
+                    edit.range,
+                    &edit.text,
+                    self.session.selection,
+                    edit.selection,
+                );
+                self.session.selection = edit.selection;
                 self.sync_editor();
                 self.changed();
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 return operation::focus(EDITOR);
             }
         }
@@ -2164,18 +2289,20 @@ impl App {
             Format::Fence => format!("\n```rust\n{selected}\n```\n"),
             Format::Table => "\n| Column | Column |\n| --- | --- |\n| Text | Text |\n".into(),
         };
-        self.document.break_history_group();
+        self.session.document.break_history_group();
         if matches!(
             format,
             Format::Heading | Format::Quote | Format::List | Format::Task
         ) {
             // Insert block prefixes in source space; display line starts may be
             // after a concealed heading or quote marker.
-            let line_start = self.document.source()[..self.selection.head]
+            let line_start = self.session.document.source()[..self.session.selection.head]
                 .rfind('\n')
                 .map_or(0, |index| index + 1);
-            let before = self.selection;
-            if self.document.source().len() + replacement.len() > storage::MAX_FILE_BYTES as usize {
+            let before = self.session.selection;
+            if self.session.document.source().len() + replacement.len()
+                > storage::MAX_FILE_BYTES as usize
+            {
                 self.notification =
                     Some("Formatting would exceed the 16 MiB document limit.".into());
                 return Task::none();
@@ -2186,16 +2313,16 @@ impl App {
                 before,
                 Selection::caret(before.head + replacement.len()),
             );
-            self.selection = Selection::caret(before.head + replacement.len());
+            self.session.selection = Selection::caret(before.head + replacement.len());
             self.sync_editor();
             self.changed();
-            self.document.break_history_group();
+            self.session.document.break_history_group();
             return operation::focus(EDITOR);
         }
         let task = self.edit(text_editor::Action::Edit(text_editor::Edit::Paste(
             Arc::new(replacement),
         )));
-        self.document.break_history_group();
+        self.session.document.break_history_group();
         Task::batch([task, operation::focus(EDITOR)])
     }
 
@@ -2206,7 +2333,7 @@ impl App {
         if self.mode == EditorMode::Read {
             self.mode = EditorMode::Live;
         }
-        self.selection = Selection {
+        self.session.selection = Selection {
             anchor: range.start,
             head: range.end,
         };
@@ -2220,17 +2347,74 @@ impl App {
         operation::focus(EDITOR)
     }
 
+    /// Replaces the page, or closes the window.
+    ///
+    /// Replacing the page never asks about unsaved changes: the outgoing
+    /// document stays open in the background. Only closing the window, which
+    /// would end every open document, asks first.
     fn request(&mut self, pending: Pending) -> Task<Message> {
         if self.busy {
             return Task::none();
         }
-        if self.dirty {
+        let closing = matches!(pending, Pending::Close(_));
+        if closing && self.unsaved().next().is_some() {
             self.pending = Some(pending);
             self.overlay = Some(Overlay::Unsaved);
             Task::none()
         } else {
             self.execute(pending)
         }
+    }
+
+    /// Display names of every document with unsaved changes, the page first.
+    fn unsaved(&self) -> impl Iterator<Item = &str> {
+        self.session
+            .dirty
+            .then_some(&self.session)
+            .into_iter()
+            .chain(self.background.dirty())
+            .map(|session| session.display_name.as_str())
+    }
+
+    fn step(&mut self, direction: Direction) -> Task<Message> {
+        if self.busy || self.overlay.is_some() || !self.commit_cell() {
+            return Task::none();
+        }
+        let Some(stop) = self.trail.step(direction) else {
+            return Task::none();
+        };
+        if let Some(parked) = self.background.take_unsaved(stop.session) {
+            return self.resume(parked);
+        }
+        // Every other stop kept a path: clean sessions without one are dropped,
+        // and `Trail::forget` removes their stops.
+        stop.path
+            .map_or_else(Task::none, |path| self.execute(Pending::Open(Some(path))))
+    }
+
+    /// Brings a background document back to the page as it was left.
+    fn resume(&mut self, parked: Parked) -> Task<Message> {
+        self.resume_at(parked, None)
+    }
+
+    fn resume_at(&mut self, parked: Parked, jump: Option<links::Jump>) -> Task<Message> {
+        self.install_parked(parked);
+        self.editor_focused = true;
+        self.sync_editor();
+        let navigation = jump
+            .and_then(|jump| self.jump_to_document_link(jump))
+            .unwrap_or_else(|| {
+                Task::batch([
+                    operation::focus(EDITOR),
+                    operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+                ])
+            });
+        Task::batch([
+            self.folder_document_changed(),
+            self.follow_document(),
+            self.persist_workspace(),
+            navigation,
+        ])
     }
 
     fn execute(&mut self, pending: Pending) -> Task<Message> {
@@ -2243,7 +2427,17 @@ impl App {
                 return Task::perform(crate::io::writing_sample::load(), Message::Loaded);
             }
             Pending::New => {
-                self.set_document(String::new(), None, "Untitled.md".into());
+                // A new page belongs beside the document the writer was in, or
+                // in the open place when that document has no folder of its own.
+                let folder = self
+                    .session
+                    .path
+                    .as_deref()
+                    .and_then(std::path::Path::parent)
+                    .map(std::path::Path::to_owned)
+                    .or_else(|| self.session.folder.clone())
+                    .or_else(|| self.folder.root().map(std::path::Path::to_owned));
+                self.install_session(Session::draft(folder));
                 return self.activate(0, false);
             }
             Pending::Guide => self.set_document(
@@ -2256,12 +2450,11 @@ impl App {
                 None,
                 "Welcome.md".into(),
             ),
-            Pending::Open(path) => {
+            Pending::Open(Some(path)) => return self.open_file(path, None),
+            Pending::Open(None) => {
                 self.busy = true;
                 self.loading = true;
-                return if let Some(path) = path {
-                    Task::perform(storage::load(path), Message::Loaded)
-                } else {
+                return {
                     Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
@@ -2273,13 +2466,6 @@ impl App {
                         Message::ChosenFile,
                     )
                 };
-            }
-            Pending::OpenLinked(path, jump) => {
-                self.busy = true;
-                self.loading = true;
-                return Task::perform(crate::io::document_links::load(path), move |result| {
-                    Message::LoadedLinked(result, jump.clone())
-                });
             }
             Pending::Replica => {
                 self.busy = true;
@@ -2299,11 +2485,43 @@ impl App {
                 );
             }
             Pending::Close(id) => {
+                // Reached with a clean page. Each unsaved background document
+                // takes the page in turn so the writer sees what is being saved
+                // and can name a draft; a failed or cancelled save stops here.
+                if let Some(parked) = self.background.take_dirty(None) {
+                    self.install_parked(parked);
+                    self.pending = Some(Pending::Close(id));
+                    self.overlay = Some(Overlay::Unsaved);
+                    return self.save(false);
+                }
                 self.recovery.retire();
                 return self.close_after_workspace_save(id);
             }
         }
         operation::snap_to(SCROLL, scrollable::RelativeOffset::START)
+    }
+
+    fn open_file(&mut self, path: PathBuf, jump: Option<links::Jump>) -> Task<Message> {
+        // Reading the page's own file would replace its unsaved writing
+        // with the saved copy. A clean page is reread as it always was.
+        if self.session.dirty && self.session.path.as_ref() == Some(&path) {
+            self.notification = Some(format!(
+                "{} is already open with unsaved changes.",
+                self.session.display_name
+            ));
+            return Task::none();
+        }
+        // Unsaved writing is newer than the file, so it returns without
+        // a read. Saving still checks the file against its baseline.
+        if let Some(parked) = self.background.take_dirty(Some(&path)) {
+            return self.resume_at(parked, jump);
+        }
+        self.busy = true;
+        self.loading = true;
+        Task::perform(storage::load(path), move |result| match &jump {
+            Some(jump) => Message::LoadedLinked(result, jump.clone()),
+            None => Message::Loaded(result),
+        })
     }
 
     fn complete_document_load(
@@ -2338,8 +2556,16 @@ impl App {
             },
             None => Document::new(file.source),
         };
-        self.install_document(document, Some(file.path.clone()), filename(&file.path));
-        self.saved_version = version;
+        match self
+            .background
+            .take_unchanged(&file.path, document.source(), version.as_deref())
+        {
+            Some(parked) => self.install_parked(parked),
+            None => {
+                self.install_document(document, Some(file.path.clone()), filename(&file.path));
+                self.session.saved_version = version;
+            }
+        }
         let folder_task = self.folder_document_changed();
         let navigation = jump
             .and_then(|jump| self.jump_to_document_link(jump))
@@ -2354,7 +2580,12 @@ impl App {
                     operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
                 ])
             });
-        Task::batch([folder_task, self.persist_workspace(), navigation])
+        Task::batch([
+            folder_task,
+            self.follow_document(),
+            self.persist_workspace(),
+            navigation,
+        ])
     }
 
     fn set_document(&mut self, source: String, path: Option<PathBuf>, name: String) {
@@ -2362,11 +2593,58 @@ impl App {
     }
 
     fn install_document(&mut self, document: Document, path: Option<PathBuf>, name: String) {
+        self.install_session(Session::new(document, path, name));
+    }
+
+    fn install_parked(&mut self, parked: Parked) {
+        self.install_session(parked.session);
+        self.recovery.resume(parked.checkpoint);
+        self.images.restore_references(parked.references);
+    }
+
+    /// Moves the outgoing document off the page.
+    ///
+    /// Unsaved writing is always kept. A clean document is kept while a file
+    /// can reload it, unless `incoming` is that same file read again. Whatever
+    /// is not kept is dropped, as replacing a document always did.
+    ///
+    /// Returns the name of a document kept with unsaved changes.
+    fn leave(&mut self, outgoing: Session) -> Option<String> {
+        let reloaded = outgoing.path.is_some() && outgoing.path == self.session.path;
+        if !outgoing.dirty && (outgoing.path.is_none() || reloaded) {
+            self.recovery.retire();
+            self.images.clear_history();
+            self.trail.forget(outgoing.id());
+            return None;
+        }
+        let kept_unsaved = outgoing.dirty.then(|| outgoing.display_name.clone());
+        let released = self.background.park(Parked {
+            session: outgoing,
+            references: self.images.take_references(),
+            checkpoint: self.recovery.park(),
+        });
+        for parked in released {
+            self.recovery.discard(parked.checkpoint);
+        }
+        kept_unsaved
+    }
+
+    /// Records the page on the trail under its current path, and drops clean
+    /// background copies of that file: the page now speaks for it.
+    pub(super) fn page_settled(&mut self) {
+        let path = self.session.path.clone();
+        self.trail.visit(self.session.id(), path.as_deref());
+        let stale = path.map_or_else(Vec::new, |path| self.background.release_clean_under(&path));
+        for parked in stale {
+            self.recovery.discard(parked.checkpoint);
+        }
+    }
+
+    fn install_session(&mut self, session: Session) {
         self.workspace_document_leaving();
         self.menu_input.clear();
         #[cfg(target_os = "macos")]
         self.native_menu_queue.clear();
-        self.recovery.retire();
         self.writing = writing::State::default();
         self.links.close();
         self.footnotes = footnotes::State::default();
@@ -2375,14 +2653,14 @@ impl App {
         self.table = table::State::default();
         self.table_editing = None;
         self.grid = table_grid::State::default();
-        self.images.clear_history();
         self.overlay = None;
-        self.document = document;
-        self.projection = Projection::new(self.document.source());
-        self.projection_revision = Some(self.document.revision());
+        let outgoing = std::mem::replace(&mut self.session, session);
+        let kept_unsaved = self.leave(outgoing);
+        self.projection = Projection::new(self.session.document.source());
+        self.projection_revision = Some(self.session.document.revision());
         self.editor_source = self.mode == EditorMode::Source;
         self.editor = native_buffer::Buffer::new(if self.editor_source {
-            self.document.source()
+            self.session.document.source()
         } else {
             &self.projection.text
         });
@@ -2391,20 +2669,16 @@ impl App {
         self.edit_rollback = None;
         self.preserve_viewport_generation = None;
         self.editor_focused = false;
-        self.saved_source = self.document.source().to_owned();
-        self.saved_version = None;
-        self.saved_generation = 0;
-        self.path = path;
-        self.display_name = name;
-        self.dirty = false;
         self.chrome.saving = false;
         self.chrome.save_error = None;
-        self.selection = Selection::default();
         self.active = None;
-        self.notification = None;
+        self.notification = kept_unsaved.map(|name| {
+            format!("{name} stays open with its unsaved changes. Use Back to return to it.")
+        });
         self.refresh_matches();
         self.sync_editor();
-        self.selection = self.projection.normalize_caret(self.selection);
+        self.session.selection = self.projection.normalize_caret(self.session.selection);
+        self.page_settled();
     }
 
     fn save(&mut self, save_as: bool) -> Task<Message> {
@@ -2413,55 +2687,81 @@ impl App {
         }
         self.busy = true;
         self.chrome.saving = true;
-        let path = if save_as { None } else { self.path.clone() };
-        let expected = path.as_ref().map(|_| self.saved_source.clone());
-        let source = Arc::new(self.document.source().to_owned());
+        let path = if save_as {
+            None
+        } else {
+            self.session.path.clone()
+        };
+        // A draft that knows its folder is written there without asking.
+        let draft_folder = (!save_as && path.is_none())
+            .then(|| self.session.folder.clone())
+            .flatten();
+        let expected = path.as_ref().map(|_| self.session.saved_source.clone());
+        let source = Arc::new(self.session.document.source().to_owned());
         let result_source = Arc::clone(&source);
-        let state = self.document.collaboration().state();
+        let state = self.session.document.collaboration().state();
         let version = collaboration_store::version(&state);
-        let generation = self.document.collaboration().generation();
+        let generation = self.session.document.collaboration().generation();
         let expected_version = if save_as {
             None
         } else {
-            self.saved_version.clone()
+            self.session.saved_version.clone()
         };
-        let name = self.display_name.clone();
-        let old_path = self.path.clone();
+        let name = self.session.display_name.clone();
+        let old_path = self.session.path.clone();
         let image_history = self.images.history();
         Task::perform(
             async move {
-                let path = if let Some(path) = path {
-                    path
-                } else {
-                    rfd::AsyncFileDialog::new()
-                        .set_file_name(name)
-                        .add_filter("Markdown", &["md"])
-                        .save_file()
-                        .await
-                        .ok_or_else(|| FileError::Io("Save cancelled".into()))?
-                        .path()
-                        .to_path_buf()
+                let (path, expected, reserved) = match (path, draft_folder) {
+                    (Some(path), _) => (path, expected, false),
+                    // The name is claimed as an empty file that nothing else
+                    // can take, then saved over under the ordinary guard that
+                    // the file still holds what was expected.
+                    (None, Some(folder)) => (
+                        crate::io::file_ops::create_unique_document(folder, name).await?,
+                        Some(String::new()),
+                        true,
+                    ),
+                    (None, None) => (
+                        rfd::AsyncFileDialog::new()
+                            .set_file_name(name)
+                            .add_filter("Markdown", &["md"])
+                            .save_file()
+                            .await
+                            .ok_or_else(|| FileError::Io("Save cancelled".into()))?
+                            .path()
+                            .to_path_buf(),
+                        expected,
+                        false,
+                    ),
                 };
                 let asset_source = Arc::clone(&source);
                 let asset_path = path.clone();
-                tokio::task::spawn_blocking(move || {
-                    crate::io::assets::relocate(
-                        &asset_source,
-                        old_path.as_deref(),
-                        &asset_path,
-                        &image_history,
+                let saved = async {
+                    tokio::task::spawn_blocking(move || {
+                        crate::io::assets::relocate(
+                            &asset_source,
+                            old_path.as_deref(),
+                            &asset_path,
+                            &image_history,
+                        )
+                    })
+                    .await
+                    .map_err(|error| FileError::Io(error.to_string()))??;
+                    collaboration_store::save_document(
+                        path.clone(),
+                        (*source).clone(),
+                        state,
+                        expected,
+                        expected_version,
                     )
-                })
-                .await
-                .map_err(|error| FileError::Io(error.to_string()))??;
-                collaboration_store::save_document(
-                    path,
-                    (*source).clone(),
-                    state,
-                    expected,
-                    expected_version,
-                )
-                .await
+                    .await
+                }
+                .await;
+                if reserved && saved.is_err() {
+                    crate::io::file_ops::discard_empty_document(path).await;
+                }
+                saved
             },
             move |result| Message::Saved {
                 result,
@@ -2527,6 +2827,7 @@ impl App {
                     Overlay::Backlinks => self.backlinks_view(),
                     Overlay::Footnote => self.footnote_view(),
                     Overlay::Recovery => self.recovery_view(),
+                    Overlay::Image => self.image_preview_view(),
                     Overlay::QuickOpen => self.quick_open_view(size),
                     Overlay::Table => self.table_view(),
                 };
@@ -2578,12 +2879,13 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         let title: Element<'_, Message> = match side {
             Sidebar::Files => {
-                let root = self.folder.root().expect("Files requires a workspace");
+                // With no place open the header still leads to the library.
+                let root = self.folder.root();
                 tooltip(
                     button(
                         row![
                             container(
-                                text(folder::name(root))
+                                text(root.map_or_else(|| "Library".into(), folder::name))
                                     .size(styles::SIDEBAR_TEXT_SIZE)
                                     .wrapping(text::Wrapping::None)
                             )
@@ -2600,7 +2902,11 @@ impl App {
                     .padding([5, styles::SIDEBAR_INSET as u16])
                     .width(Fill)
                     .style(styles::button_style(tokens, Button::Quiet)),
-                    text(root.display().to_string()).size(11),
+                    text(root.map_or_else(
+                        || "No place is open".into(),
+                        |root| root.display().to_string(),
+                    ))
+                    .size(11),
                     tooltip::Position::Bottom,
                 )
                 .into()
@@ -2665,7 +2971,7 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         let width = self.resolved_theme.typography.content_width;
         if self.mode != EditorMode::Read {
-            return container(
+            let page = container(
                 column![self.editor_view(self.mode == EditorMode::Source)]
                     .spacing(0)
                     .max_width(width)
@@ -2673,8 +2979,12 @@ impl App {
             )
             .padding(iced::Padding::new(32.0).top(56.0).bottom(16.0))
             .center_x(Fill)
-            .height(Fill)
-            .into();
+            .height(Fill);
+            return if self.is_home() {
+                stack![page, self.home_view()].into()
+            } else {
+                page.into()
+            };
         }
         let mut blocks = column![].spacing(12);
         let mut settings = styles::markdown_settings(&self.resolved_theme);
@@ -2686,12 +2996,13 @@ impl App {
         settings.h5_size = (settings.h5_size.0 * self.zoom).into();
         settings.h6_size = (settings.h6_size.0 * self.zoom).into();
         settings.code_size = (settings.code_size.0 * self.zoom).into();
-        for (index, _) in self.document.blocks().iter().enumerate() {
+        for (index, _) in self.session.document.blocks().iter().enumerate() {
             let items = self
+                .session
                 .document
                 .rendered_with_footnotes(index, self.projection.footnotes());
             let rendered: Element<'_, Message> = if items.is_empty() {
-                text(self.document.block_source(index))
+                text(self.session.document.block_source(index))
                     .font(self.resolved_theme.typography.font.font())
                     .size(18)
                     .color(tokens.muted)
@@ -2704,6 +3015,7 @@ impl App {
                         tokens,
                         block: index,
                         base: self
+                            .session
                             .path
                             .as_deref()
                             .and_then(std::path::Path::parent)
@@ -2739,19 +3051,24 @@ impl App {
             return RichEditor::new(
                 self.editor.content(),
                 &self.projection,
-                self.document.source(),
+                self.session.document.source(),
                 &self.resolved_theme,
                 &self.images,
                 editor_binding,
             )
-            .collaboration(self.document.collaboration())
+            .collaboration(self.session.document.collaboration())
             .preserve_viewport(
                 self.preserve_viewport_generation
-                    == Some(self.document.collaboration().generation()),
+                    == Some(self.session.document.collaboration().generation()),
             )
-            .base(self.path.as_deref().and_then(std::path::Path::parent))
+            .base(
+                self.session
+                    .path
+                    .as_deref()
+                    .and_then(std::path::Path::parent),
+            )
             .zoom(self.zoom)
-            .selection(self.selection)
+            .selection(self.session.selection)
             .focused(self.editor_focused)
             .table_grid(self.grid_view(), self.cell_editor())
             .table_resume(self.grid_resume())
@@ -2781,7 +3098,11 @@ impl App {
                 iced::highlighter::Theme::InspiredGitHub
             },
         );
-        let editor = SourceEditor::new(base.into(), self.document.collaboration(), self.selection);
+        let editor = SourceEditor::new(
+            base.into(),
+            self.session.document.collaboration(),
+            self.session.selection,
+        );
         #[cfg(target_os = "macos")]
         let editor = editor.observe_accessibility_composition(self.accessibility.is_some());
         editor.into()
@@ -2847,7 +3168,7 @@ impl App {
             self.small_button("Merge approved replica…", Message::ImportReplica, false),
             self.small_button("Accept agent proposal…", Message::ImportProposal, false),
             row![self.small_button("Undo agent", Message::AgentUndo, false), self.small_button("Redo agent", Message::AgentRedo, false)].spacing(12),
-            text(format!("Document {} · Writer {}", self.document.collaboration().id(), self.document.collaboration().replica_id())).size(10).color(tokens.faint),
+            text(format!("Document {} · Writer {}", self.session.document.collaboration().id(), self.session.document.collaboration().replica_id())).size(10).color(tokens.faint),
             self.small_button("Done", Message::CloseOverlay, true),
         ].spacing(16)).padding(30).width(540).style(styles::card(tokens)).into()
     }
@@ -3043,12 +3364,9 @@ impl App {
         container(
             column![
                 text("Keep this thought?").font(styles::BODY_FONT).size(28),
-                text(format!(
-                    "{} has unsaved changes. Save them before moving on.",
-                    self.display_name
-                ))
-                .size(14)
-                .color(tokens.muted),
+                text(unsaved_summary(&self.unsaved().collect::<Vec<_>>()))
+                    .size(14)
+                    .color(tokens.muted),
                 space().height(12),
                 row![
                     button("Discard")
@@ -3149,6 +3467,34 @@ impl App {
             Button::Quiet,
         ))
         .into()
+    }
+}
+
+/// Names what closing the window would lose. Long lists are counted, not
+/// spelled out, so the prompt stays readable.
+fn unsaved_summary(names: &[&str]) -> String {
+    const NAMED: usize = 3;
+    match names {
+        [] => "Nothing is unsaved.".into(),
+        [name] => format!("{name} has unsaved changes. Save them before closing."),
+        _ => {
+            let listed = names
+                .iter()
+                .take(NAMED)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = names.len().saturating_sub(NAMED);
+            let rest = if more == 0 {
+                String::new()
+            } else {
+                format!(" and {more} more")
+            };
+            format!(
+                "{} documents have unsaved changes: {listed}{rest}. Save them before closing.",
+                names.len()
+            )
+        }
     }
 }
 
@@ -3279,6 +3625,9 @@ fn event_message(event: Event, status: iced::event::Status, id: window::Id) -> O
         Event::Window(window::Event::Unfocused) => {
             Some(Message::Outline(outline::Message::CancelDrag))
         }
+        Event::Window(window::Event::Focused) => {
+            Some(Message::Folder(folder::Message::WindowFocused))
+        }
         _ => None,
     }
 }
@@ -3316,6 +3665,8 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 "o" if modifiers.alt() => Some(Message::ToggleSidebar(Sidebar::Outline)),
                 "o" if modifiers.shift() => Some(Message::Folder(folder::Message::Pick)),
                 "o" => Some(Message::Open),
+                "[" => Some(Message::Step(Direction::Back)),
+                "]" => Some(Message::Step(Direction::Forward)),
                 "p" if !modifiers.shift() && !modifiers.alt() => {
                     Some(Message::QuickOpen(quick_open::Message::Open))
                 }
@@ -3353,7 +3704,7 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, EditorMode, Format, Message, Overlay};
+    use super::{App, Direction, EditorMode, Format, Message};
     use crate::document::selection::Selection;
     use crate::document::table_edit;
     use iced::widget::text_editor::{Action, Edit, Motion};
@@ -3371,23 +3722,23 @@ mod tests {
             let mut app = app(source);
             app.mode = mode;
             let at = source.find('}').unwrap();
-            app.selection = Selection::caret(at);
+            app.session.selection = Selection::caret(at);
             app.sync_editor();
             send(&mut app, Message::Edit(Action::Edit(Edit::Enter)));
             assert_eq!(
-                app.document.source(),
+                app.session.document.source(),
                 "Before\n\n```rust\nfn main() {\n    \n}\n```\n\nAfter"
             );
-            assert_eq!(app.selection, Selection::caret(at + 5));
+            assert_eq!(app.session.selection, Selection::caret(at + 5));
             send(&mut app, Message::Undo);
-            assert_eq!(app.document.source(), source);
-            assert_eq!(app.selection, Selection::caret(at));
+            assert_eq!(app.session.document.source(), source);
+            assert_eq!(app.session.selection, Selection::caret(at));
             send(&mut app, Message::Redo);
-            assert_eq!(app.selection, Selection::caret(at + 5));
+            assert_eq!(app.session.selection, Selection::caret(at + 5));
             send(&mut app, Message::Edit(Action::Edit(Edit::Backspace)));
-            assert_eq!(app.selection, Selection::caret(at + 1));
+            assert_eq!(app.session.selection, Selection::caret(at + 1));
             send(&mut app, Message::Undo);
-            assert_eq!(app.selection, Selection::caret(at + 5));
+            assert_eq!(app.session.selection, Selection::caret(at + 5));
         }
     }
     #[test]
@@ -3398,9 +3749,10 @@ mod tests {
             let at = source.find('\n').unwrap() + 1;
             send(&mut app, Message::SelectSource(Selection::caret(at)));
             let target = app
+                .session
                 .document
                 .collaboration()
-                .composition_target(app.selection);
+                .composition_target(app.session.selection);
             send(
                 &mut app,
                 Message::CommitComposition {
@@ -3410,17 +3762,17 @@ mod tests {
             );
             let separator = if text.ends_with('\n') { "" } else { "\n" };
             assert_eq!(
-                app.document.source(),
+                app.session.document.source(),
                 format!("```rust\n{text}{separator}```\n\nAfter")
             );
-            assert_eq!(app.selection, Selection::caret(at + text.len()));
+            assert_eq!(app.session.selection, Selection::caret(at + text.len()));
             assert_eq!(
                 app.projection.rich.code_blocks[0].text.as_str(),
                 format!("{text}{separator}")
             );
             send(&mut app, Message::Undo);
-            assert_eq!(app.document.source(), source);
-            assert_eq!(app.selection, Selection::caret(at));
+            assert_eq!(app.session.document.source(), source);
+            assert_eq!(app.session.selection, Selection::caret(at));
         }
     }
     #[test]
@@ -3438,10 +3790,10 @@ mod tests {
                 head,
             };
             send(&mut app, Message::SelectSource(selection));
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.selection, selection);
             assert_eq!(app.editor.content().text(), app.projection.text);
-            assert_eq!(app.document.source(), source);
-            assert!(!app.dirty);
+            assert_eq!(app.session.document.source(), source);
+            assert!(!app.session.dirty);
             let change = app.projection.change.as_ref().unwrap();
             assert!(change.regions.iter().map(|r| r.old.len()).sum::<usize>() < 100);
             assert_eq!(
@@ -3450,7 +3802,7 @@ mod tests {
             );
         }
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
     }
 
     fn send(app: &mut App, message: Message) {
@@ -3459,7 +3811,7 @@ mod tests {
         assert_eq!(
             app.editor.snapshot(),
             if app.mode == EditorMode::Source {
-                app.document.source()
+                app.session.document.source()
             } else {
                 &app.projection.text
             }
@@ -3471,7 +3823,9 @@ mod tests {
         }
     }
     fn select(app: &mut App, selection: Selection) {
-        app.selection = app.projection.source_selection(selection, app.selection);
+        app.session.selection = app
+            .projection
+            .source_selection(selection, app.session.selection);
         app.editor.select(selection);
     }
 
@@ -3479,7 +3833,10 @@ mod tests {
     fn completed_markup_conceals_immediately_and_discloses_only_the_edited_span() {
         let mut app = app("");
         type_text(&mut app, "**bold** and *soft* and `code`");
-        assert_eq!(app.document.source(), "**bold** and *soft* and `code`");
+        assert_eq!(
+            app.session.document.source(),
+            "**bold** and *soft* and `code`"
+        );
         assert_eq!(app.editor.content().text(), "bold and soft and code");
         send(&mut app, Message::SelectSource(Selection::caret(14)));
         assert_eq!(app.editor.content().text(), "bold and *soft* and code");
@@ -3494,11 +3851,11 @@ mod tests {
         let mut app = app("**bold**!\n\n**Next**");
         send(&mut app, Message::SelectSource(Selection::caret(2)));
         send(&mut app, Message::Edit(Action::Move(Motion::Left)));
-        assert_eq!(app.selection, Selection::caret(1));
+        assert_eq!(app.session.selection, Selection::caret(1));
         send(&mut app, Message::Edit(Action::Move(Motion::Left)));
-        assert_eq!(app.selection, Selection::caret(0));
+        assert_eq!(app.session.selection, Selection::caret(0));
         type_text(&mut app, "X");
-        assert_eq!(app.document.source(), "X**bold**!\n\n**Next**");
+        assert_eq!(app.session.document.source(), "X**bold**!\n\n**Next**");
         assert_eq!(app.editor.content().text(), "X**bold**!\n\nNext");
     }
 
@@ -3517,7 +3874,7 @@ mod tests {
             Message::Edit(Action::Edit(Edit::Paste(Arc::new("X".into())))),
         );
         assert_eq!(app.editor.content().text(), "# FirXird");
-        assert_eq!(app.document.source(), "# FirXird");
+        assert_eq!(app.session.document.source(), "# FirXird");
         send(&mut app, Message::Undo);
         assert_eq!(
             app.editor.content().selection().as_deref(),
@@ -3535,7 +3892,7 @@ mod tests {
             &mut app,
             Message::Edit(Action::Edit(Edit::Paste(Arc::new("Same title".into())))),
         );
-        assert_eq!(app.document.source(), "Same title");
+        assert_eq!(app.session.document.source(), "Same title");
         assert_eq!(app.editor.content().text(), "Same title");
     }
 
@@ -3544,12 +3901,12 @@ mod tests {
         let mut app = app("**x**");
         send(&mut app, Message::SelectSource(Selection::caret(4)));
         send(&mut app, Message::Edit(Action::Edit(Edit::Delete)));
-        assert_eq!(app.document.source(), "**x*");
+        assert_eq!(app.session.document.source(), "**x*");
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), "**x**");
-        assert_eq!(app.selection, Selection::caret(4));
+        assert_eq!(app.session.document.source(), "**x**");
+        assert_eq!(app.session.selection, Selection::caret(4));
         send(&mut app, Message::Redo);
-        assert_eq!(app.selection, Selection::caret(4));
+        assert_eq!(app.session.selection, Selection::caret(4));
         assert_eq!(
             app.editor.content().cursor().position.column,
             app.projection.to_display(4)
@@ -3587,9 +3944,9 @@ mod tests {
                 "日本語 e\u{301} 🧑‍💻".into(),
             )))),
         );
-        assert_eq!(app.document.source(), "Before 日本語 e\u{301} 🧑‍💻");
+        assert_eq!(app.session.document.source(), "Before 日本語 e\u{301} 🧑‍💻");
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), "Before ");
+        assert_eq!(app.session.document.source(), "Before ");
     }
 
     #[test]
@@ -3605,18 +3962,21 @@ mod tests {
             &mut app,
             Message::Edit(Action::Edit(Edit::Paste(Arc::new(committed.into())))),
         );
-        assert!(!app.document.block_changes().is_empty());
+        assert!(!app.session.document.block_changes().is_empty());
         assert!(app.projection.change.is_some());
         assert!(Arc::ptr_eq(
             &old_tail,
             app.projection.highlights.last().unwrap()
         ));
-        assert_eq!(app.selection, Selection::caret(point + committed.len()));
+        assert_eq!(
+            app.session.selection,
+            Selection::caret(point + committed.len())
+        );
         assert_eq!(app.editor.content().text(), app.projection.text);
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, before);
-        assert!(!app.document.block_changes().is_empty());
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, before);
+        assert!(!app.session.document.block_changes().is_empty());
         assert!(app.projection.change.is_some());
 
         let selection = Selection {
@@ -3630,16 +3990,16 @@ mod tests {
                 "new\n\nparagraph".into(),
             )))),
         );
-        let after = app.document.source().to_owned();
+        let after = app.session.document.source().to_owned();
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         assert_eq!(
             Selection::from_cursor(&app.projection.text, app.editor.content().cursor()),
             app.projection.display_selection(selection)
         );
         send(&mut app, Message::Redo);
-        assert_eq!(app.document.source(), after);
+        assert_eq!(app.session.document.source(), after);
         assert_eq!(app.editor.content().text(), app.projection.text);
     }
 
@@ -3657,9 +4017,9 @@ mod tests {
         send(&mut app, Message::SelectSource(selection));
         for _ in 0..2 {
             send(&mut app, Message::ToggleSource);
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.selection, selection);
             send(&mut app, Message::ToggleSource);
-            assert_eq!(app.selection, selection);
+            assert_eq!(app.session.selection, selection);
             assert_eq!(app.editor.content().text(), app.projection.text);
         }
         let committed = "日本語 e\u{301} 🧑‍💻\n";
@@ -3667,18 +4027,24 @@ mod tests {
             &mut app,
             Message::Edit(Action::Edit(Edit::Paste(Arc::new(committed.into())))),
         );
-        assert_eq!(app.document.source(), format!("Before {committed}🦀 end."));
-        let after = app.selection;
+        assert_eq!(
+            app.session.document.source(),
+            format!("Before {committed}🦀 end.")
+        );
+        let after = app.session.selection;
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         assert_eq!(
             Selection::from_cursor(&app.projection.text, app.editor.content().cursor()),
             app.projection.display_selection(selection)
         );
         send(&mut app, Message::Redo);
-        assert_eq!(app.document.source(), format!("Before {committed}🦀 end."));
-        assert_eq!(app.selection, after);
+        assert_eq!(
+            app.session.document.source(),
+            format!("Before {committed}🦀 end.")
+        );
+        assert_eq!(app.session.selection, after);
     }
 
     #[test]
@@ -3711,32 +4077,32 @@ mod tests {
         );
         let after = format!("{}{commit}", &source[..selection.head]);
         let caret = Selection::caret(after.len());
-        assert_eq!(app.document.source(), after);
-        assert_eq!(app.selection, caret);
+        assert_eq!(app.session.document.source(), after);
+        assert_eq!(app.session.selection, caret);
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         assert_eq!(app.editor.selection(), selection);
         send(&mut app, Message::ToggleSource);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
         assert_eq!(
             app.editor.selection(),
             app.projection.display_selection(selection)
         );
         send(&mut app, Message::Redo);
-        assert_eq!(app.document.source(), after);
-        assert_eq!(app.selection, caret);
+        assert_eq!(app.session.document.source(), after);
+        assert_eq!(app.session.selection, caret);
         send(&mut app, Message::Edit(Action::Move(Motion::DocumentStart)));
         send(&mut app, Message::Edit(Action::Select(Motion::DocumentEnd)));
         assert_eq!(
-            app.selection,
+            app.session.selection,
             Selection {
                 anchor: 0,
                 head: after.len()
             }
         );
         send(&mut app, Message::Edit(Action::Move(Motion::Left)));
-        assert!(app.selection.is_caret());
+        assert!(app.session.selection.is_caret());
         assert!(app.editor.content().cursor().selection.is_none());
     }
 
@@ -3755,21 +4121,24 @@ mod tests {
                 generation: 0,
             },
         );
-        assert!(app.dirty);
-        assert_eq!(app.document.source(), "Before!");
+        assert!(app.session.dirty);
+        assert_eq!(app.session.document.source(), "Before!");
         send(&mut app, Message::New);
-        assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
+        assert!(app.overlay.is_none());
         type_text(&mut app, "?");
-        assert_eq!(app.document.source(), "Before!");
+        assert_eq!(app.session.document.source(), "?");
+        send(&mut app, Message::Step(Direction::Back));
+        assert_eq!(app.session.document.source(), "Before!");
+        assert!(app.session.dirty);
     }
     #[test]
     fn initial_caret_edits_heading_and_formatted_content_without_touching_prefixes() {
         let mut heading = app("# Title");
         type_text(&mut heading, "New ");
-        assert_eq!(heading.document.source(), "# New Title");
+        assert_eq!(heading.session.document.source(), "# New Title");
         let mut bold = app("**word**");
         type_text(&mut bold, "New ");
-        assert_eq!(bold.document.source(), "**New word**");
+        assert_eq!(bold.session.document.source(), "**New word**");
     }
 
     #[test]
@@ -3780,10 +4149,10 @@ mod tests {
             Message::SelectSource(Selection { anchor: 0, head: 2 }),
         );
         send(&mut app, Message::Edit(Action::Edit(Edit::Delete)));
-        assert_eq!(app.document.source(), "Title");
+        assert_eq!(app.session.document.source(), "Title");
         assert_eq!(app.editor.content().text(), "Title");
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), "# Title");
+        assert_eq!(app.session.document.source(), "# Title");
     }
 
     #[test]
@@ -3798,15 +4167,15 @@ mod tests {
                 format!("{prefix} Title\n\nOther")
             );
             send(&mut app, Message::Edit(Action::Move(Motion::Home)));
-            assert_eq!(app.selection, Selection::caret(0));
+            assert_eq!(app.session.selection, Selection::caret(0));
             send(&mut app, Message::Edit(Action::Edit(Edit::Delete)));
-            assert_eq!(app.document.source(), &source[1..]);
+            assert_eq!(app.session.document.source(), &source[1..]);
             if level > 1 {
                 assert_eq!(app.projection.rich.headings[0].level, (level - 1) as u8);
             }
             send(&mut app, Message::Undo);
-            assert_eq!(app.document.source(), source);
-            assert_eq!(app.selection, Selection::caret(0));
+            assert_eq!(app.session.document.source(), source);
+            assert_eq!(app.session.selection, Selection::caret(0));
         }
     }
 
@@ -3814,18 +4183,18 @@ mod tests {
     fn focus_disclosure_preserves_a_caret_inside_syntax_without_editing_history() {
         let mut app = app("### 日本語\n\n**Next**");
         send(&mut app, Message::SelectSource(Selection::caret(1)));
-        let revision = app.document.revision();
+        let revision = app.session.document.revision();
         send(&mut app, Message::EditorFocused(false));
         assert_eq!(app.editor.content().text(), "日本語\n\nNext");
-        assert_eq!(app.selection, Selection::caret(1));
+        assert_eq!(app.session.selection, Selection::caret(1));
         send(&mut app, Message::EditorFocused(true));
         assert_eq!(app.editor.content().text(), "### 日本語\n\nNext");
         assert_eq!(app.editor.content().cursor().position.column, 1);
-        assert_eq!(app.document.revision(), revision);
-        assert!(!app.dirty);
+        assert_eq!(app.session.document.revision(), revision);
+        assert!(!app.session.dirty);
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.revision(), revision);
-        assert_eq!(app.selection, Selection::caret(1));
+        assert_eq!(app.session.document.revision(), revision);
+        assert_eq!(app.session.selection, Selection::caret(1));
     }
 
     #[test]
@@ -3839,7 +4208,7 @@ mod tests {
         send(&mut app, Message::SelectSource(Selection::caret(0)));
         assert!(app.editor.content().cursor().selection.is_none());
         type_text(&mut app, "#");
-        assert_eq!(app.document.source(), "## Title\n\nBody");
+        assert_eq!(app.session.document.source(), "## Title\n\nBody");
         send(
             &mut app,
             Message::SelectSource(Selection { anchor: 2, head: 8 }),
@@ -3848,7 +4217,7 @@ mod tests {
         send(&mut app, Message::SelectSource(Selection::caret(0)));
         assert!(app.editor.content().cursor().selection.is_none());
         type_text(&mut app, "#");
-        assert_eq!(app.document.source(), "### Title\n\nBody");
+        assert_eq!(app.session.document.source(), "### Title\n\nBody");
     }
 
     #[test]
@@ -3866,14 +4235,14 @@ mod tests {
         };
         send(&mut app, Message::SelectSource(selection));
         assert_eq!(app.editor.content().text(), "# 日本語\n\nNext");
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
         let selection = Selection {
             anchor: 2,
             head: source.len() - 3,
         };
         send(&mut app, Message::SelectSource(selection));
         assert_eq!(app.editor.content().text(), "日本語\n\n**Next**");
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
         assert!(!Arc::ptr_eq(&lines, &app.projection.highlights));
         assert!(Arc::ptr_eq(&snapshot, &app.projection.source_id));
     }
@@ -3901,9 +4270,9 @@ mod tests {
         let mut app = app("- [x] First");
         send(&mut app, Message::Edit(Action::Move(Motion::DocumentEnd)));
         send(&mut app, Message::Edit(Action::Edit(Edit::Enter)));
-        assert_eq!(app.document.source(), "- [x] First\n- [ ] ");
+        assert_eq!(app.session.document.source(), "- [x] First\n- [ ] ");
         send(&mut app, Message::Edit(Action::Edit(Edit::Enter)));
-        assert_eq!(app.document.source(), "- [x] First\n\n");
+        assert_eq!(app.session.document.source(), "- [x] First\n\n");
     }
 
     #[test]
@@ -3911,7 +4280,7 @@ mod tests {
         let mut app = app("**word**");
         send(&mut app, Message::Edit(Action::SelectAll));
         send(&mut app, Message::Edit(Action::Move(Motion::DocumentStart)));
-        assert!(app.selection.is_caret());
+        assert!(app.session.selection.is_caret());
         assert!(app.editor.content().selection().is_none());
     }
 
@@ -3933,7 +4302,7 @@ mod tests {
             "Continuous 2000 blocks: load={load:?}, 100 native-buffer/source/projection edits={elapsed:?}, mean={:?}",
             elapsed / 100
         );
-        assert!(app.document.source().ends_with(&"x".repeat(100)));
+        assert!(app.session.document.source().ends_with(&"x".repeat(100)));
         assert_eq!(app.editor.snapshot(), app.editor.content().text());
     }
 
@@ -3943,20 +4312,25 @@ mod tests {
         let mut app = app(source);
         let point = app.projection.rich.tables[0].rows[1][0].start;
         send(&mut app, Message::Select(Selection::caret(point)));
-        let before = app.selection;
+        let before = app.session.selection;
         send(&mut app, Message::Edit(Action::Edit(Edit::Insert('|'))));
-        assert!(app.document.source().contains("\\|first"));
+        assert!(app.session.document.source().contains("\\|first"));
         assert_eq!(app.projection.rich.tables[0].alignment.len(), 2);
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, before);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, before);
         send(&mut app, Message::TableTab(false));
         type_text(&mut app, "New ");
-        assert!(app.document.source().contains("| first | New&#32; |"));
+        assert!(
+            app.session
+                .document
+                .source()
+                .contains("| first | New&#32; |")
+        );
         send(&mut app, Message::Edit(Action::Edit(Edit::Enter)));
         assert_eq!(app.projection.rich.tables[0].rows.len(), 2);
         assert_eq!(
-            table_edit::cell_at(&app.projection, app.selection)
+            table_edit::cell_at(&app.projection, app.session.selection)
                 .map(|(_, row, column)| (row, column)),
             Some((1, 1))
         );
@@ -3973,7 +4347,7 @@ mod tests {
         send(&mut app, Message::Table(crate::app::TableMessage::Exit));
         type_text(&mut app, "Outside");
         assert_eq!(app.projection.rich.tables[0].rows.len(), 2);
-        assert!(app.document.source().contains("\n\nOutside\nAfter"));
+        assert!(app.session.document.source().contains("\n\nOutside\nAfter"));
     }
 
     #[test]
@@ -3983,12 +4357,17 @@ mod tests {
         let mut app = app(source);
         send(&mut app, Message::Edit(Action::SelectAll));
         send(&mut app, Message::Format(Format::Bold));
-        assert!(app.document.source().contains("| **left** | **right** |"));
-        assert!(app.document.source().contains("![alt](room.png)"));
+        assert!(
+            app.session
+                .document
+                .source()
+                .contains("| **left** | **right** |")
+        );
+        assert!(app.session.document.source().contains("![alt](room.png)"));
         assert_eq!(app.projection.rich.tables.len(), 1);
         assert_eq!(app.projection.rich.images.len(), 1);
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), source);
     }
 
     #[test]
@@ -4001,22 +4380,22 @@ mod tests {
         };
         send(&mut app, Message::SelectSource(before));
         send(&mut app, Message::Format(Format::Strikethrough));
-        assert_eq!(app.document.source(), "Before ~~café 🧑‍💻~~ after");
-        assert!(app.selection.anchor > app.selection.head);
-        let marked = app.selection;
+        assert_eq!(app.session.document.source(), "Before ~~café 🧑‍💻~~ after");
+        assert!(app.session.selection.anchor > app.session.selection.head);
+        let marked = app.session.selection;
         send(&mut app, Message::ToggleSource);
-        assert_eq!(app.selection, marked);
+        assert_eq!(app.session.selection, marked);
         send(&mut app, Message::ToggleSource);
-        assert_eq!(app.selection, marked);
+        assert_eq!(app.session.selection, marked);
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, before);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, before);
         send(&mut app, Message::Redo);
-        assert_eq!(app.document.source(), "Before ~~café 🧑‍💻~~ after");
-        assert_eq!(app.selection, marked);
+        assert_eq!(app.session.document.source(), "Before ~~café 🧑‍💻~~ after");
+        assert_eq!(app.session.selection, marked);
         send(&mut app, Message::Format(Format::Strikethrough));
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, before);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, before);
     }
 
     #[test]
@@ -4048,18 +4427,18 @@ mod tests {
             app.editor.content().selection().as_deref(),
             Some("\u{fffc}")
         );
-        let selected = app.selection;
+        let selected = app.session.selection;
         send(&mut app, Message::ToggleSource);
         assert_eq!(
             app.editor.content().selection().as_deref(),
             Some("![alt](room.png)")
         );
         send(&mut app, Message::ToggleSource);
-        assert_eq!(app.selection, selected);
+        assert_eq!(app.session.selection, selected);
         send(&mut app, Message::Edit(Action::Edit(Edit::Delete)));
         assert!(app.projection.rich.images.is_empty());
         send(&mut app, Message::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selected);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selected);
     }
 }

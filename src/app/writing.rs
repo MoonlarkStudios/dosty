@@ -71,32 +71,44 @@ pub struct DeferredTarget {
 impl DeferredTarget {
     fn new(app: &App, selection: Selection) -> Self {
         Self {
-            composition: app.document.collaboration().composition_target(selection),
+            composition: app
+                .session
+                .document
+                .collaboration()
+                .composition_target(selection),
             gap: selection.is_caret().then(|| {
-                app.document
+                app.session
+                    .document
                     .collaboration()
                     .position(selection.head, yrs::Assoc::Before)
             }),
             selection,
-            generation: app.document.collaboration().generation(),
+            generation: app.session.document.collaboration().generation(),
         }
     }
     fn resolve(&self, app: &App) -> Option<Selection> {
         let selection = app
+            .session
             .document
             .collaboration()
             .resolve_composition(&self.composition)?;
         self.gap.as_ref().map_or(Some(selection), |gap| {
-            app.document
+            app.session
+                .document
                 .collaboration()
                 .resolve(gap)
                 .map(Selection::caret)
         })
     }
     fn displaced_cursor(&self, app: &App) -> Option<StableSelection> {
-        (self.generation != app.document.collaboration().generation()
-            || self.selection != app.selection)
-            .then(|| app.document.collaboration().selection(app.selection))
+        (self.generation != app.session.document.collaboration().generation()
+            || self.selection != app.session.selection)
+            .then(|| {
+                app.session
+                    .document
+                    .collaboration()
+                    .selection(app.session.selection)
+            })
     }
 }
 
@@ -134,8 +146,10 @@ impl App {
                     return Task::none();
                 }
                 if kind == Kind::Link
-                    && (self.document.source()[self.selection.range()].contains("\n\n")
-                        || self.document.source()[self.selection.range()].contains("\r\n\r\n"))
+                    && (self.session.document.source()[self.session.selection.range()]
+                        .contains("\n\n")
+                        || self.session.document.source()[self.session.selection.range()]
+                            .contains("\r\n\r\n"))
                 {
                     self.notification =
                         Some("Select a phrase within one paragraph to make a link.".into());
@@ -172,7 +186,10 @@ impl App {
                 };
                 let result = form
                     .target
-                    .resolve(self.document.collaboration(), self.document.source())
+                    .resolve(
+                        self.session.document.collaboration(),
+                        self.session.document.source(),
+                    )
                     .and_then(|range| {
                         if !remove {
                             let destination = if form.kind == Kind::Quote {
@@ -218,7 +235,7 @@ impl App {
                                 );
                             }
                         }
-                        let newline = writing::newline(self.document.source());
+                        let newline = writing::newline(self.session.document.source());
                         let replacement = if remove {
                             if form.kind == Kind::Image {
                                 String::new()
@@ -263,10 +280,13 @@ impl App {
                     .as_ref()
                     .and_then(|form| {
                         form.target
-                            .resolve(self.document.collaboration(), self.document.source())
+                            .resolve(
+                                self.session.document.collaboration(),
+                                self.session.document.source(),
+                            )
                             .ok()
                     })
-                    .map_or(self.selection, |range| Selection {
+                    .map_or(self.session.selection, |range| Selection {
                         anchor: range.start,
                         head: range.end,
                     });
@@ -312,7 +332,7 @@ impl App {
                 if self.loading || self.overlay.is_some() || self.mode == EditorMode::Read {
                     return Task::none();
                 }
-                let target = DeferredTarget::new(self, self.selection);
+                let target = DeferredTarget::new(self, self.session.selection);
                 return Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || assets::clipboard(fallback))
@@ -343,14 +363,16 @@ impl App {
                     Ok(assets::Clipboard::Text(value)) => {
                         if let Some(selection) = target.resolve(self) {
                             let cursor = target.displaced_cursor(self);
-                            self.selection = selection;
+                            self.session.selection = selection;
                             self.sync_editor();
                             if !selection.is_caret()
                                 && (value.starts_with("https://")
                                     || value.starts_with("http://")
                                     || value.starts_with("mailto:"))
-                                && !self.document.source()[selection.range()].contains("\n\n")
-                                && !self.document.source()[selection.range()].contains("\r\n\r\n")
+                                && !self.session.document.source()[selection.range()]
+                                    .contains("\n\n")
+                                && !self.session.document.source()[selection.range()]
+                                    .contains("\r\n\r\n")
                                 && writing::safe_destination(&value)
                             {
                                 let label = self.editor.content().selection().unwrap_or_default();
@@ -389,8 +411,10 @@ impl App {
                                 details.label = label;
                             }
                             details.destination = destination;
-                            let value =
-                                writing::figure(&details, writing::newline(self.document.source()));
+                            let value = writing::figure(
+                                &details,
+                                writing::newline(self.session.document.source()),
+                            );
                             let value = self.block_insertion(selection.range(), &value);
                             if let Err(error) = self.apply_writing(selection.range(), value) {
                                 self.notification = Some(error);
@@ -411,14 +435,15 @@ impl App {
             }
             Message::ImageAt(offset) => {
                 if self.overlay.is_none() && !self.loading {
-                    self.selection = Selection::caret(offset);
+                    self.session.selection = Selection::caret(offset);
                     self.open_details(Kind::Image);
                     return operation::focus("writing-details-first");
                 }
             }
             Message::OpenAt(offset) => {
                 if self.overlay.is_none()
-                    && let Some(details) = writing::inline_at(self.document.source(), offset, false)
+                    && let Some(details) =
+                        writing::inline_at(self.session.document.source(), offset, false)
                 {
                     return self.open_destination(details.destination);
                 }
@@ -430,24 +455,24 @@ impl App {
 
     fn open_details(&mut self, kind: Kind) {
         self.links.close_picker();
-        let source = self.document.source();
+        let source = self.session.document.source();
         let quote = (kind == Kind::Quote)
-            .then(|| writing::quote_at(source, self.selection.head))
+            .then(|| writing::quote_at(source, self.session.selection.head))
             .flatten();
         let found = match kind {
             Kind::Link | Kind::Image => {
-                writing::inline_at(source, self.selection.head, kind == Kind::Image)
+                writing::inline_at(source, self.session.selection.head, kind == Kind::Image)
             }
             Kind::Quote => quote.as_ref().map(|(details, _)| details.clone()),
         };
         let found = found.filter(|details| {
-            self.selection.is_caret()
-                || (details.range.start <= self.selection.range().start
-                    && self.selection.range().end <= details.range.end)
+            self.session.selection.is_caret()
+                || (details.range.start <= self.session.selection.range().start
+                    && self.session.selection.range().end <= details.range.end)
         });
         let existing = found.is_some();
         let details = found.unwrap_or_else(|| Details {
-            range: self.selection.range(),
+            range: self.session.selection.range(),
             label: if kind == Kind::Quote {
                 String::new()
             } else {
@@ -463,7 +488,11 @@ impl App {
             ""
         };
         self.writing.form = Some(Form {
-            target: Target::new(self.document.collaboration(), source, details.range.clone()),
+            target: Target::new(
+                self.session.document.collaboration(),
+                source,
+                details.range.clone(),
+            ),
             details,
             body: text_editor::Content::with_text(body),
             existing,
@@ -471,7 +500,7 @@ impl App {
             error: None,
         });
         self.overlay = Some(Overlay::Writing);
-        self.document.break_history_group();
+        self.session.document.break_history_group();
     }
 
     pub(super) fn import_dropped_image(&mut self, path: PathBuf) -> Task<AppMessage> {
@@ -483,7 +512,7 @@ impl App {
                 Some("Add images one at a time; finish the current file operation first.".into());
             return Task::none();
         }
-        let target = DeferredTarget::new(self, self.selection);
+        let target = DeferredTarget::new(self, self.session.selection);
         self.update_writing(Message::ImageChosen {
             target,
             path: Some(path),
@@ -499,7 +528,7 @@ impl App {
         if media.target.resolve(self).is_none() {
             return Task::none();
         }
-        let Some(path) = self.path.clone() else {
+        let Some(path) = self.session.path.clone() else {
             self.writing.pending_media = Some(media);
             self.notification = Some("Save once to keep images beside your Markdown.".into());
             return self.save(false);
@@ -540,17 +569,21 @@ impl App {
 
     fn restore_deferred_cursor(&mut self, cursor: Option<StableSelection>) {
         if let Some(cursor) = cursor
-            && let Some(selection) = self.document.collaboration().resolve_selection(&cursor)
+            && let Some(selection) = self
+                .session
+                .document
+                .collaboration()
+                .resolve_selection(&cursor)
         {
-            self.selection = selection;
+            self.session.selection = selection;
             self.sync_editor();
         }
     }
 
     fn block_insertion(&self, range: std::ops::Range<usize>, text: &str) -> String {
-        let newline = writing::newline(self.document.source());
-        let prefix = &self.document.source()[..range.start];
-        let suffix = &self.document.source()[range.end..];
+        let newline = writing::newline(self.session.document.source());
+        let prefix = &self.session.document.source()[..range.start];
+        let suffix = &self.session.document.source()[range.end..];
         format!(
             "{}{text}{}",
             if prefix.is_empty() || prefix.ends_with(&newline.repeat(2)) {
@@ -571,21 +604,23 @@ impl App {
     }
     fn apply_writing(&mut self, range: std::ops::Range<usize>, text: String) -> Result<(), String> {
         let after = Selection::caret(range.start + text.len());
-        self.document
+        self.session
+            .document
             .transact(
                 &[SourceEdit { range, text }],
                 EditOrigin::Human,
-                Some((self.selection, after)),
+                Some((self.session.selection, after)),
                 true,
             )
             .map_err(|e| e.to_string())?;
-        self.selection = after;
+        self.session.selection = after;
         self.mode = if self.mode == EditorMode::Read {
             EditorMode::Live
         } else {
             self.mode
         };
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         self.sync_editor();
         self.changed();
         Ok(())
@@ -649,8 +684,7 @@ impl App {
                 AppMessage::LinkOpened,
             );
         }
-        let base = self.path.as_deref().and_then(|path| path.parent());
-        if let Some((path, fragment)) = document_links::destination(destination, base) {
+        if let Some((path, fragment)) = document_links::destination(destination, self.link_base()) {
             return self.open_document_link(path, fragment.map(links::Jump::Heading));
         }
         self.notification = Some(
@@ -684,7 +718,7 @@ impl App {
                 input = input.id("writing-details-first");
             } else if form.kind == Kind::Link
                 && matches!(field, Field::Destination)
-                && self.workspace_links_available()
+                && self.link_picker_available()
             {
                 input = input.id(links::DESTINATION);
                 let input = crate::editor::outline_filter::FilterInput::new(input, |key| {
@@ -754,7 +788,7 @@ impl App {
                 Field::Destination,
                 false,
             ));
-            if form.kind == Kind::Link && self.workspace_links_available() {
+            if form.kind == Kind::Link && self.link_picker_available() {
                 content = content.push(self.link_picker_view());
             }
             if form.kind == Kind::Image {

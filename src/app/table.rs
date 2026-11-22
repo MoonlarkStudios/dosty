@@ -122,7 +122,10 @@ impl App {
         let menu = form.menu.as_ref()?;
         let range = form
             .target
-            .resolve(self.document.collaboration(), self.document.source())
+            .resolve(
+                self.session.document.collaboration(),
+                self.session.document.source(),
+            )
             .ok()?;
         let index = self
             .projection
@@ -175,10 +178,10 @@ impl App {
         }
         // Every action, including selection and clear, checks the captured table
         // before dismissing the menu. A stale menu never retargets a nearby cell.
-        let range = match form
-            .target
-            .resolve(self.document.collaboration(), self.document.source())
-        {
+        let range = match form.target.resolve(
+            self.session.document.collaboration(),
+            self.session.document.source(),
+        ) {
             Ok(range) => range,
             Err(error) => return self.menu_error(error),
         };
@@ -192,7 +195,7 @@ impl App {
             return self.menu_error("The selected table is no longer available.".into());
         };
         let (row, column, scope, previous) = (form.row, form.column, menu.scope, menu.grid);
-        let selection = self.selection;
+        let selection = self.session.selection;
         if let ContextAction::Command(command) = action {
             if let Err(error) = self.apply_table_command(command) {
                 return self.menu_error(error);
@@ -203,7 +206,7 @@ impl App {
             self.editor_focused = true;
             self.sync_editor();
             if let Some((table, row, column)) =
-                table_edit::cell_at(&self.projection, self.selection)
+                table_edit::cell_at(&self.projection, self.session.selection)
                 && let Some(index) = self
                     .projection
                     .rich
@@ -226,7 +229,7 @@ impl App {
         self.overlay = None;
         if matches!(action, ContextAction::DeleteTable | ContextAction::Exit) {
             self.clear_grid();
-            self.selection =
+            self.session.selection =
                 Selection::caret(self.projection.rich.tables[index].source_rows[row][column].start);
             return self.table_context_action(Some(action));
         }
@@ -255,7 +258,7 @@ impl App {
                 && let Some(mut grid) = previous.filter(|grid| grid.contains(row, column))
             {
                 grid.table = index;
-                self.selection = selection;
+                self.session.selection = selection;
                 self.restore_grid(grid);
             }
             return self.update_grid(GridMessage::Clear);
@@ -410,8 +413,8 @@ impl App {
     }
 
     pub(super) fn apply_table_input(&mut self, edit: table_edit::TableEdit, separate: bool) {
-        if !separate && !self.selection.is_caret() {
-            self.document.break_history_group();
+        if !separate && !self.session.selection.is_caret() {
+            self.session.document.break_history_group();
         }
         let previous = self.table_editing.take();
         if let Some(first) = edit.edits.first()
@@ -421,10 +424,12 @@ impl App {
             let cell = &table.source_rows[row][column];
             self.table_editing = Some(EditingCell {
                 start: self
+                    .session
                     .document
                     .collaboration()
                     .position(cell.start, yrs::Assoc::Before),
                 end: self
+                    .session
                     .document
                     .collaboration()
                     .position(cell.end, yrs::Assoc::After),
@@ -439,9 +444,9 @@ impl App {
             return None;
         }
         let editing = self.table_editing.as_ref()?;
-        let collaboration = self.document.collaboration();
+        let collaboration = self.session.document.collaboration();
         let range = collaboration.resolve(&editing.start)?..collaboration.resolve(&editing.end)?;
-        let text = self.document.source().get(range.clone())?;
+        let text = self.session.document.source().get(range.clone())?;
         (text.is_empty()
             || text.starts_with(horizontal_space)
             || text.ends_with(horizontal_space)
@@ -453,22 +458,23 @@ impl App {
         if self.mode != EditorMode::Live || !self.editor_focused {
             return;
         }
-        let Some((table, row, column)) =
-            table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
-        else {
+        let Some((table, row, column)) = table_edit::cell_at(
+            &self.projection,
+            Selection::caret(self.session.selection.head),
+        ) else {
             self.table_editing = None;
             return;
         };
         let cell = &table.source_rows[row][column];
-        let collaboration = self.document.collaboration();
-        let source = self.document.source();
+        let collaboration = self.session.document.collaboration();
+        let source = self.session.document.source();
         if let Some(editing) = &self.table_editing
             && let Some(start) = collaboration.resolve(&editing.start)
             && let Some(end) = collaboration.resolve(&editing.end)
             && start <= cell.start
             && cell.end <= end
-            && start <= self.selection.head
-            && self.selection.head <= end
+            && start <= self.session.selection.head
+            && self.session.selection.head <= end
             && source[start..cell.start].chars().all(horizontal_space)
             && source[cell.end..end].chars().all(horizontal_space)
         {
@@ -477,8 +483,8 @@ impl App {
         let mut range = cell.clone();
         // A restored source caret can sit in whitespace trimmed by the parser.
         // Preserve that explicit position when focus or undo restores the cell.
-        let start = range.start.min(self.selection.head);
-        let end = range.end.max(self.selection.head);
+        let start = range.start.min(self.session.selection.head);
+        let end = range.end.max(self.session.selection.head);
         if source[start..range.start].chars().all(horizontal_space)
             && source[range.end..end].chars().all(horizontal_space)
         {
@@ -872,7 +878,7 @@ impl App {
             }
             self.editor_focused = true;
             if let Some(mut edit) =
-                table_edit::materialize_cell(self.document.source(), row, column, table)
+                table_edit::materialize_cell(self.session.document.source(), row, column, table)
             {
                 if !selection.is_caret() {
                     edit.selection.anchor = table_edit::remap_selection(
@@ -882,12 +888,12 @@ impl App {
                     .anchor;
                 }
                 self.table_editing = None;
-                self.selection = selection;
+                self.session.selection = selection;
                 self.apply_table_plan(edit, true);
             } else {
-                self.selection = selection;
+                self.session.selection = selection;
                 self.sync_editor();
-                self.document.break_history_group();
+                self.session.document.break_history_group();
             }
             return operation::focus(EDITOR);
         }
@@ -969,15 +975,18 @@ impl App {
                     .or_else(|| self.grid_resume())
                     .map(|g| (g.table, g.active.0, g.active.1))
                     .or_else(|| {
-                        table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
-                            .and_then(|(table, row, column)| {
-                                self.projection
-                                    .rich
-                                    .tables
-                                    .iter()
-                                    .position(|candidate| std::ptr::eq(candidate, table))
-                                    .map(|index| (index, row, column))
-                            })
+                        table_edit::cell_at(
+                            &self.projection,
+                            Selection::caret(self.session.selection.head),
+                        )
+                        .and_then(|(table, row, column)| {
+                            self.projection
+                                .rich
+                                .tables
+                                .iter()
+                                .position(|candidate| std::ptr::eq(candidate, table))
+                                .map(|index| (index, row, column))
+                        })
                     });
                 if let Some((table, row, column)) = target {
                     return crate::editor::rich_editor::open_table_menu(
@@ -991,9 +1000,10 @@ impl App {
             }
             Message::OpenMenu => return self.update_table(Message::Open),
             Message::Open if self.overlay.is_none() => {
-                let Some((table, row, column)) =
-                    table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
-                else {
+                let Some((table, row, column)) = table_edit::cell_at(
+                    &self.projection,
+                    Selection::caret(self.session.selection.head),
+                ) else {
                     self.notification =
                         Some("Place the caret or select text inside one table cell.".into());
                     return Task::none();
@@ -1030,9 +1040,12 @@ impl App {
 
     fn apply_table_command(&mut self, command: Command) -> Result<(), String> {
         let form = self.table.form.as_ref().ok_or("No table is selected.")?;
-        let source = self.document.source();
-        let range = form.target.resolve(self.document.collaboration(), source)?;
+        let source = self.session.document.source();
+        let range = form
+            .target
+            .resolve(self.session.document.collaboration(), source)?;
         let selection = self
+            .session
             .document
             .collaboration()
             .resolve_selection(&form.selection)
@@ -1047,17 +1060,18 @@ impl App {
         let edit =
             table_edit::command_at(source, table, form.row, form.column, selection, command)?;
         if !edit.edits.is_empty() {
-            self.document.break_history_group();
-            let result = self.document.transact(
+            self.session.document.break_history_group();
+            let result = self.session.document.transact(
                 &edit.edits,
                 EditOrigin::Human,
                 Some((selection, edit.selection)),
                 true,
             );
-            self.document.break_history_group();
+            self.session.document.break_history_group();
             result.map_err(|error| error.to_string())?;
-            self.selection = edit.selection;
-            self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+            self.session.selection = edit.selection;
+            self.preserve_viewport_generation =
+                Some(self.session.document.collaboration().generation());
             self.changed();
         }
         Ok(())
@@ -1068,11 +1082,15 @@ impl App {
         self.table.form = Some(Form {
             menu: None,
             target: Target::new(
-                self.document.collaboration(),
-                self.document.source(),
+                self.session.document.collaboration(),
+                self.session.document.source(),
                 table.source_range.clone(),
             ),
-            selection: self.document.collaboration().selection(self.selection),
+            selection: self
+                .session
+                .document
+                .collaboration()
+                .selection(self.session.selection),
             selected: 1,
             row,
             column,
@@ -1086,18 +1104,24 @@ impl App {
     }
 
     fn table_context_action(&mut self, action: Option<ContextAction>) -> Task<AppMessage> {
-        let Some((table, row, _)) =
-            table_edit::cell_at(&self.projection, Selection::caret(self.selection.head))
-        else {
+        let Some((table, row, _)) = table_edit::cell_at(
+            &self.projection,
+            Selection::caret(self.session.selection.head),
+        ) else {
             return Task::none();
         };
-        let focus = Selection::caret(self.selection.head);
+        let focus = Selection::caret(self.session.selection.head);
         let edit = match action {
             Some(ContextAction::Command(command)) => {
-                match table_edit::command(&self.projection, self.document.source(), focus, command)
-                {
+                match table_edit::command(
+                    &self.projection,
+                    self.session.document.source(),
+                    focus,
+                    command,
+                ) {
                     Ok(mut edit) => {
-                        edit.selection = table_edit::remap_selection(self.selection, &edit.edits);
+                        edit.selection =
+                            table_edit::remap_selection(self.session.selection, &edit.edits);
                         Some(edit)
                     }
                     Err(error) => {
@@ -1114,15 +1138,15 @@ impl App {
                 } else {
                     &table.source_rows[..]
                 };
-                self.selection = Selection {
+                self.session.selection = Selection {
                     anchor: rows.first().unwrap().first().unwrap().start,
                     head: rows.last().unwrap().last().unwrap().end,
                 };
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 None
             }
             Some(ContextAction::Clear) => {
-                let selection = if self.selection.is_caret() {
+                let selection = if self.session.selection.is_caret() {
                     let (_, row, column) = table_edit::cell_at(&self.projection, focus).unwrap();
                     let cell = &table.source_rows[row][column];
                     Selection {
@@ -1130,16 +1154,21 @@ impl App {
                         head: cell.end,
                     }
                 } else {
-                    self.selection
+                    self.session.selection
                 };
                 table_edit::replace_across_cells(
                     &self.projection,
-                    self.document.source(),
+                    self.session.document.source(),
                     selection,
                     "",
                 )
                 .or_else(|| {
-                    table_edit::insert_text(&self.projection, self.document.source(), selection, "")
+                    table_edit::insert_text(
+                        &self.projection,
+                        self.session.document.source(),
+                        selection,
+                        "",
+                    )
                 })
             }
             Some(ContextAction::DeleteTable) => Some(table_edit::TableEdit {
@@ -1151,7 +1180,7 @@ impl App {
             }),
             Some(ContextAction::Exit) => {
                 let end = table.source_range.end;
-                let source = self.document.source();
+                let source = self.session.document.source();
                 let ending = if source[table.source_range.clone()].contains("\r\n") {
                     "\r\n"
                 } else if source[table.source_range.clone()].contains('\r') {
@@ -1174,15 +1203,15 @@ impl App {
             }
             None => table_edit::replace_document_selection(
                 &self.projection,
-                self.document.source(),
-                self.selection,
+                self.session.document.source(),
+                self.session.selection,
                 "\t",
             )
             .or_else(|| {
                 table_edit::insert_text(
                     &self.projection,
-                    self.document.source(),
-                    self.selection,
+                    self.session.document.source(),
+                    self.session.selection,
                     "\t",
                 )
             }),

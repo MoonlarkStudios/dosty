@@ -111,8 +111,8 @@ UI event path with explicit limits. Opening guards against edits until completio
 Saving captures a source/state snapshot; subsequent edits remain dirty.
 
 Application chrome owns independent Files/Outline panel states and a
-Hide Sidebars override. Files occupies the left edge only after a workspace scan
-succeeds; Outline occupies the right. Its inline heading filter retains document order, ancestor context,
+Hide Sidebars override. Files occupies the left edge whenever it is open, with
+or without a place, and shows the tree only after a scan succeeds; Outline occupies the right. Its inline heading filter retains document order, ancestor context,
 and fold state without creating an application overlay.
 Responsive layout docks open panels while preserving a usable writing column,
 then uses overlays when space is limited. Formatting is transient. Editing modes
@@ -135,14 +135,38 @@ without adding a second source mutation path. Other platforms retain the
 in-window command menu. The macOS content extends into the transparent native
 titlebar while retaining system window buttons.
 
-Startup creates one blank document, then reopens the last workspace unless a
+Startup creates one blank document, then reopens the last place unless a
 document or folder argument was given. Preferences retain appearance, independent
 statistics visibility, and writing typeface. The typeface is applied to the stored
 resolved typography on startup, appearance changes, and preference changes;
 layout/cache metrics include it so text is reshaped on a switch.
 
-`app/workspace.rs` owns remembered workspaces; `io/workspace_state.rs` stores them
-in the data directory. A successful scan of a new root adopts it as the current
+`app/session.rs` holds what must survive when a document leaves the page: its
+text and history, selection, path, and saved baseline. `App` keeps one session on
+the page and rebuilds view state (projection, editor buffer, table drafts) when a
+session is installed. `app/background.rs` keeps outgoing sessions with their image
+reference ledger and recovery identity; unsaved ones are never released, clean
+ones are bounded. Each unsaved background session gets a recovery copy on the next
+scheduler tick, ahead of the page's own, with one write in flight at a time.
+`app/trail.rs` records visited documents for Back and Forward; a step moves the
+trail only when its document arrives, since opening may be asynchronous or fail.
+A never-saved session also carries the folder its first save writes into and
+whether the writer named it; that save claims a unique empty file through the
+ordinary guarded creation path and then saves over it with an empty expected
+baseline, so no separate overwrite check exists.
+Images are folder entries distinguished by extension, not documents: the
+folder state's document accessors exclude them, so opening, reopening, and
+switching never treat one as text. `app/image_preview.rs` loads a single image
+through the image store's bounded reader without entering the per-document cache,
+which is rebuilt from the projection on every update.
+Only closing the window raises the unsaved guard. `app/home.rs` derives the home
+surface from that state rather than storing a flag: it shows on an untouched,
+unsaved page with no trail in either direction, once the library has settled.
+
+`app/workspace.rs` owns the library of places and the open place's remembered
+state; `io/workspace_state.rs` stores them in the data directory. Places are an
+explicit, bounded, ordered list rather than a recency list, and the open place
+follows the document on the page. A successful scan of a new root adopts it as the current
 workspace and applies state read before the scan. Replacing a document first
 records the outgoing selection; loading one restores its clamped selection through
 the ordinary sync path. Writes coalesce so an older snapshot cannot land after a
@@ -151,11 +175,13 @@ complete before a confirmed window close. Workspace state is a cache: write
 failures are logged, never shown, and every remembered path is revalidated against
 the current scan before use.
 
-Quick Open owns an ephemeral filename/path index derived from the existing bounded
-workspace snapshot. Its focused query intercepts result navigation locally.
-Acceptance reuses guarded file loading; cancellation restores the previous widget
-focus without committing a table draft or editing the source. Workspace changes
-invalidate it, refreshes update it, and closing discards its index and query.
+Quick Open is the switcher. It derives its rows when it opens from the open
+place's bounded snapshot, the background documents, and the library, and scans
+the other places on a cancellable worker task whose results it ignores once
+closed or superseded. Its focused query intercepts row navigation locally.
+Acceptance reuses file loading, background resumption, or place opening;
+cancellation restores the previous widget focus without committing a table draft
+or editing the source. Closing discards its index, query, and running scan.
 
 The folder workflow owns navigation, expanded paths, bounded scan generations,
 and operation identities. Folder discovery returns path-only snapshots from a
@@ -170,8 +196,9 @@ discarding history. Recovery identities rotate when that path changes. See
 Link suggestions use the current folder snapshot for file paths and a bounded
 worker read for target headings. The **Linked from** action scans saved
 workspace files for explicit Markdown links on a cancellable worker. Resolved
-destinations use the ordinary guarded document loader. The loaded file supplies
-the heading or validates a backlink's source offset against the scanned bytes.
+destinations use the ordinary document opening path, including resumption of
+unsaved background sessions. The destination document supplies the heading or
+validates a backlink's source offset against the scanned bytes.
 
 Markdown/checkpoint publication uses cooperative locks, checked baselines, atomic
 writes, and a recovery journal. Conflicts preserve files and surface an error.

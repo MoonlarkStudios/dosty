@@ -5,51 +5,135 @@ the bundled essay and image under the configuration directory's `samples/`
 folder. Copies work offline and do not replace one another. Save As moves a copy
 into the writer's folder.
 
+## Home
+
+A launch with nothing to resume shows home on the first, untouched page: recent
+documents of the open place, the places in the library, and Add place, Open file,
+and Quick Open. The page keeps its caret and focus, so typing starts a document
+and home is gone; it does not return for that document, even if the writing is
+undone. Home waits until the library has been read and any remembered place has
+finished opening, so it never flashes before a document that is about to return.
+A new page requested after visiting a document is a plain blank page.
+
+## New pages
+
+**New document** (Cmd/Ctrl+N) opens an empty page at once, with no name or
+location to choose. The page belongs to a folder straight away: the folder of the
+document the writer was in, the folder of the draft they were in, or otherwise
+the open place. With none of those it belongs nowhere yet.
+
+Until it is first saved, a new page is a draft. It is titled from its first line
+that has any words, without Markdown markers or characters that file names cannot
+hold, up to 60 characters; an empty draft is `Untitled.md`. **Name…** in the
+document menu (Rename on macOS) sets the name instead, as written, and the title
+stops following the text. Naming writes nothing.
+
+Nothing is written until the first save. That save claims the draft's name in its
+folder as a new, empty file, numbering the name (`Title 2.md`, up to 99) when it
+is taken, and then saves over that file under the same guard as any later save.
+An existing file is never replaced. If the save fails, the claimed file is removed
+when nothing has been written to it. A draft that belongs nowhere, and **Save
+as…**, ask where to save as before. A draft restored from a recovery copy has
+forgotten its folder and asks too.
+
+Creating a document from a folder's menu in Files still asks for a name and
+creates the file immediately, for when the name must follow a convention from
+the start.
+
+## Moving between documents
+
+Replacing the document on the page never asks about unsaved changes. The
+outgoing document stays open in the background with its unsaved changes, its
+undo history, and its recovery copy, and a notice names it when it had unsaved
+changes. Nothing is written to its file until it is saved.
+
+**Back** (Cmd/Ctrl+[) and **Forward** (Cmd/Ctrl+]) move through the documents
+visited in the window, up to 64. They are also in File on macOS and in the File
+command menu elsewhere. Opening a document from anywhere other than Back or
+Forward replaces the forward part of that trail.
+
+A document with unsaved changes returns exactly as it was left, without reading
+its file; saving still checks the file against the baseline it was opened from.
+A clean document is read from its file again. If the file is unchanged, its
+background copy returns with its undo history; otherwise the file's current
+contents replace it. Choosing the file of the unsaved page itself is refused
+rather than reading the saved copy over the writing.
+
+Unsaved documents are kept until saved or discarded. Clean background documents
+are a convenience: at most 8, and 32 MiB of source, are kept, least recently
+used released first. A clean document that was never saved, such as an untouched
+new page, is dropped when replaced.
+
+Closing the window is the one place Dosty asks. A single prompt names the unsaved
+documents. **Save changes** saves the page, then brings each unsaved background
+document to the page in turn and saves it, asking for a name where one was never
+chosen; a cancelled or failed save stops there with everything still open.
+**Discard** closes without saving any of them. **Cancel** returns to writing.
+
+A file with unsaved background changes, or a folder containing one, cannot be
+moved or renamed until that document is saved: only the page's unsaved image
+references are relocated with a move.
+
 ## Files and folders
 
-**File → Open…** opens a single document; **Open folder…** or Cmd/Ctrl+Shift+O
-opens a folder as a workspace. Without a workspace, startup opens one blank
-document with both sidebars hidden. Legacy recent-file preferences are removed
-when preferences are rewritten.
+**File → Open…** opens a single document. **Add place…** or Cmd/Ctrl+Shift+O
+adds a folder to the library and opens it. With no place open, startup opens one
+blank document with both sidebars hidden. Legacy recent-file preferences are
+removed when preferences are rewritten.
 
-### Remembered workspaces
+### The library of places
 
-A workspace is remembered the way an editor such as VS Code remembers folders.
-Launching Dosty without a document or folder argument reopens the last workspace
-that was open when it quit. For each workspace Dosty remembers which documents
-were active (the most recent is reopened), each document's last selection, the
-expanded folders, and whether Files and Outline were open. Reopening a document
-in that workspace returns its caret, even after switching away. Quick Open lists
-recently active documents first.
+A place is a folder the writer has added. It stays in the library, in the order
+it was added, until **Remove from library** takes it out; removal forgets how the
+place was left and never touches the folder or its files. The library holds up to
+64 places. When it is full, another folder still opens but is not kept, with a
+notice. Folders remembered as recent by earlier versions become places.
 
-Opening a workspace reopens its last document only when nothing would be
-displaced: the current page is an empty untitled document or a clean document from
-the workspace being left. Unsaved writing always stays open. A remembered document
-or folder that no longer exists is skipped; a selection is clamped to the current
-source if the file changed outside Dosty.
+One place is open at a time and Files shows it. **File → Places** (or **Places…**
+in the File command menu and the place-name menu) lists every place, qualifying
+duplicate names with their location. The open place follows the page: opening or
+returning to a document that lives in another place opens that place. A document
+outside every place leaves the open place as it is. Where one place sits inside
+another, the open place is kept if it holds the document; otherwise the deepest
+place that holds it opens.
 
-**File → Open Recent** (or **Open recent…** in the File command menu and the
-workspace menu) lists up to 12 recent folders, qualifying duplicate names with
-their location. **Clear Menu** / **Clear recent folders** forgets every folder
-except the open one, including how each was left. A recent folder that cannot be
-reopened is removed with a notice.
+Launching Dosty without a document or folder argument reopens the place that was
+open when it quit. For each place Dosty remembers which documents were active (the
+most recent is reopened), each document's last selection, the expanded folders,
+and whether Files and Outline were open. Reopening a document in that place returns
+its caret, even after switching away. Quick Open lists recently active documents
+first.
+
+Moving to a place reopens its last document only when the page is an empty
+untitled document or a clean document from the place being left. Unsaved writing
+always stays on the page. A remembered document or folder that no longer exists is
+skipped; a selection is clamped to the current source if the file changed outside
+Dosty. A place that cannot be reopened is removed with a notice.
 
 State lives in the `workspaces/` folder of Dosty's per-user
 [data directory](identity-migration.md#existing-koan-and-daytrip-data), never in
-the writer's folders: `workspaces.toml` holds recent folders and the folder to
-reopen, and one `state.toml` per remembered folder records how it was left. Files
-are private to the user on Unix, bounded, and written on workers. Unreadable or
-malformed state is ignored rather than reported. Deleting `workspaces/` forgets
-workspaces and nothing else; the Windows uninstaller removes it while keeping
-preferences and recovery copies.
+the writer's folders: `workspaces.toml` holds the places and the one to reopen,
+and one `state.toml` per place records how it was left. Files are private to the
+user on Unix, bounded, and written on workers. Unreadable or malformed state is
+ignored rather than reported. Deleting `workspaces/` empties the library and
+nothing else; the Windows uninstaller removes it while keeping preferences and
+recovery copies.
 
 The Files tree preserves the actual directory hierarchy, including empty folders.
+Folders come first, then documents, each in reading order: case-insensitive, with
+runs of digits compared as numbers, so `Chapter 2` precedes `Chapter 10`. Quick
+Open orders a folder's contents the same way. Documents are shown without their
+Markdown extension; a chevron marks a folder and documents carry no glyph.
 Discovery reads paths and file types on a worker, not document contents. It finds
-`.md` and `.markdown` case-insensitively, skips symlinks, hidden items, `target`,
+documents (`.md` and `.markdown`) and images (`.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`) case-insensitively, skips symlinks, hidden items, `target`,
 `node_modules`, and `*.assets` folders, and stops at 32,768 visited entries,
 48 levels, or 8 MiB of retained paths. Partial scans and unreadable subfolders
-surface a notice. **Refresh folder** discovers external changes; there is no
-filesystem watcher. Opening another folder cancels or invalidates an older scan.
+surface a notice. The open place is rescanned whenever the window regains focus
+with nothing else open over the page, so files changed in another program are
+there on return; the rows stay in place while it runs. **Refresh folder** does the
+same on demand. There is no filesystem watcher, so changes made while Dosty stays
+focused wait for one of those. Opening another folder cancels or invalidates an older scan.
 
 Hover or keyboard-focus a row to reveal its action button; right-click,
 Shift+F10, and the context-menu key offer the same actions. A delayed hover shows
@@ -58,8 +142,8 @@ Enter/Space opens a file or toggles a folder, and F2 renames. Menus support
 Up/Down, Tab/Shift+Tab, Enter, and Escape.
 
 Folder actions create Markdown documents and folders, rename or move items below
-the open root, and show their location. The root also offers Refresh and Close;
-closing navigation leaves the active document open. The titlebar's document-name
+the open root, and show their location. The root also offers Refresh and Remove from library;
+removing a place leaves the active document open. The titlebar's document-name
 menu offers Rename, Move to, and Show location for a saved standalone file. Move
 to can select a destination outside the open folder. There is no delete,
 multi-selection, or general-purpose file-manager view.
@@ -70,7 +154,7 @@ Escape or leaving the application cancels a drag. A completed move briefly
 highlights the destination and offers **Undo move** in a contextual notice. Undo move is a
 checked reverse move and may fail if the filesystem has changed; it is separate
 from the document's preserved text undo/redo. Opening files and creating a new
-document use the existing Save/Discard/Cancel guard.
+document [keep the outgoing document open](#moving-between-documents).
 
 Organization runs on workers under ordered directory and document locks. Moves
 stay on one filesystem, reject occupied names and folder cycles, and preserve
@@ -92,11 +176,53 @@ documents, and 128 MiB of Markdown source; each document retains the ordinary
 limited to 240 UTF-8 bytes and cannot contain path separators. Cooperative locks
 coordinate Dosty writers; external tools do not participate in those locks.
 
+### Unsaved documents in Files
+
+A document with unsaved changes carries the modified mark at the right edge of
+its row, whether it is on the page or open in the background. A collapsed folder
+with such a document anywhere inside carries a fainter mark, so folding never
+hides unsaved writing; expanding the folder moves the mark to the document. The
+mark gives way to a row's action button while the row is hovered or focused.
+
+Unsaved documents that no row can stand for are listed above the tree under
+**Not saved yet**, with the folder they belong to: drafts that have never been
+saved, and documents outside the open place. With no place open, that is every
+unsaved document. Choosing one returns it to the page as it was left; the page's
+own entry is shown selected. A draft appears here rather than inside its folder
+in the tree, because it has no file there yet.
+
+### Images in a place
+
+A place holds two kinds of thing: documents and images. Images appear in Files
+and Quick Open under their full file name; other files stay out. Dosty's own
+`*.assets` folders remain hidden.
+
+Choosing an image previews it rather than opening it: the page and its document
+are untouched. The preview is read and decoded on workers under the same 16 MiB,
+8192-pixel, and 64 MiB decoded limits as a document's images, shares their
+concurrency bound, and is dropped when it closes.
+
+**Insert into document**, in the preview and in an image's menu in Files, inserts
+a reference to the image where it already lives, at the selection, as one undo
+step. Nothing is copied. The path is relative to the document's folder, or for a
+draft to the folder its first save will use; a page that belongs nowhere must be
+saved first. The image's name, without brackets, becomes the description. A path
+that crosses to another drive, or holds `<`, `>`, or a line break, is refused.
+Read mode does not insert. References that climb out of the document's folder
+with `..` display normally, but **Save as…** to another folder stops rather than
+relocate them, as it does for any such reference. Blog engines that expect
+site-relative paths such as `/images/cover.png` need the inserted path adjusted.
+
+Images cannot be renamed or moved from Dosty: links in other documents are not
+rewritten, so a moved image would vanish from every page that uses it. Moving a
+folder still moves the images inside it, with that same limitation. Dragging an
+image from Files onto the page is not supported; use Insert into document.
+
 ## Controls and sidebars
 
-Files and its titlebar toggle are available only within a folder workspace. A successful folder open reveals Files on the left without replacing the current document. The folder name is its header and opens workspace actions: switch folders, create a document or folder, refresh, show its location, reveal it in Finder/the file manager, or close the workspace. The folder root is not repeated as a tree row; dropping into empty tree space targets the root. Its titlebar toggle keeps it open until you close it. Closing it leaves the document open.
+Files and its titlebar toggle are always available. With no place open the panel is headed Library, its menu still lists and adds places, and its body offers **Add place…**. Opening a place reveals Files on the left without replacing the current document. The place name is its header and opens its actions: move to another place, add a place, create a document or folder, refresh, show its location, reveal it in Finder/the file manager, or remove it from the library. The folder root is not repeated as a tree row; dropping into empty tree space targets the root. Its titlebar toggle keeps it open until you close it. Closing it leaves the document open.
 
-Outline opens independently on the right with its titlebar control, **View → Outline** on macOS, or Cmd/Ctrl+Alt+O. Its toggle keeps it open until you close it. When both panels cannot leave a writing column of at least 480 logical pixels, Files stays docked and Outline overlays the document. Editing, heading jumps, document opens, and Escape preserve the panel arrangement. Its header offers icon controls only when headings exist. Search filters the tree inline, retaining ancestor context; Cmd/Ctrl+Shift+J opens and focuses that filter. Each workspace remembers whether Files and Outline were open; Hide Sidebars lasts only for the application session.
+Outline opens independently on the right with its titlebar control, **View → Outline** on macOS, or Cmd/Ctrl+Alt+O. Its toggle keeps it open until you close it. When both panels cannot leave a writing column of at least 480 logical pixels, Files stays docked and Outline overlays the document. Editing, heading jumps, document opens, and Escape preserve the panel arrangement. Its header offers icon controls only when headings exist. Search filters the tree inline, retaining ancestor context; Cmd/Ctrl+Shift+J opens and focuses that filter. Each place remembers whether Files and Outline were open; Hide Sidebars lasts only for the application session.
 
 Cmd/Ctrl+Shift+B toggles Files. Cmd/Ctrl+Shift+F runs **Hide Sidebars**, hiding/restoring the existing arrangement without changing editing mode or control visibility. Escape dismisses the current editing context; it does not restore deliberately hidden panels. These operations retain source selection, undo, and viewport anchoring.
 
@@ -110,9 +236,44 @@ Word count and reading time stay at the bottom center of the writing column whil
 
 ### Quick Open
 
-Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/path search within the current workspace. It searches the same bounded Markdown path snapshot as Files, including collapsed folders. Matching is case-insensitive and requires every whitespace-separated term; exact filenames and filename prefixes rank first. The first 100 results are shown with a match count when more exist. Narrow the query to reach other matches. After external file changes, use the folder-name menu’s Refresh action to update the snapshot.
+Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon summons the switcher
+over the page, with or without a place open. It is the one surface for moving
+between documents; choosing something dismisses it.
 
-Up/Down selects a result without moving the query caret; Enter opens it through the existing file-loading and Save/Discard/Cancel guards. Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active workspace documents come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
+With an empty query it shows, in order:
+
+- **Unsaved:** documents open in the background with unsaved changes, marked, and
+  never the page itself. Choosing one returns it as it was left.
+- **Recent:** up to six recently active documents of the open place, leaving out
+  the page. The first is preselected, so Cmd/Ctrl+P then Enter switches back.
+- **The open place:** its top-level folders, then its top-level documents. Right
+  or Enter steps into the selected folder and Left steps out, returning to the
+  folder that was left. Stepping never changes the page.
+- **Places:** the other places. Choosing one opens it and keeps the switcher open
+  on its contents.
+
+Typing searches documents by name and path across the whole library. Matching is
+case-insensitive and requires every whitespace-separated term; exact filenames
+and filename prefixes rank first, and within a rank recently active documents
+lead, then the open place, then other places. A document in another place can be
+matched by its place's name and shows that place beside its folder. Unsaved
+documents match by title. Documents are shown by filename without the Markdown
+extension. The first 100 rows are shown with a match count when more exist.
+
+The open place is searched from the same bounded snapshot as Files, including
+collapsed folders; after external file changes, use Refresh in the place-name
+menu. Other places are scanned on a worker, one at a time, when the switcher
+opens, within a shared bound of 65,536 documents; their documents join the
+results when that scan finishes. A place that cannot be read is absent from
+search. Nothing read for the switcher outlives it: closing discards the query,
+the index, and any scan still running. No search history is persisted.
+
+Up/Down selects without moving the query caret; Left and Right step through
+folders only while the query is empty. Escape or an outside click restores the
+previous focused widget, source selection, and writing viewport. Choosing the
+document on the page only closes the switcher. Opening a place from outside the
+switcher closes it; a refresh updates its rows. It is unavailable while another
+modal or file load is active.
 
 ## Writing and details
 
@@ -121,22 +282,22 @@ Up/Down selects a result without moving the query caret; Enter opens it through 
   label formatting and Markdown titles. Editing a reference-style link normalizes
   it to an inline link. Pasting a web/email URL over selected text creates a link;
   cross-paragraph selections do not become one link.
-- **Find file or heading:** with a saved document inside a workspace, open the
-  link dialog and choose **Find file or heading…**, or press Down in the
+- **Find file or heading:** when a document is saved in the open place or a
+  draft will first save there, open the link dialog and choose **Find file or heading…**, or press Down in the
   Destination field. Filter file names or paths, choose a result, and pick the
   whole file or one of its headings. Up/Down and Enter choose a result. Escape
   returns to the destination. Apply inserts an ordinary relative Markdown link
   such as `[Methods](<chapter-2.md#methods>)`.
 - **Open a link:** Cmd/Ctrl-click or use Open in its details. HTTP/HTTPS and email
   use the OS handler. `#heading-slug` navigates within the current file.
-  Links to `.md`, `.markdown`, and `.txt` files use Dosty's unsaved-document
-  guard and can jump to a named heading after loading. Heading labels become
+  Links to `.md`, `.markdown`, and `.txt` files keep the outgoing document
+  open in the background and can jump to a named heading. Heading labels become
   lowercase slugs, or use an explicit ID from `{#id}`. Repeated IDs receive a
   numeric suffix.
-- **Linked from:** open the filename menu to find workspace files that link to
-  the current file. Choose a result to open it through the usual save guard and
-  jump to the link. The panel reads saved Markdown and marks incomplete scans.
-  A file edited since the scan opens with its remembered position.
+- **Linked from:** open the filename menu to find files in the open place that
+  link to the current file. Choose a result to switch to that file and jump to
+  the link. The panel reads saved Markdown and marks incomplete scans. A
+  document edited since the scan returns with its remembered position.
 - **Image:** choose a file/URL, paste one copied image file or raster image, or
   drop PNG/JPEG/GIF/WebP at the current source selection. Double-click an image,
   or use Image from its caption/credit, to edit details. Images preserve aspect
@@ -211,7 +372,7 @@ writer identity. Recovery files are bounded to 112 MiB and use private temporary
 permissions; the recovery directory is private on Unix.
 
 Startup announces available copies. **Help → Recovery Copies…** lists them by name and
-recency; Open copy uses Save/Discard/Cancel guards. Restore preserves the original
+recency; Open copy keeps the outgoing document open in the background. Restore preserves the original
 saved-file baseline, so Save still detects external changes. Save As keeps both.
 Corrupt, oversized, or unsupported copies remain on disk with controlled errors.
 

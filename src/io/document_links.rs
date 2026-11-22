@@ -79,8 +79,8 @@ pub(crate) fn destination(value: &str, base: Option<&Path>) -> Option<(PathBuf, 
 
 /// Both paths come from the same folder workspace. Emit standard relative
 /// paths, escaping individual names while keeping Markdown's slash separators.
-pub(crate) fn relative(root: &Path, source: &Path, target: &Path) -> Option<String> {
-    let parent = source.parent()?.strip_prefix(root).ok()?;
+pub(crate) fn relative(root: &Path, base: &Path, target: &Path) -> Option<String> {
+    let parent = base.strip_prefix(root).ok()?;
     let target = target.strip_prefix(root).ok()?;
     let mut from = parent.components().peekable();
     let mut to = target.components().peekable();
@@ -104,11 +104,10 @@ pub(crate) fn relative(root: &Path, source: &Path, target: &Path) -> Option<Stri
     (!segments.is_empty()).then(|| segments.join("/"))
 }
 
-pub(crate) async fn load(path: PathBuf) -> Result<storage::LoadedFile, storage::FileError> {
-    let path = tokio::task::spawn_blocking(move || fs::canonicalize(path))
+pub(crate) async fn resolve_path(path: PathBuf) -> Result<PathBuf, storage::FileError> {
+    tokio::task::spawn_blocking(move || fs::canonicalize(path).map_err(Into::into))
         .await
-        .map_err(|error| storage::FileError::Io(error.to_string()))??;
-    storage::load(path).await
+        .map_err(|error| storage::FileError::Io(error.to_string()))?
 }
 
 pub(crate) async fn headings(
@@ -282,7 +281,7 @@ mod tests {
         let root = Path::new("Workspace");
         let source = root.join("Drafts/Intro.md");
         let target = root.join("Reference/資料 #1 & 50%.MD");
-        let encoded = relative(root, &source, &target).unwrap();
+        let encoded = relative(root, source.parent().unwrap(), &target).unwrap();
         let link = with_heading(encoded, "記録-and-log");
         assert_eq!(
             link,

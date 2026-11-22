@@ -85,16 +85,17 @@ impl Harness {
         RichEditor::new(
             app.editor.content(),
             &app.projection,
-            app.document.source(),
+            app.session.document.source(),
             &app.resolved_theme,
             &app.images,
             Binding::from_key_press,
         )
-        .collaboration(app.document.collaboration())
+        .collaboration(app.session.document.collaboration())
         .preserve_viewport(
-            app.preserve_viewport_generation == Some(app.document.collaboration().generation()),
+            app.preserve_viewport_generation
+                == Some(app.session.document.collaboration().generation()),
         )
-        .selection(app.selection)
+        .selection(app.session.selection)
         .focused(true)
         .table_grid(app.grid_view(), app.cell_editor())
         .table_resume(app.grid_resume())
@@ -165,11 +166,11 @@ impl Harness {
         drop(editor);
         let start = Instant::now();
         for message in messages {
-            self.app.document.costs = Default::default();
+            self.app.session.document.costs = Default::default();
             let task = self.app.update_message(message);
             self.effects(task);
-            sample.crdt += self.app.document.costs.crdt;
-            sample.source += self.app.document.costs.source;
+            sample.crdt += self.app.session.document.costs.crdt;
+            sample.source += self.app.session.document.costs.source;
         }
         sample.update = start.elapsed();
         self.frame(&mut sample);
@@ -177,13 +178,13 @@ impl Harness {
     }
     fn message(&mut self, message: Message) -> Sample {
         let start = Instant::now();
-        self.app.document.costs = Default::default();
+        self.app.session.document.costs = Default::default();
         let task = self.app.update_message(message);
         self.effects(task);
         let mut sample = Sample {
             update: start.elapsed(),
-            crdt: self.app.document.costs.crdt,
-            source: self.app.document.costs.source,
+            crdt: self.app.session.document.costs.crdt,
+            source: self.app.session.document.costs.source,
             ..Sample::default()
         };
         self.frame(&mut sample);
@@ -305,17 +306,20 @@ fn live_table_space_and_tab_use_real_keyboard_events_without_crossing_on_spaces(
             harness.app.grid.draft.as_ref().unwrap().buffer.snapshot(),
             entered
         );
-        assert_eq!(harness.app.document.source(), source);
+        assert_eq!(harness.app.session.document.source(), source);
         assert_eq!(
             harness.app.editor.selection(),
             harness
                 .app
                 .projection
-                .display_selection(harness.app.selection)
+                .display_selection(harness.app.session.selection)
         );
         assert_eq!(
-            crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
-                .map(|(_, row, column)| (row, column)),
+            crate::document::table_edit::cell_at(
+                &harness.app.projection,
+                harness.app.session.selection
+            )
+            .map(|(_, row, column)| (row, column)),
             Some((1, 0))
         );
     }
@@ -325,10 +329,13 @@ fn live_table_space_and_tab_use_real_keyboard_events_without_crossing_on_spaces(
         key_event(Key::Named(key::Named::Tab), None, false),
         Point::ORIGIN,
     );
-    assert_eq!(harness.app.document.source(), expected);
+    assert_eq!(harness.app.session.document.source(), expected);
     assert_eq!(
-        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
-            .map(|(_, row, column)| (row, column)),
+        crate::document::table_edit::cell_at(
+            &harness.app.projection,
+            harness.app.session.selection
+        )
+        .map(|(_, row, column)| (row, column)),
         Some((1, 1))
     );
     harness.event(
@@ -336,12 +343,15 @@ fn live_table_space_and_tab_use_real_keyboard_events_without_crossing_on_spaces(
         Point::ORIGIN,
     );
     assert_eq!(
-        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
-            .map(|(_, row, column)| (row, column)),
+        crate::document::table_edit::cell_at(
+            &harness.app.projection,
+            harness.app.session.selection
+        )
+        .map(|(_, row, column)| (row, column)),
         Some((1, 0))
     );
     assert_eq!(
-        harness.app.document.source(),
+        harness.app.session.document.source(),
         expected,
         "Tab navigation must not insert text or delimiters."
     );
@@ -353,8 +363,11 @@ fn live_table_space_and_tab_use_real_keyboard_events_without_crossing_on_spaces(
     }
     assert_eq!(harness.app.projection.rich.tables[0].rows.len(), 3);
     assert_eq!(
-        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
-            .map(|(_, row, column)| (row, column)),
+        crate::document::table_edit::cell_at(
+            &harness.app.projection,
+            harness.app.session.selection
+        )
+        .map(|(_, row, column)| (row, column)),
         Some((2, 0))
     );
     harness.event(
@@ -362,15 +375,18 @@ fn live_table_space_and_tab_use_real_keyboard_events_without_crossing_on_spaces(
         Point::ORIGIN,
     );
     assert_eq!(
-        crate::document::table_edit::cell_at(&harness.app.projection, harness.app.selection)
-            .map(|(_, row, column)| (row, column)),
+        crate::document::table_edit::cell_at(
+            &harness.app.projection,
+            harness.app.session.selection
+        )
+        .map(|(_, row, column)| (row, column)),
         Some((2, 0))
     );
     harness.message(Message::Undo);
     assert_eq!(harness.app.projection.rich.tables[0].rows.len(), 3);
     harness.message(Message::Undo);
     assert_eq!(
-        harness.app.document.source(),
+        harness.app.session.document.source(),
         expected,
         "The final-cell Tab adds one undoable row."
     );
@@ -417,7 +433,7 @@ fn spreadsheet_table_draft_keeps_line_breaks_and_ime_pending_until_commit() {
     );
     for key in [key::Named::Space, key::Named::Enter, key::Named::Tab] {
         harness.event(press(key, keyboard::Modifiers::empty()), Point::ORIGIN);
-        assert_eq!(harness.app.document.source(), source);
+        assert_eq!(harness.app.session.document.source(), source);
     }
     harness.event(
         Event::InputMethod(input_method::Event::Commit("日本語".into())),
@@ -427,7 +443,7 @@ fn spreadsheet_table_draft_keeps_line_breaks_and_ime_pending_until_commit() {
         harness.app.grid.draft.as_ref().unwrap().buffer.snapshot(),
         "alpha\n日本語"
     );
-    assert_eq!(harness.app.document.source(), source);
+    assert_eq!(harness.app.session.document.source(), source);
     harness.event(
         press(key::Named::Tab, keyboard::Modifiers::empty()),
         Point::ORIGIN,
@@ -436,8 +452,8 @@ fn spreadsheet_table_draft_keeps_line_breaks_and_ime_pending_until_commit() {
     assert_eq!(&harness.app.projection.text[cell.clone()], "alpha\n日本語");
     assert_eq!(harness.app.grid_view().unwrap().active, (1, 1));
     harness.message(Message::Undo);
-    assert_eq!(harness.app.document.source(), source);
-    assert!(!harness.app.document.can_undo());
+    assert_eq!(harness.app.session.document.source(), source);
+    assert!(!harness.app.session.document.can_undo());
 }
 
 #[test]
@@ -496,7 +512,7 @@ fn performance_document_table_typing() {
             assert_eq!(
                 crate::document::table_edit::cell_at(
                     &harness.app.projection,
-                    harness.app.selection
+                    harness.app.session.selection
                 )
                 .map(|(_, row, column)| (row, column)),
                 Some((1, 1))
@@ -612,8 +628,8 @@ fn task_toggle_preserves_viewport_when_a_reverse_selection_head_is_offscreen() {
         marker: marker.clone(),
         revision,
     });
-    assert_eq!(harness.app.selection, selection);
-    assert_eq!(&harness.app.document.source()[marker], "[x]");
+    assert_eq!(harness.app.session.selection, selection);
+    assert_eq!(&harness.app.session.document.source()[marker], "[x]");
     assert!((RichEditor::screen_y(&harness.tree, anchor) - before_y).abs() < 0.01);
     assert!((RichEditor::intent_stats(&harness.tree).0 - before_scroll).abs() < 0.01);
 }
@@ -766,7 +782,14 @@ fn performance_code_editor() {
     let mut harness = Harness::new(format!(
         "Before\n\n```rust\nfn main() {{\n{code}}}\n```\n\nAfter"
     ));
-    let at = harness.app.document.source().find("item_1000").unwrap() + 5;
+    let at = harness
+        .app
+        .session
+        .document
+        .source()
+        .find("item_1000")
+        .unwrap()
+        + 5;
     harness.message(Message::SelectSource(Selection::caret(at)));
     harness.event(
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
@@ -780,6 +803,7 @@ fn performance_code_editor() {
     assert!(
         harness
             .app
+            .session
             .document
             .source()
             .contains(&format!("item_{}1000", "x".repeat(20)))
@@ -812,7 +836,7 @@ fn large_document_interactions() {
         let start = Instant::now();
         let mut harness = Harness::new(source);
         let load = start.elapsed();
-        assert_eq!(harness.app.document.blocks().len(), blocks);
+        assert_eq!(harness.app.session.document.blocks().len(), blocks);
         report_memory("source-load");
         let mut cold = Sample::default();
         harness.frame(&mut cold);
@@ -831,7 +855,7 @@ fn large_document_interactions() {
         }
         let mut jumps = Vec::new();
         for step in [9, 0, 5, 2, 8, 1, 7, 3, 6, 4] {
-            let offset = harness.app.document.blocks()[step * blocks / 10]
+            let offset = harness.app.session.document.blocks()[step * blocks / 10]
                 .range
                 .start;
             jumps.push(harness.message(Message::SelectSource(Selection::caret(offset))));
@@ -846,22 +870,27 @@ fn large_document_interactions() {
         }
         for (name, fraction) in [("start", 0), ("middle", 1), ("end", 2)] {
             let offset = if fraction == 2 {
-                harness.app.document.source().len()
+                harness.app.session.document.source().len()
             } else {
                 let index = fraction * blocks / 2 + 1;
-                harness.app.document.blocks()[index].range.start + 12
+                harness.app.session.document.blocks()[index].range.start + 12
             };
             harness.message(Message::SelectSource(Selection::caret(offset)));
-            let before = harness.app.document.source().len();
+            let before = harness.app.session.document.source().len();
             let timings = (0..samples)
                 .map(|_| harness.event(typing_event(), Point::new(200.0, 200.0)))
                 .collect::<Vec<_>>();
-            assert_eq!(harness.app.document.source().len(), before + samples);
+            assert_eq!(
+                harness.app.session.document.source().len(),
+                before + samples
+            );
             report(&format!("typing/{name}"), &timings);
         }
-        let middle = harness.app.document.blocks()[blocks / 2 + 1].range.start;
+        let middle = harness.app.session.document.blocks()[blocks / 2 + 1]
+            .range
+            .start;
         let bold = middle
-            + harness.app.document.source()[middle..]
+            + harness.app.session.document.source()[middle..]
                 .find("bold words")
                 .unwrap();
         harness.message(Message::SelectSource(Selection::caret(middle + 2)));
@@ -875,7 +904,9 @@ fn large_document_interactions() {
             })
             .collect::<Vec<_>>();
         report("disclosure", &timings);
-        let anchor = harness.app.document.blocks()[blocks / 2].range.start;
+        let anchor = harness.app.session.document.blocks()[blocks / 2]
+            .range
+            .start;
         let timings = (0..samples)
             .map(|i| {
                 harness.message(Message::SelectSource(Selection {
@@ -891,7 +922,7 @@ fn large_document_interactions() {
                     anchor: if i % 2 == 0 {
                         0
                     } else {
-                        harness.app.document.source().len()
+                        harness.app.session.document.source().len()
                     },
                     head: middle + 4,
                 }))
@@ -968,8 +999,8 @@ fn large_document_interactions() {
         // Composition stays transient until commit, even deep in a large
         // document. Undo must restore the source and both selection endpoints.
         harness.message(Message::SelectSource(Selection::caret(middle + 12)));
-        let before = harness.app.document.source().to_owned();
-        let selection = harness.app.selection;
+        let before = harness.app.session.document.source().to_owned();
+        let selection = harness.app.session.selection;
         harness.event(
             Event::InputMethod(input_method::Event::Opened),
             Point::ORIGIN,
@@ -978,8 +1009,8 @@ fn large_document_interactions() {
             Event::InputMethod(input_method::Event::Preedit("にほん".into(), Some(0..9))),
             Point::ORIGIN,
         );
-        assert_eq!(harness.app.document.source(), before);
-        assert_eq!(harness.app.selection, selection);
+        assert_eq!(harness.app.session.document.source(), before);
+        assert_eq!(harness.app.session.selection, selection);
         report("ime/preedit", &[preedit]);
         let committed = "日本語 e\u{301} 🧑‍💻";
         let commit = harness.event(
@@ -988,14 +1019,14 @@ fn large_document_interactions() {
         );
         let mut after = before.clone();
         after.insert_str(selection.head, committed);
-        assert_eq!(harness.app.document.source(), after);
+        assert_eq!(harness.app.session.document.source(), after);
         report("ime/commit", &[commit]);
         let undo = harness.message(Message::Undo);
-        assert_eq!(harness.app.document.source(), before);
-        assert_eq!(harness.app.selection, selection);
+        assert_eq!(harness.app.session.document.source(), before);
+        assert_eq!(harness.app.session.selection, selection);
         report("undo/ime", &[undo]);
         let redo = harness.message(Message::Redo);
-        assert_eq!(harness.app.document.source(), after);
+        assert_eq!(harness.app.session.document.source(), after);
         report("redo/ime", &[redo]);
         println!(
             "final_layout_counts={:?}",
@@ -1156,14 +1187,15 @@ fn crdt_incoming_changes_preserve_composition_selection_and_derived_editor_state
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
         Point::new(80.0, 40.0),
     );
-    let mut remote = Document::from_state(&harness.app.document.collaboration().state()).unwrap();
+    let mut remote =
+        Document::from_state(&harness.app.session.document.collaboration().state()).unwrap();
     let anchor = source.find("Final").unwrap();
     let head = source.find("first").unwrap();
     harness.message(Message::SelectSource(Selection { anchor, head }));
     remote.replace(0..0, "Prefix\n\n").unwrap();
     harness.message(Message::ReplicaLoaded(Ok(remote.collaboration().state())));
     assert_eq!(
-        harness.app.selection,
+        harness.app.session.selection,
         Selection {
             anchor: anchor + 8,
             head: head + 8
@@ -1172,7 +1204,7 @@ fn crdt_incoming_changes_preserve_composition_selection_and_derived_editor_state
     assert_eq!(harness.app.editor.snapshot(), harness.app.projection.text);
     // Use a caret while composing; concurrent insertion before it rebases target.
     harness.message(Message::SelectSource(Selection::caret(head + 8)));
-    let unchanged = harness.app.document.source().to_owned();
+    let unchanged = harness.app.session.document.source().to_owned();
     harness.event(
         Event::InputMethod(input_method::Event::Opened),
         Point::ORIGIN,
@@ -1181,7 +1213,7 @@ fn crdt_incoming_changes_preserve_composition_selection_and_derived_editor_state
         Event::InputMethod(input_method::Event::Preedit("にほん".into(), Some(0..9))),
         Point::ORIGIN,
     );
-    assert_eq!(harness.app.document.source(), unchanged);
+    assert_eq!(harness.app.session.document.source(), unchanged);
     assert!(RichEditor::intent_stats(&harness.tree).1);
     harness.event(
         Event::InputMethod(input_method::Event::Preedit(String::new(), None)),
@@ -1195,22 +1227,41 @@ fn crdt_incoming_changes_preserve_composition_selection_and_derived_editor_state
         Point::ORIGIN,
     );
     assert_eq!(
-        harness.app.document.source().matches("日本語 🧑‍💻").count(),
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .matches("日本語 🧑‍💻")
+            .count(),
         1
     );
-    assert!(harness.app.document.source().contains("日本語 🧑‍💻first"));
+    assert!(
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .contains("日本語 🧑‍💻first")
+    );
     assert_eq!(harness.app.editor.snapshot(), harness.app.projection.text);
     harness.message(Message::Undo);
-    assert_eq!(harness.app.document.source(), remote.source());
+    assert_eq!(harness.app.session.document.source(), remote.source());
     harness.message(Message::Redo);
     assert_eq!(
-        harness.app.document.source().matches("日本語 🧑‍💻").count(),
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .matches("日本語 🧑‍💻")
+            .count(),
         1
     );
     harness.message(Message::Edit(Action::Edit(Edit::Insert('!'))));
     assert_eq!(
-        harness.app.document.source(),
-        harness.app.document.collaboration().materialize()
+        harness.app.session.document.source(),
+        harness.app.session.document.collaboration().materialize()
     );
 }
 
@@ -1223,7 +1274,8 @@ fn crdt_composition_replacement_preserves_remote_content_when_target_is_deleted(
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
         Point::new(80.0, 40.0),
     );
-    let mut remote = Document::from_state(&harness.app.document.collaboration().state()).unwrap();
+    let mut remote =
+        Document::from_state(&harness.app.session.document.collaboration().state()).unwrap();
     harness.message(Message::SelectSource(Selection {
         anchor: 9,
         head: 17,
@@ -1242,11 +1294,20 @@ fn crdt_composition_replacement_preserves_remote_content_when_target_is_deleted(
         Event::InputMethod(input_method::Event::Commit("日本".into())),
         Point::ORIGIN,
     );
-    assert!(harness.app.document.source().contains("remote"));
-    assert_eq!(harness.app.document.source().matches("日本").count(), 1);
+    assert!(harness.app.session.document.source().contains("remote"));
     assert_eq!(
-        harness.app.document.source(),
-        harness.app.document.collaboration().materialize()
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .matches("日本")
+            .count(),
+        1
+    );
+    assert_eq!(
+        harness.app.session.document.source(),
+        harness.app.session.document.collaboration().materialize()
     );
 }
 
@@ -1257,9 +1318,10 @@ fn crdt_proposal_uses_real_app_transaction_projection_and_independent_agent_undo
     harness.frame(&mut Sample::default());
     let base = harness
         .app
+        .session
         .document
         .collaboration()
-        .snapshot(harness.app.document.source());
+        .snapshot(harness.app.session.document.source());
     let first = base.source.find("First").unwrap();
     let last = base.source.find("Last").unwrap();
     let proposal = AgentProposal {
@@ -1281,17 +1343,38 @@ fn crdt_proposal_uses_real_app_transaction_projection_and_independent_agent_undo
         ],
     };
     harness.message(Message::ProposalLoaded(Ok(proposal.clone())));
-    assert!(harness.app.document.source().contains("Better paragraph"));
-    assert!(harness.app.document.source().contains("Final paragraph"));
+    assert!(
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .contains("Better paragraph")
+    );
+    assert!(
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .contains("Final paragraph")
+    );
     assert_eq!(harness.app.editor.snapshot(), harness.app.projection.text);
-    assert!(!harness.app.document.can_undo());
+    assert!(!harness.app.session.document.can_undo());
     harness.message(Message::AgentUndo);
-    assert_eq!(harness.app.document.source(), proposal.base.source);
+    assert_eq!(harness.app.session.document.source(), proposal.base.source);
     harness.message(Message::AgentRedo);
-    assert!(harness.app.document.source().contains("Final paragraph"));
-    let before = harness.app.document.source().to_owned();
+    assert!(
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .contains("Final paragraph")
+    );
+    let before = harness.app.session.document.source().to_owned();
     harness.message(Message::ProposalLoaded(Ok(proposal)));
-    assert_eq!(harness.app.document.source(), before);
+    assert_eq!(harness.app.session.document.source(), before);
     assert!(
         harness
             .app
@@ -1312,7 +1395,8 @@ fn crdt_drag_and_viewport_anchors_survive_remote_edits_before_the_viewport() {
         Point::new(110.0, 100.0),
     );
     let drag = RichEditor::intent_stats(&harness.tree).2.unwrap();
-    let mut remote = Document::from_state(&harness.app.document.collaboration().state()).unwrap();
+    let mut remote =
+        Document::from_state(&harness.app.session.document.collaboration().state()).unwrap();
     remote.replace(0..0, "Prefix\n\n").unwrap();
     harness.message(Message::ReplicaLoaded(Ok(remote.collaboration().state())));
     assert_eq!(RichEditor::intent_stats(&harness.tree).2, Some(drag + 8));
@@ -1407,12 +1491,13 @@ fn large_document_collaboration() {
         let mut harness = Harness::new(fixture(blocks));
         harness.frame(&mut Sample::default());
         let (mut remote, mut source) =
-            Collaboration::from_state(&harness.app.document.collaboration().state()).unwrap();
+            Collaboration::from_state(&harness.app.session.document.collaboration().state())
+                .unwrap();
         let mut timings = Vec::new();
         for _ in 0..samples {
             let edits: Vec<_> = (1..=8)
                 .map(|step| {
-                    let point = harness.app.document.blocks()[step * blocks / 10 + 1]
+                    let point = harness.app.session.document.blocks()[step * blocks / 10 + 1]
                         .range
                         .start
                         + 12;
@@ -1430,13 +1515,24 @@ fn large_document_collaboration() {
             }
             let update = remote.state(); // explicit offline export outside the interaction timer
             timings.push(harness.message(Message::ReplicaLoaded(Ok(update))));
-            assert_eq!(harness.app.document.source(), source);
+            assert_eq!(harness.app.session.document.source(), source);
         }
         report(&format!("remote/batch-8/{blocks}"), &timings);
         report_memory(&format!("remote/{blocks}/final"));
-        let before = harness.app.document.source().to_owned();
-        let initial_state = harness.app.document.collaboration().state().update.len() + 64;
-        let point = harness.app.document.blocks()[blocks / 2 + 1].range.start + 12;
+        let before = harness.app.session.document.source().to_owned();
+        let initial_state = harness
+            .app
+            .session
+            .document
+            .collaboration()
+            .state()
+            .update
+            .len()
+            + 64;
+        let point = harness.app.session.document.blocks()[blocks / 2 + 1]
+            .range
+            .start
+            + 12;
         harness.event(
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             Point::new(80.0, 40.0),
@@ -1461,13 +1557,21 @@ fn large_document_collaboration() {
         report_memory(&format!("app/{blocks}/after-churn"));
         println!(
             "app/persistence blocks={blocks} before_churn_bytes={initial_state} after_churn_bytes={}",
-            harness.app.document.collaboration().state().update.len() + 64
+            harness
+                .app
+                .session
+                .document
+                .collaboration()
+                .state()
+                .update
+                .len()
+                + 64
         );
-        assert_eq!(harness.app.document.source(), before);
+        assert_eq!(harness.app.session.document.source(), before);
 
         assert_eq!(
-            harness.app.document.source(),
-            harness.app.document.collaboration().materialize()
+            harness.app.session.document.source(),
+            harness.app.session.document.collaboration().materialize()
         );
         assert_eq!(harness.app.editor.snapshot(), harness.app.projection.text);
     }
@@ -1477,16 +1581,16 @@ fn large_document_collaboration() {
 fn crdt_duplicate_update_keeps_saved_generation_and_projection_oracle() {
     use crate::document::projection::Projection;
     let mut harness = Harness::new("# Title\n\n**bold** and 🧑‍💻\n\n![alt](a.png)".into());
-    let state = harness.app.document.collaboration().state();
+    let state = harness.app.session.document.collaboration().state();
     harness.message(Message::ReplicaLoaded(Ok(state.clone())));
     harness.message(Message::ReplicaLoaded(Ok(state)));
-    assert!(!harness.app.dirty);
+    assert!(!harness.app.session.dirty);
     let fresh = Projection::with_context(
-        harness.app.document.source(),
-        Some(harness.app.selection.head),
+        harness.app.session.document.source(),
+        Some(harness.app.session.selection.head),
     );
     assert_eq!(fresh.text, harness.app.projection.text);
-    for (offset, _) in harness.app.document.source().char_indices() {
+    for (offset, _) in harness.app.session.document.source().char_indices() {
         assert_eq!(
             fresh.to_display(offset),
             harness.app.projection.to_display(offset)
@@ -1510,22 +1614,24 @@ fn crdt_reopening_the_same_identity_clears_old_composition_session() {
     );
     let target = harness
         .app
+        .session
         .document
         .collaboration()
-        .composition_target(harness.app.selection);
+        .composition_target(harness.app.session.selection);
     assert!(RichEditor::intent_stats(&harness.tree).1);
-    let document = Document::from_state(&harness.app.document.collaboration().state()).unwrap();
+    let document =
+        Document::from_state(&harness.app.session.document.collaboration().state()).unwrap();
     harness
         .app
         .install_document(document, None, "Reopened.md".into());
     harness.frame(&mut Sample::default());
     assert!(!RichEditor::intent_stats(&harness.tree).1);
-    let before = harness.app.document.source().to_owned();
+    let before = harness.app.session.document.source().to_owned();
     harness.message(Message::CommitComposition {
         target,
         text: "stale".into(),
     });
-    assert_eq!(harness.app.document.source(), before);
+    assert_eq!(harness.app.session.document.source(), before);
 }
 
 #[test]
@@ -1542,7 +1648,7 @@ fn crdt_replace_all_rebases_reverse_selection_through_earlier_changes() {
     harness.app.replacement = "expanded".into();
     harness.message(Message::ReplaceAll);
     assert_eq!(
-        harness.app.selection,
+        harness.app.session.selection,
         Selection {
             anchor: source.len() + 10,
             head: head + 10
@@ -1550,8 +1656,8 @@ fn crdt_replace_all_rebases_reverse_selection_through_earlier_changes() {
     );
     assert_eq!(harness.app.editor.snapshot(), harness.app.projection.text);
     assert_eq!(
-        harness.app.document.source(),
-        harness.app.document.collaboration().materialize()
+        harness.app.session.document.source(),
+        harness.app.session.document.collaboration().materialize()
     );
 }
 
@@ -1609,7 +1715,7 @@ fn canceled_preedit_recaptures_the_next_composition_target_in_both_editors() {
                 anchor: original.find("Final").unwrap(),
                 head: original.find("Heading").unwrap(),
             };
-            app.selection = canceled_selection;
+            app.session.selection = canceled_selection;
             app.sync_editor();
             for input in [
                 input_method::Event::Opened,
@@ -1618,11 +1724,11 @@ fn canceled_preedit_recaptures_the_next_composition_target_in_both_editors() {
             ] {
                 send(&mut app, Event::InputMethod(input));
             }
-            assert_eq!(app.document.source(), original);
-            assert!(!app.document.can_undo());
-            assert_eq!(app.selection, canceled_selection);
+            assert_eq!(app.session.document.source(), original);
+            assert!(!app.session.document.can_undo());
+            assert_eq!(app.session.selection, canceled_selection);
             let target = original.find("words").unwrap();
-            app.selection = Selection {
+            app.session.selection = Selection {
                 anchor: target + 5,
                 head: target,
             };
@@ -1631,7 +1737,7 @@ fn canceled_preedit_recaptures_the_next_composition_target_in_both_editors() {
                 &mut app,
                 Event::InputMethod(input_method::Event::Preedit(preedit.into(), None)),
             );
-            assert_eq!(app.document.source(), original);
+            assert_eq!(app.session.document.source(), original);
             // macOS clears marked text immediately before delivering a commit.
             send(
                 &mut app,
@@ -1642,21 +1748,28 @@ fn canceled_preedit_recaptures_the_next_composition_target_in_both_editors() {
                 Event::InputMethod(input_method::Event::Commit(committed.into())),
             );
             let expected = original.replacen("words", committed, 1);
-            assert_eq!(app.document.source(), expected, "source_mode={source_mode}");
-            assert_eq!(app.document.collaboration().materialize(), expected);
-            assert_eq!(app.selection, Selection::caret(target + committed.len()));
+            assert_eq!(
+                app.session.document.source(),
+                expected,
+                "source_mode={source_mode}"
+            );
+            assert_eq!(app.session.document.collaboration().materialize(), expected);
+            assert_eq!(
+                app.session.selection,
+                Selection::caret(target + committed.len())
+            );
             assert_eq!(
                 app.editor.snapshot(),
                 if source_mode {
-                    app.document.source()
+                    app.session.document.source()
                 } else {
                     &app.projection.text
                 }
             );
             drop(app.update(Message::Undo));
-            assert_eq!(app.document.source(), original);
+            assert_eq!(app.session.document.source(), original);
             drop(app.update(Message::Redo));
-            assert_eq!(app.document.source(), expected);
+            assert_eq!(app.session.document.source(), expected);
             // A direct commit after cancellation and a local motion must use
             // the new caret, even when the next IME emits no nonempty preedit.
             for input in [
@@ -1677,16 +1790,16 @@ fn canceled_preedit_recaptures_the_next_composition_target_in_both_editors() {
                     repeat: false,
                 }),
             );
-            let caret = app.selection.head;
+            let caret = app.session.selection.head;
             let mut next = expected.clone();
             next.insert(caret, '好');
             send(
                 &mut app,
                 Event::InputMethod(input_method::Event::Commit("好".into())),
             );
-            assert_eq!(app.document.source(), next);
+            assert_eq!(app.session.document.source(), next);
             drop(app.update(Message::Undo));
-            assert_eq!(app.document.source(), expected);
+            assert_eq!(app.session.document.source(), expected);
         }
     }
 }
@@ -1744,12 +1857,12 @@ fn crdt_source_widget_composition_uses_the_same_stable_exactly_once_commit() {
         &renderer,
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
     );
-    app.selection = Selection {
+    app.session.selection = Selection {
         anchor: 15,
         head: 7,
     };
     app.sync_editor();
-    assert_eq!(app.editor.selection(), app.selection);
+    assert_eq!(app.editor.selection(), app.session.selection);
     event(
         &mut app,
         &mut tree,
@@ -1762,14 +1875,14 @@ fn crdt_source_widget_composition_uses_the_same_stable_exactly_once_commit() {
         &renderer,
         Event::InputMethod(input_method::Event::Preedit("にほん".into(), Some(0..9))),
     );
-    assert_eq!(app.document.source(), "Before selected after");
+    assert_eq!(app.session.document.source(), "Before selected after");
     event(
         &mut app,
         &mut tree,
         &renderer,
         Event::InputMethod(input_method::Event::Preedit(String::new(), None)),
     );
-    let mut remote = Document::from_state(&app.document.collaboration().state()).unwrap();
+    let mut remote = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     remote.replace(9..12, "remote").unwrap(); // partial change inside the composition replacement
     drop(app.update(Message::ReplicaLoaded(Ok(remote.collaboration().state()))));
     event(
@@ -1778,13 +1891,13 @@ fn crdt_source_widget_composition_uses_the_same_stable_exactly_once_commit() {
         &renderer,
         Event::InputMethod(input_method::Event::Commit("日本".into())),
     );
-    assert_eq!(app.document.source().matches("日本").count(), 1);
-    assert!(app.document.source().contains("remote"));
-    assert_eq!(app.editor.snapshot(), app.document.source());
+    assert_eq!(app.session.document.source().matches("日本").count(), 1);
+    assert!(app.session.document.source().contains("remote"));
+    assert_eq!(app.editor.snapshot(), app.session.document.source());
     drop(app.update(Message::Undo));
-    assert_eq!(app.document.source(), remote.source());
+    assert_eq!(app.session.document.source(), remote.source());
     drop(app.update(Message::Redo));
-    assert_eq!(app.document.source().matches("日本").count(), 1);
+    assert_eq!(app.session.document.source().matches("日本").count(), 1);
 }
 
 #[test]
@@ -1803,13 +1916,19 @@ fn crdt_sparse_import_keeps_reverse_selection_preedit_and_viewport() {
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
         Point::new(80.0, 40.0),
     );
-    let mut peer = Document::from_state(&harness.app.document.collaboration().state()).unwrap();
+    let mut peer =
+        Document::from_state(&harness.app.session.document.collaboration().state()).unwrap();
     let selection = Selection {
         anchor: source.find("![A local").unwrap(),
         head: source.find("**bold").unwrap() + 2,
     };
     harness.message(Message::SelectSource(selection));
-    let target = harness.app.document.collaboration().selection(selection);
+    let target = harness
+        .app
+        .session
+        .document
+        .collaboration()
+        .selection(selection);
     let edits = ["Paragraph 0.0", "Paragraph 30.0", "Paragraph 70.0"].map(|text| {
         let point = peer.source().find(text).unwrap();
         SourceEdit {
@@ -1821,16 +1940,17 @@ fn crdt_sparse_import_keeps_reverse_selection_preedit_and_viewport() {
         .unwrap();
     harness.message(Message::ReplicaLoaded(Ok(peer.collaboration().state())));
     assert_eq!(
-        harness.app.selection,
+        harness.app.session.selection,
         harness
             .app
+            .session
             .document
             .collaboration()
             .resolve_selection(&target)
             .unwrap()
     );
-    assert!(!harness.app.selection.is_caret());
-    assert!(harness.app.selection.anchor > harness.app.selection.head);
+    assert!(!harness.app.session.selection.is_caret());
+    assert!(harness.app.session.selection.anchor > harness.app.session.selection.head);
     assert_eq!(
         harness
             .app
@@ -1842,11 +1962,11 @@ fn crdt_sparse_import_keeps_reverse_selection_preedit_and_viewport() {
             .len(),
         3
     );
-    assert!(!harness.app.document.can_undo());
+    assert!(!harness.app.session.document.can_undo());
     harness.message(Message::SelectSource(Selection::caret(
-        harness.app.selection.head,
+        harness.app.session.selection.head,
     )));
-    let before = harness.app.document.source().to_owned();
+    let before = harness.app.session.document.source().to_owned();
     harness.event(
         Event::InputMethod(input_method::Event::Opened),
         Point::ORIGIN,
@@ -1866,19 +1986,37 @@ fn crdt_sparse_import_keeps_reverse_selection_preedit_and_viewport() {
         .unwrap();
     harness.message(Message::ReplicaLoaded(Ok(peer.collaboration().state())));
     assert!(RichEditor::intent_stats(&harness.tree).1);
-    assert_ne!(harness.app.document.source(), before);
+    assert_ne!(harness.app.session.document.source(), before);
     harness.event(
         Event::InputMethod(input_method::Event::Commit("確定 🦀".into())),
         Point::ORIGIN,
     );
-    assert_eq!(harness.app.document.source().matches("確定 🦀").count(), 1);
+    assert_eq!(
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .matches("確定 🦀")
+            .count(),
+        1
+    );
     harness.message(Message::Undo);
-    assert_eq!(harness.app.document.source(), peer.source());
+    assert_eq!(harness.app.session.document.source(), peer.source());
     harness.message(Message::Redo);
-    assert_eq!(harness.app.document.source().matches("確定 🦀").count(), 1);
+    assert_eq!(
+        harness
+            .app
+            .session
+            .document
+            .source()
+            .matches("確定 🦀")
+            .count(),
+        1
+    );
     let fresh = Projection::with_context(
-        harness.app.document.source(),
-        Some(harness.app.selection.head),
+        harness.app.session.document.source(),
+        Some(harness.app.session.selection.head),
     );
     assert_eq!(harness.app.projection.text, fresh.text);
     assert_eq!(harness.app.projection.rich, fresh.rich);
@@ -1896,11 +2034,12 @@ fn crdt_sparse_import_keeps_reverse_selection_preedit_and_viewport() {
     let visible = RichEditor::visible_anchor(&harness.tree).unwrap();
     let anchored = harness
         .app
+        .session
         .document
         .collaboration()
         .position(visible, yrs::Assoc::After);
     let y = RichEditor::screen_y(&harness.tree, visible);
-    peer.receive(&harness.app.document.collaboration().state())
+    peer.receive(&harness.app.session.document.collaboration().state())
         .unwrap();
     let edits = ["Paragraph 0.2", "Paragraph 30.2"].map(|text| {
         let point = peer.source().find(text).unwrap();
@@ -1914,6 +2053,7 @@ fn crdt_sparse_import_keeps_reverse_selection_preedit_and_viewport() {
     harness.message(Message::ReplicaLoaded(Ok(peer.collaboration().state())));
     let visible = harness
         .app
+        .session
         .document
         .collaboration()
         .resolve(&anchored)
@@ -1943,7 +2083,8 @@ fn large_offline_import_shapes() {
             let mut harness = Harness::new(fixture(blocks));
             harness.frame(&mut Sample::default());
             let (mut peer, mut source) =
-                Collaboration::from_state(&harness.app.document.collaboration().state()).unwrap();
+                Collaboration::from_state(&harness.app.session.document.collaboration().state())
+                    .unwrap();
             let mut timings = Vec::new();
             let mut certified = 0;
             for _ in 0..samples {
@@ -1969,10 +2110,14 @@ fn large_offline_import_shapes() {
                     source.replace_range(edit.range, &edit.text);
                 }
                 timings.push(harness.message(Message::ReplicaLoaded(Ok(peer.state()))));
-                certified += usize::from(!harness.app.document.block_changes().is_empty());
-                assert_eq!(harness.app.document.source(), source);
-                assert_eq!(harness.app.document.collaboration().materialize(), source);
-                let fresh = Projection::with_context(&source, Some(harness.app.selection.head));
+                certified += usize::from(!harness.app.session.document.block_changes().is_empty());
+                assert_eq!(harness.app.session.document.source(), source);
+                assert_eq!(
+                    harness.app.session.document.collaboration().materialize(),
+                    source
+                );
+                let fresh =
+                    Projection::with_context(&source, Some(harness.app.session.selection.head));
                 assert_eq!(harness.app.projection.text, fresh.text);
                 assert_eq!(harness.app.projection.rich, fresh.rich);
                 assert_eq!(harness.app.projection.highlights, fresh.highlights);

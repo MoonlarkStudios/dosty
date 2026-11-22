@@ -8,7 +8,7 @@ use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{button, column, container, operation, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Event, Fill, Task, event, window};
 
-use super::{App, EDITOR, EditorMode, Message as AppMessage, Overlay, Pending};
+use super::{App, EDITOR, EditorMode, Message as AppMessage, Overlay};
 use crate::document::selection::Selection;
 use crate::document::writing::HeadingIds;
 use crate::editor::{outline_filter::FilterInput, viewport};
@@ -70,7 +70,7 @@ impl State {
 
 struct Picker {
     root: PathBuf,
-    origin: PathBuf,
+    base: PathBuf,
     filter: String,
     selected: usize,
     target: Option<Target>,
@@ -122,32 +122,48 @@ struct Suggestion {
 }
 
 impl App {
-    fn link_scope(&self) -> Option<(&Path, &Path)> {
+    pub(super) fn link_base(&self) -> Option<&Path> {
+        self.session
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .or(self.session.folder.as_deref())
+    }
+
+    fn link_picker_scope(&self) -> Option<(&Path, &Path)> {
         let root = self.folder.root()?;
-        let origin = self.path.as_deref()?;
+        let base = self.link_base()?;
+        base.starts_with(root).then_some((root, base))
+    }
+
+    fn backlink_scope(&self) -> Option<(&Path, &Path)> {
+        let root = self.folder.root()?;
+        let origin = self.session.path.as_deref()?;
         (origin.starts_with(root) && origin != root).then_some((root, origin))
     }
 
-    pub(super) fn workspace_links_available(&self) -> bool {
-        self.link_scope().is_some()
+    pub(super) fn link_picker_available(&self) -> bool {
+        self.link_picker_scope().is_some()
+    }
+
+    pub(super) fn backlinks_available(&self) -> bool {
+        self.backlink_scope().is_some()
     }
 
     pub(super) fn update_document_links(&mut self, message: Message) -> Task<AppMessage> {
         let picker_active = self.overlay == Some(Overlay::Writing)
             && self
-                .link_scope()
+                .link_picker_scope()
                 .zip(self.links.picker.as_ref())
-                .is_some_and(|((root, origin), picker)| {
-                    root == picker.root && origin == picker.origin
-                });
+                .is_some_and(|((root, base), picker)| root == picker.root && base == picker.base);
         match message {
             Message::Pick if self.link_form_open() => {
-                let Some((root, origin)) = self.link_scope() else {
+                let Some((root, base)) = self.link_picker_scope() else {
                     return Task::none();
                 };
                 self.links.picker = Some(Picker {
                     root: root.to_owned(),
-                    origin: origin.to_owned(),
+                    base: base.to_owned(),
                     filter: String::new(),
                     selected: 0,
                     target: None,
@@ -204,7 +220,7 @@ impl App {
                 }
             }
             Message::ShowBacklinks if self.overlay.is_none() && !self.busy && !self.loading => {
-                let Some((root, origin)) = self.link_scope() else {
+                let Some((root, origin)) = self.backlink_scope() else {
                     return Task::none();
                 };
                 let root = root.to_owned();
@@ -219,7 +235,7 @@ impl App {
                 });
                 self.overlay = Some(Overlay::Backlinks);
                 self.preserve_viewport_generation =
-                    Some(self.document.collaboration().generation());
+                    Some(self.session.document.collaboration().generation());
                 let paths = self.folder.files().map(Path::to_owned).collect();
                 let complete = self.folder.link_snapshot_complete();
                 return Task::perform(
@@ -265,7 +281,7 @@ impl App {
                     .links
                     .backlinks
                     .as_ref()
-                    .filter(|panel| self.link_scope() == Some((&panel.root, &panel.origin)))
+                    .filter(|panel| self.backlink_scope() == Some((&panel.root, &panel.origin)))
                     .and_then(|panel| {
                         panel
                             .result
@@ -288,7 +304,7 @@ impl App {
                         }),
                     );
                 }
-                self.notification = Some("This file is no longer in the workspace.".into());
+                self.notification = Some("This file is no longer in the open place.".into());
             }
             _ => {}
         }
@@ -301,15 +317,21 @@ impl App {
         };
         match choice {
             Choice::File(file) if picker.target.is_none() && self.folder.has_file(&file) => {
-                if document_links::relative(&picker.root, &picker.origin, &file).is_none() {
+                if document_links::relative(&picker.root, &picker.base, &file).is_none() {
                     return Task::none();
                 }
                 let request = Arc::new(());
                 let root = picker.root.clone();
-                let current = self.path.as_ref() == Some(&file);
-                let headings = current.then(|| {
+                let open = if self.session.path.as_ref() == Some(&file) {
+                    Some(&self.session)
+                } else {
+                    self.background
+                        .dirty()
+                        .find(|session| session.path.as_ref() == Some(&file))
+                };
+                let headings = open.map(|session| {
                     let mut ids = HeadingIds::default();
-                    Ok(self
+                    Ok(session
                         .document
                         .blocks()
                         .iter()
@@ -317,7 +339,7 @@ impl App {
                         .filter_map(|(index, block)| {
                             let (_, title) = block.heading.as_ref()?;
                             let fragment =
-                                ids.assign_for_block(title, self.document.block_source(index));
+                                ids.assign_for_block(title, session.document.block_source(index));
                             (!fragment.is_empty()).then(|| Heading {
                                 title: title.clone(),
                                 fragment,
@@ -333,7 +355,7 @@ impl App {
                     request: Arc::clone(&request),
                     headings,
                 });
-                if !current {
+                if open.is_none() {
                     return Task::perform(document_links::headings(root, file), move |headings| {
                         AppMessage::Links(Message::HeadingsLoaded(Arc::clone(&request), headings))
                     });
@@ -344,11 +366,11 @@ impl App {
                     return Task::none();
                 };
                 if !self.folder.has_file(&target.file) {
-                    self.notification = Some("This file is no longer in the workspace.".into());
+                    self.notification = Some("This file is no longer in the open place.".into());
                     return Task::none();
                 }
                 let Some(relative) =
-                    document_links::relative(&picker.root, &picker.origin, &target.file)
+                    document_links::relative(&picker.root, &picker.base, &target.file)
                 else {
                     return Task::none();
                 };
@@ -363,7 +385,7 @@ impl App {
                     else {
                         return Task::none();
                     };
-                    let path = if target.file == picker.origin {
+                    let path = if self.session.path.as_ref() == Some(&target.file) {
                         String::new()
                     } else {
                         relative
@@ -463,7 +485,7 @@ impl App {
             );
         };
         let title = picker.target.as_ref().map_or_else(
-            || "Choose a workspace file".to_owned(),
+            || "Choose a file".to_owned(),
             |target| super::folder::name(&target.file),
         );
         let input = text_input(
@@ -530,12 +552,14 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         let mut content = column![
             text("Linked from").font(styles::BODY_FONT).size(28),
-            text(&self.display_name).size(13).color(tokens.muted)
+            text(&self.session.display_name)
+                .size(13)
+                .color(tokens.muted)
         ]
         .spacing(10);
         if let Some(panel) = &self.links.backlinks {
             match &panel.result {
-                None => content = content.push(text("Checking workspace files…").size(13)),
+                None => content = content.push(text("Checking files in this place…").size(13)),
                 Some(Err(error)) => content = content.push(text(error.to_string()).size(13)),
                 Some(Ok(result)) => {
                     if result.entries.is_empty() {
@@ -543,7 +567,7 @@ impl App {
                             text(if result.partial {
                                 "No links found in the files checked."
                             } else {
-                                "No workspace files link to this document."
+                                "No files in this place link to this document."
                             })
                             .size(13),
                         );
@@ -603,12 +627,22 @@ impl App {
         self.overlay = None;
         self.writing.close_details();
         self.links.close();
-        if self.path.as_ref() == Some(&path) {
-            return jump
-                .and_then(|jump| self.jump_to_document_link(jump))
-                .unwrap_or_else(|| operation::focus(EDITOR));
+        if self.session.path.as_ref() == Some(&path) {
+            return self.focus_link_target(jump);
         }
-        self.request(Pending::OpenLinked(path, jump))
+        if let Some(parked) = self.background.take_dirty(Some(&path)) {
+            return self.resume_at(parked, jump);
+        }
+        self.busy = true;
+        self.loading = true;
+        Task::perform(document_links::resolve_path(path), move |result| {
+            AppMessage::ResolvedLinked(result, jump.clone())
+        })
+    }
+
+    pub(super) fn focus_link_target(&mut self, jump: Option<Jump>) -> Task<AppMessage> {
+        jump.and_then(|jump| self.jump_to_document_link(jump))
+            .unwrap_or_else(|| operation::focus(EDITOR))
     }
 
     pub(super) fn jump_to_document_link(&mut self, jump: Jump) -> Option<Task<AppMessage>> {
@@ -616,8 +650,10 @@ impl App {
             Jump::Heading(fragment) => {
                 let mut ids = HeadingIds::default();
                 let index = self.outline.sections.iter().position(|section| {
-                    ids.assign_for_block(&section.title, self.document.block_source(section.block))
-                        == fragment
+                    ids.assign_for_block(
+                        &section.title,
+                        self.session.document.block_source(section.block),
+                    ) == fragment
                 });
                 if let Some(index) = index {
                     self.overlay = None;
@@ -629,14 +665,14 @@ impl App {
                 self.notification = Some("No heading matches this link.".into());
             }
             Jump::Reference { offset, digest } => {
-                let source = self.document.source();
+                let source = self.session.document.source();
                 if source.is_char_boundary(offset) && blake3::hash(source.as_bytes()) == digest {
-                    self.selection = Selection::caret(offset);
+                    self.session.selection = Selection::caret(offset);
                     self.editor_focused = self.mode != EditorMode::Read;
-                    self.document.break_history_group();
+                    self.session.document.break_history_group();
                     self.sync_editor();
                     return Some(if self.mode == EditorMode::Read {
-                        viewport::reveal(self.document.block_at(offset))
+                        viewport::reveal(self.session.document.block_at(offset))
                     } else {
                         operation::focus(EDITOR)
                     });
@@ -682,7 +718,7 @@ fn link_choice<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::application::writing;
+    use crate::app::application::{Pending, writing};
 
     async fn settle(app: &mut App, task: Task<AppMessage>) {
         use iced::futures::StreamExt;
@@ -708,7 +744,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn picker_is_one_undo_step_and_jumps_through_the_unsaved_guard() {
+    async fn picker_is_one_undo_step_and_link_jumps_keep_dirty_documents_open() {
         let directory = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(directory.path()).unwrap();
         std::fs::create_dir(root.join("Drafts")).unwrap();
@@ -729,32 +765,52 @@ mod tests {
         drop(app.update_document_links(Message::Accept));
         drop(app.update_writing(writing::Message::Accept));
         assert!(
-            app.document
+            app.session
+                .document
                 .source()
                 .starts_with("[Methods](<../Notes%20%232.md#methods-1>)")
         );
-        let edited = app.document.source().to_owned();
+        let edited = app.session.document.source().to_owned();
         drop(app.update_message(AppMessage::Undo));
-        assert_eq!(app.document.source(), "Draft text.");
+        assert_eq!(app.session.document.source(), "Draft text.");
         drop(app.update_message(AppMessage::Redo));
-        assert_eq!(app.document.source(), edited);
+        assert_eq!(app.session.document.source(), edited);
 
         drop(app.update_message(AppMessage::SetMode(EditorMode::Read)));
         let link = "../Notes%20%232.md#methods-1";
-        drop(app.open_destination(link.into()));
-        assert_eq!(app.overlay, Some(Overlay::Unsaved));
-        drop(app.update_message(AppMessage::CloseOverlay));
-        assert_eq!(app.document.source(), edited);
-        assert_eq!(app.path.as_ref(), Some(&entry));
-        drop(app.open_destination(link.into()));
-        let open = app.update_message(AppMessage::ConfirmDiscard);
+        let open = app.open_destination(link.into());
         settle(&mut app, open).await;
-        assert_eq!(app.path.as_ref(), Some(&methods));
-        assert_eq!(app.document.source(), target);
+        assert!(app.overlay.is_none());
+        assert_eq!(app.session.path.as_ref(), Some(&methods));
+        assert_eq!(app.session.document.source(), target);
         assert_eq!(app.mode, EditorMode::Read);
         assert_eq!(
-            app.selection,
+            app.session.selection,
             Selection::caret(target.rfind("## Methods").unwrap())
+        );
+        assert!(
+            app.background
+                .dirty()
+                .any(|session| session.path.as_ref() == Some(&entry)
+                    && session.document.source() == edited)
+        );
+
+        let added = "An unsaved introduction.\n\n";
+        app.session.document.replace(0..0, added).unwrap();
+        app.sync_editor();
+        app.changed();
+        let return_to_entry = app.request(Pending::Open(Some(entry.clone())));
+        settle(&mut app, return_to_entry).await;
+        assert_eq!(app.session.document.source(), edited);
+        assert!(app.session.document.can_undo());
+        let open = app.open_destination(link.into());
+        settle(&mut app, open).await;
+        assert_eq!(app.session.path.as_ref(), Some(&methods));
+        assert_eq!(app.session.document.source(), format!("{added}{target}"));
+        assert!(app.session.dirty && app.session.document.can_undo());
+        assert_eq!(
+            app.session.selection,
+            Selection::caret(added.len() + target.rfind("## Methods").unwrap())
         );
     }
 
@@ -774,10 +830,10 @@ mod tests {
         assert_eq!(app.overlay, Some(Overlay::Backlinks));
         let open = app.update_document_links(Message::OpenBacklink(None));
         settle(&mut app, open).await;
-        assert_eq!(app.path.as_ref(), Some(&notes));
+        assert_eq!(app.session.path.as_ref(), Some(&notes));
         // Live projection canonicalizes the caret out of hidden Markdown.
         assert_eq!(
-            app.selection,
+            app.session.selection,
             app.projection
                 .normalize_caret(Selection::caret(source.find("[draft]").unwrap()))
         );
@@ -789,12 +845,76 @@ mod tests {
         std::fs::write(&notes, "Another writer replaced this file.").unwrap();
         let open = app.update_document_links(Message::OpenBacklink(None));
         settle(&mut app, open).await;
-        assert_eq!(app.path.as_ref(), Some(&notes));
-        assert_eq!(app.document.source(), "Another writer replaced this file.");
+        assert_eq!(app.session.path.as_ref(), Some(&notes));
+        assert_eq!(
+            app.session.document.source(),
+            "Another writer replaced this file."
+        );
         assert!(
             app.notification
                 .as_deref()
                 .is_some_and(|notice| notice.contains("changed since"))
         );
+    }
+
+    #[tokio::test]
+    async fn backlink_resumes_dirty_notes_without_replacing_their_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let draft = root.join("Draft.md");
+        let notes = root.join("Notes.md");
+        std::fs::write(&draft, "# Draft\n").unwrap();
+        std::fs::write(&notes, "# Notes\n\n[Draft](Draft.md).\n").unwrap();
+        let mut app = open_workspace(&root, &notes).await;
+        let extra = "Some unsaved writing.\n\n";
+        app.session.document.replace(0..0, extra).unwrap();
+        app.session.selection = Selection { anchor: 8, head: 4 };
+        app.sync_editor();
+        app.changed();
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
+        let open = app.request(Pending::Open(Some(draft)));
+        settle(&mut app, open).await;
+
+        let scan = app.update_document_links(Message::ShowBacklinks);
+        settle(&mut app, scan).await;
+        let follow = app.update_document_links(Message::OpenBacklink(None));
+        settle(&mut app, follow).await;
+        assert_eq!(app.session.path.as_ref(), Some(&notes));
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert!(app.session.dirty && app.session.document.can_undo());
+    }
+
+    #[tokio::test]
+    async fn draft_uses_its_first_save_folder_to_suggest_and_follow_relative_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let drafts = root.join("Drafts");
+        std::fs::create_dir(&drafts).unwrap();
+        let entry = drafts.join("Intro.md");
+        let notes = root.join("Notes.md");
+        std::fs::write(&entry, "Intro").unwrap();
+        std::fs::write(&notes, "# Notes\n").unwrap();
+        let mut app = open_workspace(&root, &entry).await;
+        let new = app.request(Pending::New);
+        settle(&mut app, new).await;
+        assert_eq!(app.session.folder.as_ref(), Some(&drafts));
+        assert!(app.session.path.is_none() && app.link_picker_available());
+        assert!(!app.backlinks_available());
+
+        drop(app.update_writing(writing::Message::Details(writing::Kind::Link)));
+        drop(app.update_document_links(Message::Pick));
+        drop(app.update_document_links(Message::Filter("notes".into())));
+        let choose = app.update_document_links(Message::Accept);
+        settle(&mut app, choose).await;
+        drop(app.update_document_links(Message::Accept));
+        drop(app.update_writing(writing::Message::Accept));
+        assert_eq!(app.session.document.source(), "[Notes](<../Notes.md>)");
+        let open = app.open_destination("../Notes.md".into());
+        settle(&mut app, open).await;
+        assert_eq!(app.session.path.as_ref(), Some(&notes));
+        assert!(app.background.dirty().any(|session| session.path.is_none()
+            && session.document.source() == "[Notes](<../Notes.md>)"));
     }
 }
