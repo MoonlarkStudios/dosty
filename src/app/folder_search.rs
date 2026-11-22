@@ -1,5 +1,6 @@
 //! Find text in the current folder and navigate through the normal file guards.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use crate::theme::styles::{self, Button};
 const INPUT: &str = "folder-search-query";
 const RESULTS: &str = "folder-search-results";
 const ROW_HEIGHT: f32 = 45.0;
+const MAX_OPEN_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -95,7 +97,8 @@ impl App {
             .unwrap_or_else(|| widget::Id::from(EDITOR));
         self.folder_search.clear();
         self.overlay = None;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         operation::focus(previous)
     }
 
@@ -173,7 +176,8 @@ impl App {
         self.folder_search.root = Some(root.to_owned());
         self.chrome.menu = None;
         self.overlay = Some(Overlay::FolderSearch);
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         let picker = self.folder_search.picker;
         widget::operate(widget::operation::focusable::find_focused())
             .map(move |id| AppMessage::FolderSearch(Message::RememberFocus(picker, id)))
@@ -194,16 +198,38 @@ impl App {
             return Task::none();
         };
         self.folder_search.invalidate();
-        let paths = self.folder.files().map(Path::to_owned).collect();
-        let active_source = self
-            .path
-            .as_ref()
-            .filter(|path| self.folder.has_file(path))
-            .map(|path| (path.clone(), self.document.source().to_owned()));
+        let paths: Vec<_> = self
+            .folder
+            .files()
+            .filter(|path| crate::io::folder::is_markdown(path))
+            .take(folder_search::MAX_FILES + 1)
+            .map(Path::to_owned)
+            .collect();
+        let mut known: HashSet<_> = paths
+            .iter()
+            .take(folder_search::MAX_FILES)
+            .map(PathBuf::as_path)
+            .collect();
+        let mut remaining = MAX_OPEN_SOURCE_BYTES;
+        let open_sources = std::iter::once(&self.session)
+            .chain(self.background.dirty())
+            .filter_map(|session| {
+                let path = session.path.as_deref()?;
+                if !known.remove(path) {
+                    return None;
+                }
+                let source = session.document.source();
+                let snapshot = (source.len() <= remaining).then(|| {
+                    remaining -= source.len();
+                    source.to_owned()
+                });
+                Some((path.to_owned(), snapshot))
+            })
+            .collect();
         let request = folder_search::Request {
             root,
             paths,
-            active_source,
+            open_sources,
             query: self.folder_search.query.clone(),
             incomplete_snapshot: self.folder.incomplete(),
         };
@@ -257,13 +283,13 @@ impl App {
             self.folder_search.error = Some(folder_search::changed().to_string());
             return Task::none();
         }
-        let active = self.path.as_ref() == Some(&target.path);
+        let active = self.session.path.as_ref() == Some(&target.path);
         let stable = if active {
-            let Some(range) = target.range_in(self.document.source()) else {
+            let Some(range) = target.range_in(self.session.document.source()) else {
                 self.folder_search.error = Some(folder_search::changed().to_string());
                 return Task::none();
             };
-            Some(self.document.collaboration().selection(Selection {
+            Some(self.session.document.collaboration().selection(Selection {
                 anchor: range.start,
                 head: range.end,
             }))
@@ -277,11 +303,16 @@ impl App {
         let focus = self.cancel_folder_search();
         self.clear_grid();
         if let Some(stable) = stable {
-            let Some(selection) = self.document.collaboration().resolve_selection(&stable) else {
+            let Some(selection) = self
+                .session
+                .document
+                .collaboration()
+                .resolve_selection(&stable)
+            else {
                 self.notification = Some(folder_search::changed().to_string());
                 return focus;
             };
-            if self.document.source().get(selection.range()) != Some(query.as_str()) {
+            if self.session.document.source().get(selection.range()) != Some(query.as_str()) {
                 self.notification = Some(folder_search::changed().to_string());
                 return focus;
             }
@@ -296,6 +327,21 @@ impl App {
             self.notification = Some(folder_search::changed().to_string());
             return Task::none();
         }
+        let dirty_session = self
+            .background
+            .dirty()
+            .find(|session| session.path.as_ref() == Some(&target.path))
+            .map(|session| (session.id(), target.range_in(session.document.source())));
+        if let Some((id, range)) = dirty_session {
+            let Some(range) = range else {
+                self.notification = Some(folder_search::changed().to_string());
+                return Task::none();
+            };
+            let Some(parked) = self.background.take_unsaved(id) else {
+                return Task::none();
+            };
+            return self.resume_at(parked, Some(range));
+        }
         self.busy = true;
         self.loading = true;
         Task::perform(target.open(root), |result| {
@@ -304,7 +350,7 @@ impl App {
     }
 
     pub(super) fn jump_to_folder_match(&mut self, range: Range<usize>) -> Task<AppMessage> {
-        self.document.break_history_group();
+        self.session.document.break_history_group();
         self.preserve_viewport_generation = None;
         self.editor_focused = true;
         self.reveal_source_match(range)
@@ -545,7 +591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn switches_files_through_unsaved_guard_and_jumps_to_utf8_match() {
+    async fn switches_files_and_parks_unsaved_work_before_jumping_to_match() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let active = root.join("Active.md");
@@ -555,17 +601,25 @@ mod tests {
         let mut app = app(&root, &[&active, &target]);
         app.set_document("saved".into(), Some(active.clone()), "Active.md".into());
         drop(app.update_message(AppMessage::Edit(Action::Edit(Edit::Insert('!')))));
-        let unsaved = app.document.source().to_owned();
+        let unsaved = app.session.document.source().to_owned();
 
         query(&mut app, "🦀 café").await;
         assert_eq!(app.folder_search.results.as_ref().unwrap().hits.len(), 1);
-        drop(app.update_folder_search(Message::Accept));
-        assert_eq!(app.overlay, Some(Overlay::Unsaved));
-        assert_eq!(app.document.source(), unsaved);
-        let open = app.update_message(AppMessage::ConfirmDiscard);
+        let open = app.update_folder_search(Message::Accept);
         settle(&mut app, open).await;
-        assert_eq!(app.path.as_deref(), Some(target.as_path()));
-        assert_eq!(&app.document.source()[app.selection.range()], "🦀 café");
+        assert_eq!(
+            app.background
+                .dirty_under(&active)
+                .unwrap()
+                .document
+                .source(),
+            unsaved
+        );
+        assert_eq!(app.session.path.as_deref(), Some(target.as_path()));
+        assert_eq!(
+            &app.session.document.source()[app.session.selection.range()],
+            "🦀 café"
+        );
         assert_eq!(std::fs::read_to_string(active).unwrap(), "saved");
     }
 
@@ -579,28 +633,61 @@ mod tests {
         std::fs::write(&target, "disk only").unwrap();
         let mut app = app(&root, &[&active, &target]);
         app.set_document("active 🦀".into(), Some(active.clone()), "Active.md".into());
-        app.saved_source = "old file".into();
-        app.dirty = true;
+        app.session.saved_source = "old file".into();
+        app.session.dirty = true;
 
         query(&mut app, "🦀").await;
         drop(app.update_folder_search(Message::Accept));
-        assert_eq!(app.path.as_deref(), Some(active.as_path()));
-        assert_eq!(&app.document.source()[app.selection.range()], "🦀");
-        assert!(app.dirty);
+        assert_eq!(app.session.path.as_deref(), Some(active.as_path()));
+        assert_eq!(
+            &app.session.document.source()[app.session.selection.range()],
+            "🦀"
+        );
+        assert!(app.session.dirty);
 
         query(&mut app, "disk").await;
         std::fs::write(&target, "different disk text").unwrap();
-        drop(app.update_folder_search(Message::Accept));
-        let open = app.update_message(AppMessage::ConfirmDiscard);
+        let open = app.update_folder_search(Message::Accept);
         settle(&mut app, open).await;
-        assert_eq!(app.path.as_deref(), Some(active.as_path()));
-        assert_eq!(app.document.source(), "active 🦀");
+        assert_eq!(app.session.path.as_deref(), Some(active.as_path()));
+        assert_eq!(app.session.document.source(), "active 🦀");
         assert!(
             app.notification
                 .as_ref()
                 .unwrap()
                 .contains("changed since the search")
         );
+    }
+
+    #[tokio::test]
+    async fn matches_dirty_background_source_and_resumes_its_undo_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let active = root.join("Active.md");
+        let target = root.join("Target.md");
+        std::fs::write(&active, "active disk").unwrap();
+        std::fs::write(&target, "target disk text").unwrap();
+        let mut app = app(&root, &[&active, &target]);
+        app.set_document(
+            "target disk text".into(),
+            Some(target.clone()),
+            "Target.md".into(),
+        );
+        drop(app.update_message(AppMessage::Edit(Action::Edit(Edit::Insert('🦀')))));
+        let original_session = app.session.id();
+        app.set_document("active disk".into(), Some(active), "Active.md".into());
+
+        query(&mut app, "🦀").await;
+        assert_eq!(app.folder_search.results.as_ref().unwrap().hits.len(), 1);
+        let open = app.update_folder_search(Message::Accept);
+        settle(&mut app, open).await;
+        assert_eq!(app.session.id(), original_session);
+        assert_eq!(
+            &app.session.document.source()[app.session.selection.range()],
+            "🦀"
+        );
+        assert!(app.session.dirty && app.session.document.can_undo());
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "target disk text");
     }
 
     #[tokio::test]

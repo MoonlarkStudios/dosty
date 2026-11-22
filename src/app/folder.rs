@@ -5,16 +5,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use iced::keyboard::{self, Key, key::Named};
+use iced::keyboard::key::Named;
+use iced::keyboard::{self, Key};
 use iced::widget::{
-    button, column, container, mouse_area, opaque, operation, row, scrollable, space, text,
-    text_input,
+    button, column, container, mouse_area, opaque, operation, row, scrollable, text, text_input,
 };
-use iced::{Element, Event, Fill, Padding, Point, Size, Task, event, window};
+use iced::{Alignment, Element, Event, Fill, Padding, Point, Size, Task, event, window};
 
 use super::{App, EDITOR, Message as AppMessage, Overlay, Pending};
+use crate::app::icon::{self, Icon};
 use crate::editor::file_tree::{self, FileTree};
-use crate::io::{file_ops, folder, storage::FileError};
+use crate::io::assets::is_image;
+use crate::io::storage::FileError;
+use crate::io::{file_ops, folder};
 use crate::theme::styles::{self, Button};
 
 const NAME_INPUT: &str = "folder-name";
@@ -46,7 +49,14 @@ pub enum Message {
         result: Result<folder::Snapshot, FileError>,
     },
     Refresh,
-    Close,
+    /// The window regained focus.
+    WindowFocused,
+    /// Remove the open place from the library. Its files are untouched.
+    Remove,
+    /// Name the never-saved document on the page.
+    NameDraft,
+    /// Reference an image of the place from the document, where it lives.
+    InsertImage(PathBuf),
     Tree(file_tree::Action),
     NewDocument(PathBuf),
     NewFolder(PathBuf),
@@ -92,6 +102,8 @@ enum NameAction {
     Document(PathBuf),
     Directory(PathBuf),
     Rename(PathBuf),
+    /// Name the never-saved document on the page; no file exists yet.
+    Draft,
 }
 
 #[derive(Debug, Clone)]
@@ -194,10 +206,15 @@ impl State {
     pub(super) fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
+    /// Every file and folder of the open place, as last scanned.
+    pub(super) fn entries(&self) -> &[folder::Entry] {
+        &self.entries
+    }
+    /// The documents of the open place. Images are entries, not documents.
     pub(super) fn files(&self) -> impl Iterator<Item = &Path> {
         self.entries
             .iter()
-            .filter(|entry| !entry.is_directory)
+            .filter(|entry| !entry.is_directory && !is_image(&entry.path))
             .map(|entry| entry.path.as_path())
     }
     pub(super) fn incomplete(&self) -> bool {
@@ -214,9 +231,7 @@ impl State {
         matches!(self.dialog, Some(Dialog::Menu { .. }))
     }
     pub(super) fn has_file(&self, path: &Path) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| !entry.is_directory && entry.path == path)
+        self.files().any(|file| file == path)
     }
     /// Whether Files opens when the next scan succeeds.
     pub(super) fn prepare_reveal(&mut self, reveal: bool) {
@@ -295,9 +310,10 @@ impl State {
         }
         for siblings in children.values_mut() {
             siblings.sort_by(|a, b| {
-                a.is_directory
-                    .cmp(&b.is_directory)
-                    .then_with(|| a.path.file_name().cmp(&b.path.file_name()))
+                // Folders lead, as they do in the switcher.
+                b.is_directory
+                    .cmp(&a.is_directory)
+                    .then_with(|| folder::natural_cmp(&name(&a.path), &name(&b.path)))
             });
         }
         let mut visible = Vec::new();
@@ -309,7 +325,11 @@ impl State {
             let expanded = self.expanded.contains(&entry.path);
             visible.push(file_tree::Entry {
                 path: entry.path.clone(),
-                label: name(&entry.path),
+                label: if entry.is_directory {
+                    name(&entry.path)
+                } else {
+                    title(&entry.path)
+                },
                 depth,
                 directory: entry.is_directory,
                 expanded,
@@ -362,7 +382,7 @@ impl App {
                         self.folder.limited = snapshot.limited;
                         self.folder.warnings = snapshot.warnings;
                         self.folder.error = None;
-                        if let Some(path) = &self.path {
+                        if let Some(path) = &self.session.path {
                             self.folder.reveal(path);
                         }
                         self.folder.refresh_visible();
@@ -415,7 +435,7 @@ impl App {
                 match result {
                     Ok(PathKind::Directory) => return self.open_workspace(path),
                     Ok(PathKind::File) if !self.busy => {
-                        if self.path.as_ref() == Some(&path) {
+                        if self.session.path.as_ref() == Some(&path) {
                             return Task::none();
                         }
                         if !self.commit_cell() {
@@ -553,12 +573,17 @@ impl App {
                 self.folder.reveal_after_scan = true;
                 return self.scan_folder(path);
             }
+            // Files changed by another program appear when the writer returns,
+            // without closing anything they had open.
+            Message::WindowFocused if !self.busy && self.overlay.is_none() => {
+                return self.folder_refresh();
+            }
             Message::Refresh if !self.busy => {
                 self.folder.dialog = None;
                 self.overlay = None;
                 return self.folder_refresh();
             }
-            Message::Close if !self.busy => {
+            Message::Remove if !self.busy => {
                 drop(self.cancel_quick_open());
                 self.folder.cancel_scan();
                 self.folder.next_navigation();
@@ -570,7 +595,7 @@ impl App {
                 self.folder.dialog = None;
                 self.folder.error = None;
                 self.overlay = None;
-                let workspace = self.workspace_closed();
+                let workspace = self.place_removed();
                 self.chrome.files.open = false;
                 return Task::batch([workspace, operation::focus(EDITOR)]);
             }
@@ -582,6 +607,20 @@ impl App {
                     return Task::none();
                 }
                 return self.request(Pending::FolderNew(parent));
+            }
+            Message::InsertImage(path) if !self.busy => {
+                self.folder.dialog = None;
+                self.overlay = None;
+                self.insert_image_reference(&path);
+                return operation::focus(EDITOR);
+            }
+            Message::Rename(path) | Message::MoveTo(path) if is_image(&path) => {
+                self.folder_error(
+                    "Images stay where they are: documents that use them are not updated.".into(),
+                );
+            }
+            Message::NameDraft if !self.busy && self.session.path.is_none() => {
+                return self.folder_name(NameAction::Draft);
             }
             Message::NewFolder(parent) if !self.busy => {
                 return self.folder_name(NameAction::Directory(parent));
@@ -697,6 +736,7 @@ impl App {
             NameAction::Document(_) => "Untitled.md".into(),
             NameAction::Directory(_) => "New folder".into(),
             NameAction::Rename(path) => name(path),
+            NameAction::Draft => self.session.display_name.clone(),
         };
         self.folder.dialog = Some(Dialog::Name {
             action,
@@ -713,8 +753,11 @@ impl App {
                 self.editor_focused = false;
                 return operation::focus(TREE);
             }
+            file_tree::Action::Open(path) if is_image(&path) => {
+                return self.update_image_preview(super::image_preview::Message::Show(path));
+            }
             file_tree::Action::Open(path) => {
-                if self.path.as_ref() == Some(&path) {
+                if self.session.path.as_ref() == Some(&path) {
                     return Task::none();
                 }
                 if !self.commit_cell() {
@@ -774,7 +817,7 @@ impl App {
     }
 
     pub(super) fn folder_document_changed(&mut self) -> Task<AppMessage> {
-        if let Some(path) = &self.path {
+        if let Some(path) = &self.session.path {
             self.folder.reveal(path);
         }
         self.folder.refresh_visible();
@@ -783,7 +826,7 @@ impl App {
                 .folder
                 .root
                 .as_ref()
-                .zip(self.path.as_ref())
+                .zip(self.session.path.as_ref())
                 .is_some_and(|(root, path)| path.starts_with(root))
         {
             self.folder_refresh()
@@ -800,6 +843,7 @@ impl App {
             NameAction::Directory(_) => false,
             NameAction::Document(_) => true,
             NameAction::Rename(path) => folder::is_markdown(path),
+            NameAction::Draft => true,
         };
         let value = match validate_name(&value, kind) {
             Ok(value) => value,
@@ -818,6 +862,13 @@ impl App {
             }
             NameAction::Document(parent) => self.start_folder_create(parent, value, false),
             NameAction::Directory(parent) => self.start_folder_create(parent, value, true),
+            // Nothing exists on disk yet; the first save uses this name.
+            NameAction::Draft => {
+                self.session.name(value);
+                self.folder.dialog = None;
+                self.overlay = None;
+                operation::focus(EDITOR)
+            }
         }
     }
 
@@ -830,8 +881,8 @@ impl App {
         let id = self.folder.next_operation;
         self.folder.inflight = Some(InFlight {
             id,
-            document: self.document.collaboration().id(),
-            replica: self.document.collaboration().replica_id(),
+            document: self.session.document.collaboration().id(),
+            replica: self.session.document.collaboration().replica_id(),
             moving,
             undoing,
         });
@@ -885,7 +936,7 @@ impl App {
             .root
             .as_ref()
             .is_some_and(|root| from.starts_with(root) && to.starts_with(root));
-        let active = self.path.as_ref() == Some(&from);
+        let active = self.session.path.as_ref() == Some(&from);
         let active_rename = active && from.parent() == to.parent();
         let authorized_undo = undoing
             && self
@@ -917,16 +968,35 @@ impl App {
             self.folder_error("A folder cannot be moved into itself.".into());
             return Task::none();
         }
+        // Links in other documents are not rewritten, so a moved image would
+        // silently vanish from every page that uses it.
+        if is_image(&from) {
+            self.folder_error(
+                "Images stay where they are: documents that use them are not updated.".into(),
+            );
+            return Task::none();
+        }
+        // Only the page's unsaved writing is relocated with its file. A
+        // background document's unsaved image references would be left behind.
+        if let Some(unsaved) = self.background.dirty_under(&from) {
+            let message = format!("Save {} before moving it.", unsaved.display_name);
+            self.folder_error(message);
+            return Task::none();
+        }
         if !self.commit_cell() {
             return Task::none();
         }
-        let active = self.path.clone().map(|path| file_ops::ActiveDocument {
-            path,
-            saved_source: self.saved_source.clone(),
-            saved_version: self.saved_version.clone(),
-            source: self.document.source().to_owned(),
-            history: self.images.history(),
-        });
+        let active = self
+            .session
+            .path
+            .clone()
+            .map(|path| file_ops::ActiveDocument {
+                path,
+                saved_source: self.session.saved_source.clone(),
+                saved_version: self.session.saved_version.clone(),
+                source: self.session.document.source().to_owned(),
+                history: self.images.history(),
+            });
         let operation = self.begin_folder_operation(true, undoing);
         Task::perform(file_ops::move_item(from, to, active), move |result| {
             AppMessage::Folder(Message::Finished {
@@ -992,13 +1062,18 @@ impl App {
                 }
                 self.folder.remap(&result.from, &result.to);
                 remembered = self.workspace_moved(&result.from, &result.to);
-                if self.document.collaboration().id() == inflight.document
-                    && self.document.collaboration().replica_id() == inflight.replica
+                for parked in self.background.release_clean_under(&result.from) {
+                    self.recovery.discard(parked.checkpoint);
+                }
+                self.trail.moved(&result.from, &result.to);
+                if self.session.document.collaboration().id() == inflight.document
+                    && self.session.document.collaboration().replica_id() == inflight.replica
                     && let Some(path) = result.active_path
                 {
-                    self.display_name = name(&path);
-                    self.path = Some(path);
+                    self.session.display_name = name(&path);
+                    self.session.path = Some(path);
                     self.recovery.path_changed();
+                    self.page_settled();
                 }
                 self.folder.notice = Some(if inflight.undoing {
                     "Move undone".into()
@@ -1048,28 +1123,118 @@ impl App {
         }
     }
 
-    pub(super) fn folder_view(&self) -> Element<'_, AppMessage> {
-        if self.folder.root.is_none() {
-            return space().into();
-        }
+    /// Unsaved documents that no row of the tree can stand for: drafts that
+    /// have never been saved, and documents outside the open place.
+    fn unsaved_elsewhere(&self) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let mut content = column![].spacing(10);
+        let page = self.session.dirty.then_some((&self.session, true));
+        let sessions = page
+            .into_iter()
+            .chain(self.background.dirty().map(|session| (session, false)))
+            .filter(|(session, _)| {
+                session
+                    .path
+                    .as_deref()
+                    .is_none_or(|path| !self.folder.has_file(path))
+            });
+        let mut group = column![].spacing(2);
+        for (index, (session, on_page)) in sessions.enumerate() {
+            if index == 0 {
+                group = group.push(
+                    container(text("Not saved yet").size(11).color(tokens.muted))
+                        .padding([0, styles::SIDEBAR_INSET as u16]),
+                );
+            }
+            let location = session
+                .path
+                .as_deref()
+                .and_then(Path::parent)
+                .or(session.folder.as_deref())
+                .map(name)
+                .unwrap_or_default();
+            // Titles and marks line up with the tree's rows below.
+            let label = row![
+                container(
+                    text(title(Path::new(&session.display_name)))
+                        .size(styles::SIDEBAR_TEXT_SIZE)
+                        .wrapping(text::Wrapping::None)
+                )
+                .clip(true)
+                .width(Fill),
+                text(location)
+                    .size(11)
+                    .color(tokens.muted)
+                    .wrapping(text::Wrapping::None),
+                icon::sized(Icon::Modified, tokens.accent, 16.0),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+            group = group.push(
+                button(label)
+                    .padding(Padding::new(6.0).left(25.0).right(6.0))
+                    .width(Fill)
+                    .on_press_maybe(
+                        (!on_page && !self.busy).then(|| AppMessage::Resume(session.id())),
+                    )
+                    .style(styles::button_style(
+                        tokens,
+                        if on_page {
+                            Button::Selected
+                        } else {
+                            Button::Quiet
+                        },
+                    )),
+            );
+        }
+        group.into()
+    }
+
+    pub(super) fn folder_view(&self) -> Element<'_, AppMessage> {
+        let tokens = self.resolved_theme.tokens;
+        let mut content = column![self.unsaved_elsewhere()].spacing(10);
+        let Some(root) = self.folder.root() else {
+            return content
+                .push(
+                    container(
+                        column![
+                            text("Add a place to see its folders and documents here.")
+                                .size(12)
+                                .color(tokens.muted),
+                            self.small_button(
+                                "Add place…",
+                                AppMessage::Folder(Message::Pick),
+                                false
+                            ),
+                        ]
+                        .spacing(10),
+                    )
+                    .padding([0, styles::SIDEBAR_INSET as u16]),
+                )
+                .height(Fill)
+                .into();
+        };
+        let unsaved = self
+            .session
+            .dirty
+            .then_some(&self.session)
+            .into_iter()
+            .chain(self.background.dirty())
+            .filter_map(|session| session.path.clone())
+            .collect();
         content = content.push(
             FileTree::new(
                 &self.folder.visible,
-                self.path.as_deref(),
+                self.session.path.as_deref(),
                 tokens,
                 |action| AppMessage::Folder(Message::Tree(action)),
             )
-            .root(
-                self.folder
-                    .root()
-                    .expect("folder view requires a workspace"),
-            )
+            .root(root)
+            .unsaved(unsaved)
             .highlighted(self.folder.highlighted.as_deref())
             .enabled(!self.busy && self.overlay.is_none()),
         );
-        if self.folder.scanning {
+        // A rescan of a place already on show stays silent.
+        if self.folder.scanning && self.folder.entries.is_empty() {
             content = content.push(text("Finding Markdown files…").size(11).color(tokens.muted));
         }
         if self.folder.root.is_some()
@@ -1144,13 +1309,18 @@ impl App {
                 error,
             }) => {
                 let (title, parent) = match action {
-                    NameAction::Document(parent) => ("New document", parent.as_path()),
-                    NameAction::Directory(parent) => ("New folder", parent.as_path()),
-                    NameAction::Rename(path) => ("Rename", path.parent().unwrap_or(path)),
+                    NameAction::Document(parent) => ("New document", Some(parent.as_path())),
+                    NameAction::Directory(parent) => ("New folder", Some(parent.as_path())),
+                    NameAction::Rename(path) => ("Rename", Some(path.parent().unwrap_or(path))),
+                    NameAction::Draft => ("Name this draft", self.session.folder.as_deref()),
                 };
+                let parent = parent.map_or_else(
+                    || "Saving will ask where to keep it.".into(),
+                    Path::to_string_lossy,
+                );
                 content = content
                     .push(text(title).font(styles::BODY_FONT).size(28))
-                    .push(text(parent.to_string_lossy()).size(12).color(tokens.muted));
+                    .push(text(parent).size(12).color(tokens.muted));
                 let mut input = text_input("Name", value)
                     .id(NAME_INPUT)
                     .style(styles::input(tokens))
@@ -1270,7 +1440,7 @@ impl App {
     }
 
     fn pick_move_destination(&mut self, source: PathBuf) -> Task<AppMessage> {
-        let known = self.path.as_ref() == Some(&source)
+        let known = self.session.path.as_ref() == Some(&source)
             || self
                 .folder
                 .root
@@ -1317,7 +1487,9 @@ impl App {
                         ("New folder…", Message::NewFolder(path.clone())),
                     ]);
                 }
-                if !root {
+                if is_image(path) {
+                    actions.push(("Insert into document", Message::InsertImage(path.clone())));
+                } else if !root {
                     actions.extend([
                         ("Rename", Message::Rename(path.clone())),
                         ("Move to…", Message::MoveTo(path.clone())),
@@ -1327,7 +1499,7 @@ impl App {
                 if root {
                     actions.extend([
                         ("Refresh folder", Message::Refresh),
-                        ("Close folder", Message::Close),
+                        ("Remove from library", Message::Remove),
                     ]);
                 }
                 actions
@@ -1473,6 +1645,19 @@ impl App {
     }
 }
 
+/// A document's name as shown to the writer: without its Markdown extension.
+pub(super) fn title(path: &Path) -> String {
+    let shown = if folder::is_markdown(path) {
+        path.file_stem()
+    } else {
+        path.file_name()
+    };
+    shown.map_or_else(
+        || path.display().to_string(),
+        |shown| shown.to_string_lossy().into_owned(),
+    )
+}
+
 pub(super) fn name(path: &Path) -> String {
     path.file_name().map_or_else(
         || path.display().to_string(),
@@ -1521,8 +1706,8 @@ mod tests {
             Some(PathBuf::from("/writing/note.md")),
             "note.md".into(),
         );
-        app.selection = Selection {
-            anchor: app.document.source().len(),
+        app.session.selection = Selection {
+            anchor: app.session.document.source().len(),
             head: 2,
         };
         app.sync_editor();
@@ -1532,8 +1717,8 @@ mod tests {
     #[test]
     fn workspace_appears_only_after_a_successful_scan_and_reports_failures() {
         let mut app = app();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
         drop(app.update_folder(Message::OpenRoot("/missing".into())));
         assert!(!app.chrome.files.open && app.folder.root.is_none());
         drop(app.update_folder(Message::Scanned {
@@ -1557,8 +1742,8 @@ mod tests {
             }),
         }));
         assert!(app.chrome.files.open && app.folder.root().is_some());
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
     }
 
     #[test]
@@ -1575,7 +1760,7 @@ mod tests {
             }),
         }));
         assert!(app.folder.root.is_none());
-        drop(app.update_folder(Message::Close));
+        drop(app.update_folder(Message::Remove));
         drop(app.update_folder(Message::Scanned {
             generation: 4,
             result: Ok(folder::Snapshot {
@@ -1591,9 +1776,9 @@ mod tests {
     #[test]
     fn folder_scan_and_disclosure_preserve_source_direction_and_history() {
         let mut app = app();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
-        let id = app.document.collaboration().id();
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
+        let id = app.session.document.collaboration().id();
         drop(app.update_folder(Message::Scanned {
             generation: 0,
             result: Ok(folder::Snapshot {
@@ -1615,10 +1800,10 @@ mod tests {
         drop(app.update_folder(Message::Tree(file_tree::Action::Toggle(
             "/writing/empty".into(),
         ))));
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.collaboration().id(), id);
-        assert!(!app.dirty);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(app.session.document.collaboration().id(), id);
+        assert!(!app.session.dirty);
         assert!(
             app.folder
                 .visible
@@ -1631,37 +1816,179 @@ mod tests {
     fn failed_scan_retains_the_previous_folder_and_document() {
         let mut app = app();
         app.folder.root = Some("/writing".into());
-        let selection = app.selection;
+        let selection = app.session.selection;
         drop(app.update_folder(Message::Scanned {
             generation: 0,
             result: Err(FileError::Io("Drive unavailable".into())),
         }));
         assert_eq!(app.folder.root.as_deref(), Some(Path::new("/writing")));
         assert!(app.folder.error.is_some());
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
     }
 
     #[test]
-    fn file_switch_uses_the_unsaved_guard_and_leaves_active_row_until_success() {
+    fn file_switch_loads_without_asking_and_leaves_active_row_until_success() {
         let mut app = app();
-        app.dirty = true;
-        let selection = app.selection;
+        app.session.dirty = true;
+        let selection = app.session.selection;
         drop(app.update_folder(Message::Tree(file_tree::Action::Open(
             "/writing/other.md".into(),
         ))));
-        assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
-        assert_eq!(app.selection, selection);
+        assert!(app.overlay.is_none());
+        assert!(app.loading);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
+        assert_eq!(app.session.selection, selection);
+        assert!(app.session.dirty);
+    }
+
+    #[test]
+    fn rows_show_titles_in_reading_order_and_refocusing_rescans_quietly() {
+        let mut app = app();
+        let entry = |path: &str, is_directory| folder::Entry {
+            path: path.into(),
+            is_directory,
+        };
+        drop(app.update_folder(Message::Scanned {
+            generation: 0,
+            result: Ok(folder::Snapshot {
+                root: "/writing".into(),
+                entries: vec![
+                    entry("/writing/Chapter 10.md", false),
+                    entry("/writing/chapter 2.MARKDOWN", false),
+                    entry("/writing/note.md", false),
+                    entry("/writing/Part 2", true),
+                    entry("/writing/Part 10", true),
+                ],
+                limited: false,
+                warnings: Vec::new(),
+            }),
+        }));
+        let labels: Vec<_> = app
+            .folder
+            .visible
+            .iter()
+            .map(|row| row.label.as_str())
+            .collect();
+        assert_eq!(
+            labels,
+            ["Part 2", "Part 10", "chapter 2", "Chapter 10", "note"]
+        );
+
+        app.overlay = Some(Overlay::Settings);
+        drop(app.update_folder(Message::WindowFocused));
+        assert!(!app.folder.scanning, "nothing open is disturbed");
+        app.overlay = None;
+        drop(app.update_folder(Message::WindowFocused));
+        assert!(app.folder.scanning);
+        assert_eq!(app.folder.visible.len(), 5, "rows stay while rescanning");
+    }
+
+    #[test]
+    fn images_are_shown_and_previewed_but_are_not_documents_and_do_not_move() {
+        let mut app = app();
+        let entry = |path: &str, is_directory| folder::Entry {
+            path: path.into(),
+            is_directory,
+        };
+        drop(app.update_folder(Message::Scanned {
+            generation: 0,
+            result: Ok(folder::Snapshot {
+                root: "/writing".into(),
+                entries: vec![
+                    entry("/writing/note.md", false),
+                    entry("/writing/cover.png", false),
+                    entry("/writing/images", true),
+                ],
+                limited: false,
+                warnings: Vec::new(),
+            }),
+        }));
+        let cover = PathBuf::from("/writing/cover.png");
+        let labels: Vec<_> = app
+            .folder
+            .visible
+            .iter()
+            .map(|row| row.label.as_str())
+            .collect();
+        assert_eq!(labels, ["images", "cover.png", "note"]);
+        assert_eq!(
+            app.folder.files().collect::<Vec<_>>(),
+            [Path::new("/writing/note.md")]
+        );
+        assert!(!app.folder.has_file(&cover));
+
+        for message in [
+            Message::Rename(cover.clone()),
+            Message::MoveTo(cover.clone()),
+            Message::Tree(file_tree::Action::Move {
+                source: cover.clone(),
+                destination: "/writing/images".into(),
+            }),
+        ] {
+            app.notification = None;
+            drop(app.update_folder(message));
+            assert!(app.notification.as_deref().unwrap().contains("Images stay"));
+            assert!(!app.busy && app.folder.dialog.is_none());
+        }
+
+        let source = app.session.document.source().to_owned();
+        drop(app.update_folder(Message::Tree(file_tree::Action::Open(cover.clone()))));
+        assert_eq!(app.overlay, Some(Overlay::Image));
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md")),
+            "previewing is not opening"
+        );
+        drop(app.update_message(AppMessage::CloseOverlay));
+
+        app.session.selection = Selection::caret(0);
+        drop(app.update_folder(Message::InsertImage(cover)));
+        assert!(
+            app.session
+                .document
+                .source()
+                .starts_with("![cover](<cover.png>)")
+        );
+    }
+
+    #[test]
+    fn a_file_with_unsaved_background_writing_cannot_be_moved_from_under_it() {
+        let mut app = app();
+        app.folder.root = Some("/".into());
+        app.session.dirty = true;
+        app.set_document(
+            "Elsewhere".into(),
+            Some("/elsewhere/other.md".into()),
+            "other.md".into(),
+        );
+        // The file itself, and a folder that contains it.
+        for source in ["/writing/note.md", "/writing"] {
+            app.notification = None;
+            drop(app.update_folder(Message::Tree(file_tree::Action::Move {
+                source: source.into(),
+                destination: "/drafts".into(),
+            })));
+            assert!(app.notification.as_deref().unwrap().contains("note.md"));
+            assert!(!app.busy && app.folder.inflight.is_none());
+        }
+        assert_eq!(
+            app.background.dirty().next().unwrap().path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
     }
 
     #[test]
     fn active_path_remap_keeps_unsaved_source_selection_and_undo_session() {
         let mut app = app();
-        let id = app.document.collaboration().id();
-        let replica = app.document.collaboration().replica_id();
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
-        app.dirty = true;
+        let id = app.session.document.collaboration().id();
+        let replica = app.session.document.collaboration().replica_id();
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
+        app.session.dirty = true;
         app.folder.root = Some("/writing".into());
         app.folder.next_operation = 1;
         app.folder.inflight = Some(InFlight {
@@ -1683,13 +2010,13 @@ mod tests {
             })),
         }));
         assert_eq!(
-            app.path.as_deref(),
+            app.session.path.as_deref(),
             Some(Path::new("/writing/drafts/note.md"))
         );
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.collaboration().replica_id(), replica);
-        assert!(app.dirty);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(app.session.document.collaboration().replica_id(), replica);
+        assert!(app.session.dirty);
         assert!(!app.busy);
         assert!(!app.loading);
         assert!(app.folder.can_undo());
@@ -1702,8 +2029,8 @@ mod tests {
         app.folder.navigation = 9;
         app.folder.generation = 4;
         app.folder.picker = true;
-        let source = app.document.source().to_owned();
-        let selection = app.selection;
+        let source = app.session.document.source().to_owned();
+        let selection = app.session.selection;
         drop(app.update_folder(Message::Tree(file_tree::Action::Move {
             source: "/writing/note.md".into(),
             destination: "/writing/drafts".into(),
@@ -1735,9 +2062,12 @@ mod tests {
             result: Err(FileError::Io("Destination already exists".into())),
         }));
         assert!(!app.busy && !app.loading);
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
         assert!(app.folder.highlighted.is_none());
         assert!(!app.folder.can_undo());
     }
@@ -1747,8 +2077,8 @@ mod tests {
         let mut app = app();
         app.chrome.sidebars_hidden = true;
         app.chrome.files.open = false;
-        let selection = app.selection;
-        let source = app.document.source().to_owned();
+        let selection = app.session.selection;
+        let source = app.session.document.source().to_owned();
         drop(app.update_folder(Message::Rename("/writing/note.md".into())));
         assert!(matches!(app.overlay, Some(Overlay::Folder)));
         assert!(app.chrome.sidebars_hidden && !app.chrome.files.open);
@@ -1763,9 +2093,12 @@ mod tests {
         drop(app.update_folder(Message::Accept));
         assert!(app.busy && app.loading);
         assert!(app.chrome.sidebars_hidden && !app.chrome.files.open);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
     }
 
     #[test]
@@ -1788,7 +2121,7 @@ mod tests {
                 is_directory: true,
             },
         ];
-        let selection = app.selection;
+        let selection = app.session.selection;
         drop(app.update_folder(Message::MoveTo("/writing/note.md".into())));
         assert_eq!(app.folder.selected, 0);
         drop(app.update_folder(Message::Key {
@@ -1812,7 +2145,7 @@ mod tests {
         assert!(app.folder.dialog.is_none());
         assert!(!app.busy);
         assert!(app.chrome.sidebars_hidden && !app.chrome.files.open);
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.session.selection, selection);
     }
 
     #[test]
@@ -1841,7 +2174,10 @@ mod tests {
         }));
         assert!(!app.busy);
         assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
-        assert_eq!(app.path.as_deref(), Some(Path::new("/writing/note.md")));
+        assert_eq!(
+            app.session.path.as_deref(),
+            Some(Path::new("/writing/note.md"))
+        );
     }
 
     #[test]
@@ -1863,11 +2199,11 @@ mod tests {
             })),
         }));
         assert_eq!(
-            app.path.as_deref(),
+            app.session.path.as_deref(),
             Some(Path::new("/other/replacement.md"))
         );
-        assert_eq!(app.document.source(), "Replacement");
-        assert_eq!(app.display_name, "replacement.md");
+        assert_eq!(app.session.document.source(), "Replacement");
+        assert_eq!(app.session.display_name, "replacement.md");
         assert!(!app.busy && !app.loading);
     }
 

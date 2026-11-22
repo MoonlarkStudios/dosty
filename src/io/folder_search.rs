@@ -1,5 +1,6 @@
 //! Bounded content search over a workspace's known Markdown paths.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::ops::Range;
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::storage::{self, FileError, LoadedFile, MAX_FILE_BYTES};
 
-const MAX_FILES: usize = 4_096;
+pub(crate) const MAX_FILES: usize = 4_096;
 const MAX_SEARCH_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_MATCHES: usize = 100;
 const EXCERPT_BEFORE: usize = 24;
@@ -62,7 +63,8 @@ pub struct Report {
 pub(crate) struct Request {
     pub root: PathBuf,
     pub paths: Vec<PathBuf>,
-    pub active_source: Option<(PathBuf, String)>,
+    /// A path with no snapshot was open but outside the memory budget.
+    pub open_sources: HashMap<PathBuf, Option<String>>,
     pub query: String,
     pub incomplete_snapshot: bool,
 }
@@ -96,13 +98,14 @@ fn search_blocking(request: Request, cancelled: &AtomicBool) -> Report {
         }
         let read_limit = remaining.min(MAX_FILE_BYTES);
         let disk_source;
-        let source = if let Some((active_path, source)) = &request.active_source
-            && *active_path == path
-        {
-            if source.len() as u64 > read_limit {
+        let source = if let Some(snapshot) = request.open_sources.get(&path) {
+            let Some(source) = snapshot
+                .as_ref()
+                .filter(|source| source.len() as u64 <= read_limit)
+            else {
                 report.limited = true;
                 continue;
-            }
+            };
             remaining -= source.len() as u64;
             source
         } else {
@@ -273,7 +276,7 @@ mod tests {
             Request {
                 root: root.clone(),
                 paths: vec![active.clone(), other.clone()],
-                active_source: Some((active, "match in unsaved text".into())),
+                open_sources: HashMap::from([(active, Some("match in unsaved text".into()))]),
                 query: "match".into(),
                 incomplete_snapshot: false,
             },
@@ -302,7 +305,7 @@ mod tests {
             Request {
                 paths: vec![root.join("Child/Notes.md")],
                 root,
-                active_source: None,
+                open_sources: HashMap::new(),
                 query: "secret".into(),
                 incomplete_snapshot: false,
             },
