@@ -115,8 +115,8 @@ fn batched_copy_move_and_paste_read_the_new_clipboard_at_the_new_cell() {
     );
     synced(&h.app);
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
     synced(&h.app);
 }
 
@@ -143,11 +143,11 @@ fn batched_select_all_and_copy_or_cut_use_the_new_table_selection() {
             );
             synced(&h.app);
             command(&mut h, "z");
-            assert_eq!(h.app.document.source(), SOURCE);
+            assert_eq!(h.app.session.document.source(), SOURCE);
         } else {
-            assert_eq!(h.app.document.source(), SOURCE);
+            assert_eq!(h.app.session.document.source(), SOURCE);
         }
-        assert!(!h.app.document.can_undo());
+        assert!(!h.app.session.document.can_undo());
         synced(&h.app);
     }
 }
@@ -196,9 +196,9 @@ fn native_paste_delivery_preserves_captured_sheets_values_and_standard_export() 
         assert_eq!((after.anchor, after.head), ((1, 0), (5, 3)));
         synced(&h.app);
         command(&mut h, "z");
-        assert_eq!(h.app.document.source(), source);
+        assert_eq!(h.app.session.document.source(), source);
         assert_eq!(h.app.grid_view(), Some(before));
-        assert!(!h.app.document.can_undo());
+        assert!(!h.app.session.document.can_undo());
         synced(&h.app);
     }
 }
@@ -229,9 +229,9 @@ fn native_sheets_single_column_delivery_keeps_the_final_empty_row() {
         assert_eq!(after.active, (1, 0));
         synced(&h.app);
         command(&mut h, "z");
-        assert_eq!(h.app.document.source(), source);
+        assert_eq!(h.app.session.document.source(), source);
         assert_eq!(h.app.grid_view(), Some(before));
-        assert!(!h.app.document.can_undo());
+        assert!(!h.app.session.document.can_undo());
         synced(&h.app);
     }
 }
@@ -259,9 +259,9 @@ fn native_sheets_decoded_values_preserve_quotes_across_adjacent_cells() {
     assert_eq!(after.active, (1, 0));
     synced(&h.app);
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
+    assert_eq!(h.app.session.document.source(), source);
     assert_eq!(h.app.grid_view(), Some(before));
-    assert!(!h.app.document.can_undo());
+    assert!(!h.app.session.document.can_undo());
     synced(&h.app);
 }
 
@@ -295,13 +295,19 @@ fn native_excel_cells_preserve_displayed_values_growth_and_source_undo() {
         },
     );
     assert_eq!(rectangle(&h, (0, 0), 2, 4), expected);
-    assert!(h.app.document.source().starts_with("Before\n\n"));
-    assert!(h.app.document.source().ends_with("\n\nTAIL_LITERAL"));
+    assert!(h.app.session.document.source().starts_with("Before\n\n"));
+    assert!(
+        h.app
+            .session
+            .document
+            .source()
+            .ends_with("\n\nTAIL_LITERAL")
+    );
     synced(&h.app);
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
+    assert_eq!(h.app.session.document.source(), source);
     assert_eq!(h.app.grid_view(), Some(before));
-    assert!(!h.app.document.can_undo());
+    assert!(!h.app.session.document.can_undo());
     synced(&h.app);
 }
 
@@ -333,9 +339,9 @@ fn verified_empty_native_cells_clear_only_their_footprint_and_undo() {
         }
         synced(&h.app);
         command(&mut h, "z");
-        assert_eq!(h.app.document.source(), source);
+        assert_eq!(h.app.session.document.source(), source);
         assert_eq!(h.app.grid_view(), Some(before));
-        assert!(!h.app.document.can_undo());
+        assert!(!h.app.session.document.can_undo());
     }
 }
 
@@ -365,9 +371,9 @@ fn unavailable_nonempty_or_stale_empty_clipboards_cannot_clear_cells() {
                 result,
             },
         );
-        assert_eq!(h.app.document.source(), SOURCE);
+        assert_eq!(h.app.session.document.source(), SOURCE);
         assert_eq!(h.app.grid_view(), Some(view));
-        assert!(!h.app.document.can_undo());
+        assert!(!h.app.session.document.can_undo());
     }
     let mut h = Harness::new(SOURCE);
     h.focus_cell(0, 0, 0);
@@ -385,8 +391,8 @@ fn unavailable_nonempty_or_stale_empty_clipboards_cannot_clear_cells() {
             })),
         },
     );
-    assert_eq!(h.app.document.source(), SOURCE);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), SOURCE);
+    assert!(!h.app.session.document.can_undo());
 }
 
 #[test]
@@ -399,6 +405,7 @@ fn native_paste_and_cut_deliveries_reject_stale_revisions_and_selections() {
             let view = h.app.grid_view().unwrap();
             if source_changed {
                 h.app
+                    .session
                     .document
                     .transact(
                         &[SourceEdit {
@@ -416,10 +423,10 @@ fn native_paste_and_cut_deliveries_reject_stale_revisions_and_selections() {
                 h.focus_cell(0, 2, 2);
                 assert!(Arc::ptr_eq(&revision, &h.app.projection.source_id));
             }
-            let source = h.app.document.source().to_owned();
+            let source = h.app.session.document.source().to_owned();
             let current = h.app.grid_view();
-            let selection = h.app.selection;
-            let can_undo = h.app.document.can_undo();
+            let selection = h.app.session.selection;
+            let can_undo = h.app.session.document.can_undo();
             let message = if cut {
                 Message::CopyReady {
                     revision,
@@ -437,10 +444,10 @@ fn native_paste_and_cut_deliveries_reject_stale_revisions_and_selections() {
                 }
             };
             deliver(&mut h, message);
-            assert_eq!(h.app.document.source(), source);
+            assert_eq!(h.app.session.document.source(), source);
             assert_eq!(h.app.grid_view(), current);
-            assert_eq!(h.app.selection, selection);
-            assert_eq!(h.app.document.can_undo(), can_undo);
+            assert_eq!(h.app.session.selection, selection);
+            assert_eq!(h.app.session.document.can_undo(), can_undo);
             assert!(h.app.notification.is_some());
             synced(&h.app);
         }
@@ -453,7 +460,7 @@ fn failed_native_cut_delivery_preserves_the_source_selection_and_history() {
     range(&mut h, (3, 1), (1, 1));
     let revision = Arc::clone(&h.app.projection.source_id);
     let view = h.app.grid_view().unwrap();
-    let selection = h.app.selection;
+    let selection = h.app.session.selection;
     deliver(
         &mut h,
         Message::CopyReady {
@@ -463,10 +470,10 @@ fn failed_native_cut_delivery_preserves_the_source_selection_and_history() {
             result: Err("Clipboard verification failed".into()),
         },
     );
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
     assert_eq!(h.app.grid_view(), Some(view));
-    assert_eq!(h.app.selection, selection);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.selection, selection);
+    assert!(!h.app.session.document.can_undo());
     assert_eq!(
         h.app.notification.as_deref(),
         Some("Clipboard verification failed")
@@ -485,17 +492,17 @@ fn real_widget_copy_and_paste_round_trip_visible_quoted_values_and_empty_edges()
     let mut from = Harness::new(source);
     range(&mut from, (3, 2), (1, 0));
     let grid = from.app.grid_view();
-    let selection = from.app.selection;
+    let selection = from.app.session.selection;
     command(&mut from, "c");
     let copied = from.clipboard.standard.as_deref().unwrap();
     assert_eq!(
         copied,
         "\"tab\tinside\"\t\"first\nsecond\"\t\"\"\"quoted\"\"\"\r\ncafé 🧑‍💻\t*literal*\t\r\n\t\t"
     );
-    assert_eq!(from.app.document.source(), source);
+    assert_eq!(from.app.session.document.source(), source);
     assert_eq!(from.app.grid_view(), grid);
-    assert_eq!(from.app.selection, selection);
-    assert!(!from.app.document.can_undo());
+    assert_eq!(from.app.session.selection, selection);
+    assert!(!from.app.session.document.can_undo());
 
     let destination = "Before\n\n| Header |\n|---|\n| original |\n\nAfter\n";
     let mut to = Harness::new(destination);
@@ -508,8 +515,8 @@ fn real_widget_copy_and_paste_round_trip_visible_quoted_values_and_empty_edges()
     assert_eq!((pasted.anchor, pasted.head), ((1, 0), (3, 2)));
     synced(&to.app);
     command(&mut to, "z");
-    assert_eq!(to.app.document.source(), destination);
-    assert!(!to.app.document.can_undo());
+    assert_eq!(to.app.session.document.source(), destination);
+    assert!(!to.app.session.document.can_undo());
     synced(&to.app);
 }
 
@@ -519,6 +526,7 @@ fn real_widget_paste_grows_both_axes_without_wrapping_and_is_one_source_undo() {
     let mut h = Harness::new(source);
     let keep = h
         .app
+        .session
         .document
         .collaboration()
         .position(source.find("keep").unwrap(), Assoc::After);
@@ -536,14 +544,20 @@ fn real_widget_paste_grows_both_axes_without_wrapping_and_is_one_source_undo() {
     let view = h.app.grid_view().unwrap();
     assert_eq!((view.anchor, view.head), ((1, 1), (2, 3)));
     assert_eq!(view.active, (1, 1));
-    assert!(h.app.document.source().starts_with("Before\n\n"));
-    assert!(h.app.document.source().ends_with("\n\nAfter\n"));
-    let keep = h.app.document.collaboration().resolve(&keep).unwrap();
-    assert!(h.app.document.source()[keep..].starts_with("keep"));
+    assert!(h.app.session.document.source().starts_with("Before\n\n"));
+    assert!(h.app.session.document.source().ends_with("\n\nAfter\n"));
+    let keep = h
+        .app
+        .session
+        .document
+        .collaboration()
+        .resolve(&keep)
+        .unwrap();
+    assert!(h.app.session.document.source()[keep..].starts_with("keep"));
     synced(&h.app);
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
     h.key(
         Key::Character("z".into()),
         Modifiers::COMMAND | Modifiers::SHIFT,
@@ -565,22 +579,22 @@ fn real_widget_paste_undo_and_redo_restore_the_single_cell_and_rectangle() {
         h.clipboard.standard = Some("one\ttwo\r\nthree\tfour".into());
         command(&mut h, "v");
         let after = h.app.grid_view();
-        let pasted = h.app.document.source().to_owned();
+        let pasted = h.app.session.document.source().to_owned();
         let rectangle = after.unwrap();
         assert_eq!((rectangle.anchor, rectangle.head), ((1, 1), (2, 2)));
         assert_eq!(rectangle.active, (1, 1));
 
         command(&mut h, "z");
-        assert_eq!(h.app.document.source(), source);
+        assert_eq!(h.app.session.document.source(), source);
         assert_eq!(h.app.grid_view(), before);
-        assert!(!h.app.document.can_undo());
+        assert!(!h.app.session.document.can_undo());
         synced(&h.app);
         h.key(
             Key::Character("z".into()),
             Modifiers::COMMAND | Modifiers::SHIFT,
             None,
         );
-        assert_eq!(h.app.document.source(), pasted);
+        assert_eq!(h.app.session.document.source(), pasted);
         assert_eq!(h.app.grid_view(), after);
         synced(&h.app);
     }
@@ -599,19 +613,19 @@ fn real_widget_reverse_range_paste_history_retains_direction_and_tabbed_active_c
     assert_ne!(before.active, before.head);
     h.clipboard.standard = Some("one\r\ntwo".into());
     command(&mut h, "v");
-    let pasted = h.app.document.source().to_owned();
+    let pasted = h.app.session.document.source().to_owned();
     assert_eq!(h.app.grid_view(), Some(before));
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
+    assert_eq!(h.app.session.document.source(), source);
     assert_eq!(h.app.grid_view(), Some(before));
-    assert!(!h.app.document.can_undo());
+    assert!(!h.app.session.document.can_undo());
     synced(&h.app);
     h.key(
         Key::Character("z".into()),
         Modifiers::COMMAND | Modifiers::SHIFT,
         None,
     );
-    assert_eq!(h.app.document.source(), pasted);
+    assert_eq!(h.app.session.document.source(), pasted);
     assert_eq!(h.app.grid_view(), Some(before));
     synced(&h.app);
 }
@@ -625,24 +639,24 @@ fn real_widget_paste_history_survives_a_later_cell_edit_and_its_undo() {
     h.clipboard.standard = Some("one\ttwo\r\nthree\tfour".into());
     command(&mut h, "v");
     let after = h.app.grid_view();
-    let pasted = h.app.document.source().to_owned();
+    let pasted = h.app.session.document.source().to_owned();
     h.key(Key::Character("X".into()), Modifiers::empty(), Some("X"));
     h.key(Key::Named(Named::Enter), Modifiers::empty(), None);
     assert_eq!(value(&h.app, 1, 1), "X");
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), pasted);
-    assert!(h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), pasted);
+    assert!(h.app.session.document.can_undo());
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
+    assert_eq!(h.app.session.document.source(), source);
     assert_eq!(h.app.grid_view(), before);
-    assert!(!h.app.document.can_undo());
+    assert!(!h.app.session.document.can_undo());
     synced(&h.app);
     h.key(
         Key::Character("z".into()),
         Modifiers::COMMAND | Modifiers::SHIFT,
         None,
     );
-    assert_eq!(h.app.document.source(), pasted);
+    assert_eq!(h.app.session.document.source(), pasted);
     assert_eq!(h.app.grid_view(), after);
     synced(&h.app);
 }
@@ -662,8 +676,8 @@ fn real_widget_range_paste_fills_tiles_and_rejects_incompatible_shapes_atomicall
         assert_eq!(value(&h.app, row, 0), format!("keep{row}"));
     }
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
 
     range(&mut h, (4, 2), (1, 1));
     h.clipboard.standard = Some("x\r\ny\r\n".into());
@@ -679,18 +693,18 @@ fn real_widget_range_paste_fills_tiles_and_rejects_incompatible_shapes_atomicall
     );
     synced(&h.app);
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), source);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), source);
+    assert!(!h.app.session.document.can_undo());
 
     range(&mut h, (2, 2), (1, 1));
     let grid = h.app.grid_view();
-    let selection = h.app.selection;
+    let selection = h.app.session.selection;
     h.clipboard.standard = Some("one\ttwo\tthree".into());
     command(&mut h, "v");
-    assert_eq!(h.app.document.source(), source);
+    assert_eq!(h.app.session.document.source(), source);
     assert_eq!(h.app.grid_view(), grid);
-    assert_eq!(h.app.selection, selection);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.selection, selection);
+    assert!(!h.app.session.document.can_undo());
     assert!(h.app.notification.is_some());
     synced(&h.app);
 }
@@ -702,14 +716,14 @@ fn no_op_range_paste_preserves_reverse_selection_formatting_and_history() {
     range(&mut h, (3, 2), (1, 1));
     let revision = Arc::clone(&h.app.projection.source_id);
     let grid = h.app.grid_view();
-    let selection = h.app.selection;
+    let selection = h.app.session.selection;
     h.clipboard.standard = Some("old".into());
     command(&mut h, "v");
-    assert_eq!(h.app.document.source(), source);
+    assert_eq!(h.app.session.document.source(), source);
     assert_eq!(h.app.grid_view(), grid);
-    assert_eq!(h.app.selection, selection);
+    assert_eq!(h.app.session.selection, selection);
     assert!(Arc::ptr_eq(&revision, &h.app.projection.source_id));
-    assert!(!h.app.document.can_undo());
+    assert!(!h.app.session.document.can_undo());
     synced(&h.app);
 }
 
@@ -739,31 +753,35 @@ fn real_widget_paste_preserves_literal_values_source_endings_and_container_prefi
             assert_eq!(value(&h.app, 1, 0), "keep");
             assert!(
                 h.app
+                    .session
                     .document
                     .source()
                     .starts_with(&format!("Before{ending}{ending}"))
             );
             assert!(
                 h.app
+                    .session
                     .document
                     .source()
                     .ends_with(&format!("{ending}{ending}After{ending}"))
             );
             let table = &h.app.projection.rich.tables[0];
-            let line_start = h.app.document.source()[..table.source_range.start]
+            let line_start = h.app.session.document.source()[..table.source_range.start]
                 .rfind(['\r', '\n'])
                 .map_or(0, |point| point + 1);
-            for line in h.app.document.source()[line_start..table.source_range.end].split(ending) {
+            for line in
+                h.app.session.document.source()[line_start..table.source_range.end].split(ending)
+            {
                 if !line.is_empty() {
                     assert!(line.starts_with(prefix), "{ending:?}, {prefix:?}: {line:?}");
                 }
             }
-            let without_endings = h.app.document.source().replace(ending, "");
+            let without_endings = h.app.session.document.source().replace(ending, "");
             assert!(!without_endings.contains(['\r', '\n']));
             synced(&h.app);
             command(&mut h, "z");
-            assert_eq!(h.app.document.source(), source);
-            assert!(!h.app.document.can_undo());
+            assert_eq!(h.app.session.document.source(), source);
+            assert!(!h.app.session.document.can_undo());
             synced(&h.app);
         }
     }
@@ -774,21 +792,21 @@ fn real_widget_cut_only_clears_after_a_verified_clipboard_write() {
     let mut h = Harness::new(SOURCE);
     range(&mut h, (3, 1), (1, 1));
     let grid = h.app.grid_view();
-    let selection = h.app.selection;
+    let selection = h.app.session.selection;
     h.clipboard.standard = Some("previous clipboard".into());
     h.clipboard.refuse_writes = true;
     command(&mut h, "x");
     assert_eq!(h.clipboard.standard.as_deref(), Some("previous clipboard"));
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
     assert_eq!(h.app.grid_view(), grid);
-    assert_eq!(h.app.selection, selection);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.selection, selection);
+    assert!(!h.app.session.document.can_undo());
     assert!(h.app.notification.is_some());
 
     h.clipboard.refuse_writes = false;
     command(&mut h, "c");
     assert!(h.app.notification.is_none());
-    assert_eq!(h.app.document.source(), SOURCE);
+    assert_eq!(h.app.session.document.source(), SOURCE);
     command(&mut h, "x");
     assert!(h.app.notification.is_none());
     assert_eq!(h.clipboard.standard.as_deref(), Some("Maya\r\nNoah\r\nAri"));
@@ -797,8 +815,8 @@ fn real_widget_cut_only_clears_after_a_verified_clipboard_write() {
     assert_eq!(value(&h.app, 3, 2), "Planned");
     synced(&h.app);
     command(&mut h, "z");
-    assert_eq!(h.app.document.source(), SOURCE);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), SOURCE);
+    assert!(!h.app.session.document.can_undo());
     synced(&h.app);
 }
 
@@ -811,6 +829,7 @@ fn delayed_cut_rejects_stale_source_revisions_and_changed_selections() {
         let view = h.app.grid_view().unwrap();
         if source_changed {
             h.app
+                .session
                 .document
                 .transact(
                     &[SourceEdit {
@@ -828,15 +847,15 @@ fn delayed_cut_rejects_stale_source_revisions_and_changed_selections() {
             h.focus_cell(0, 2, 2);
             assert!(Arc::ptr_eq(&revision, &h.app.projection.source_id));
         }
-        let source = h.app.document.source().to_owned();
+        let source = h.app.session.document.source().to_owned();
         let current = h.app.grid_view();
-        let selection = h.app.selection;
-        let can_undo = h.app.document.can_undo();
+        let selection = h.app.session.selection;
+        let can_undo = h.app.session.document.can_undo();
         send(&mut h.app, Message::Cut { revision, view });
-        assert_eq!(h.app.document.source(), source);
+        assert_eq!(h.app.session.document.source(), source);
         assert_eq!(h.app.grid_view(), current);
-        assert_eq!(h.app.selection, selection);
-        assert_eq!(h.app.document.can_undo(), can_undo);
+        assert_eq!(h.app.session.selection, selection);
+        assert_eq!(h.app.session.document.can_undo(), can_undo);
         assert!(h.app.notification.is_some());
         synced(&h.app);
     }
@@ -853,12 +872,12 @@ fn real_widget_pending_draft_paste_stays_literal_and_uses_local_undo() {
         h.app.grid.draft.as_ref().unwrap().buffer.snapshot(),
         "Mayaone\ttwo\nthree\tfour"
     );
-    assert_eq!(h.app.document.source(), SOURCE);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), SOURCE);
+    assert!(!h.app.session.document.can_undo());
     command(&mut h, "z");
     assert_eq!(h.app.grid.draft.as_ref().unwrap().buffer.snapshot(), "Maya");
-    assert_eq!(h.app.document.source(), SOURCE);
-    assert!(!h.app.document.can_undo());
+    assert_eq!(h.app.session.document.source(), SOURCE);
+    assert!(!h.app.session.document.can_undo());
 }
 
 #[test]
@@ -891,8 +910,8 @@ fn bulk_widget_paste_measurements() {
             assert_eq!((view.anchor, view.head), ((1, 0), (rows, 2)));
             synced(&h.app);
             command(&mut h, "z");
-            assert_eq!(h.app.document.source(), source);
-            assert!(!h.app.document.can_undo());
+            assert_eq!(h.app.session.document.source(), source);
+            assert!(!h.app.session.document.can_undo());
             synced(&h.app);
         }
         samples.sort();

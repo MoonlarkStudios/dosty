@@ -17,19 +17,19 @@ fn app(source: &str) -> App {
 fn send(app: &mut App, message: AppMessage) {
     drop(app.update_message(message));
     assert_eq!(
-        app.document.source(),
-        app.document.collaboration().materialize()
+        app.session.document.source(),
+        app.session.document.collaboration().materialize()
     );
     let fresh = Projection::with_context(
-        app.document.source(),
-        (app.mode == EditorMode::Live && app.editor_focused).then_some(app.selection.head),
+        app.session.document.source(),
+        (app.mode == EditorMode::Live && app.editor_focused).then_some(app.session.selection.head),
     );
     assert_eq!(app.projection.text, fresh.text);
     assert_eq!(app.projection.rich, fresh.rich);
     assert_eq!(
         app.editor.snapshot(),
         if app.mode == EditorMode::Source {
-            app.document.source()
+            app.session.document.source()
         } else {
             &app.projection.text
         }
@@ -50,7 +50,7 @@ fn outline_moves_are_atomic_in_live_source_and_read_and_keep_fold_identity() {
             anchor: source.find("body").unwrap() + 4,
             head: source.find("🦀").unwrap(),
         };
-        app.selection = before;
+        app.session.selection = before;
         app.sync_editor();
         command(&mut app, Message::Toggle(0));
         assert_eq!(app.outline.visible(), vec![0, 2]);
@@ -63,23 +63,26 @@ fn outline_moves_are_atomic_in_live_source_and_read_and_keep_fold_identity() {
             }),
         );
         assert_eq!(
-            app.document.source(),
+            app.session.document.source(),
             "# B\n\nlast\n\n# A\n\n## Child\n\n🦀 body\n\n"
         );
-        assert!(app.selection.anchor > app.selection.head);
-        assert_eq!(&app.document.source()[app.selection.range()], "🦀 body");
+        assert!(app.session.selection.anchor > app.session.selection.head);
+        assert_eq!(
+            &app.session.document.source()[app.session.selection.range()],
+            "🦀 body"
+        );
         assert_eq!(app.outline.visible(), vec![0, 1]);
-        let after = app.selection;
+        let after = app.session.selection;
         send(&mut app, AppMessage::Undo);
-        assert_eq!(app.document.source(), source);
-        assert_eq!(app.selection, before);
+        assert_eq!(app.session.document.source(), source);
+        assert_eq!(app.session.selection, before);
         assert_eq!(app.outline.visible(), vec![0, 2]);
         send(&mut app, AppMessage::Redo);
-        assert_eq!(app.selection, after);
+        assert_eq!(app.session.selection, after);
         assert_eq!(app.outline.visible(), vec![0, 1]);
         command(&mut app, Message::Toggle(1));
         assert_eq!(app.outline.visible(), vec![0, 1, 2]);
-        assert!(app.dirty);
+        assert!(app.session.dirty);
     }
 }
 
@@ -87,7 +90,7 @@ fn outline_moves_are_atomic_in_live_source_and_read_and_keep_fold_identity() {
 fn outline_keyboard_moves_are_separate_from_typing_and_restore_selection() {
     let source = "# A\n\nfirst\n\n# B\n\nsecond\n\n# C\n\nthird\n\n";
     let mut app = app(source);
-    app.selection = Selection::caret(source.find("second").unwrap());
+    app.session.selection = Selection::caret(source.find("second").unwrap());
     app.sync_editor();
     send(
         &mut app,
@@ -95,21 +98,21 @@ fn outline_keyboard_moves_are_separate_from_typing_and_restore_selection() {
             iced::widget::text_editor::Edit::Insert('X'),
         )),
     );
-    let typed = app.document.source().to_owned();
-    let before = app.selection;
+    let typed = app.session.document.source().to_owned();
+    let before = app.session.selection;
     command(&mut app, Message::Move(-1));
-    assert!(app.document.source().starts_with("# B\n\nXsecond"));
-    let moved = app.document.source().to_owned();
+    assert!(app.session.document.source().starts_with("# B\n\nXsecond"));
+    let moved = app.session.document.source().to_owned();
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), typed);
-    assert_eq!(app.selection, before);
+    assert_eq!(app.session.document.source(), typed);
+    assert_eq!(app.session.selection, before);
     send(&mut app, AppMessage::Undo);
-    assert_eq!(app.document.source(), source);
+    assert_eq!(app.session.document.source(), source);
     send(&mut app, AppMessage::Redo);
     send(&mut app, AppMessage::Redo);
-    assert_eq!(app.document.source(), moved);
+    assert_eq!(app.session.document.source(), moved);
     command(&mut app, Message::Move(1));
-    assert_eq!(app.document.source(), typed);
+    assert_eq!(app.session.document.source(), typed);
 }
 
 #[test]
@@ -117,14 +120,17 @@ fn outline_search_includes_folded_duplicate_headings_and_parent_context() {
     let source = include_str!("../../tests/fixtures/outline.md");
     let mut app = app(source);
     command(&mut app, Message::FoldAll(true));
-    let original_selection = app.selection;
+    let original_selection = app.session.selection;
     command(&mut app, Message::Filter);
     command(&mut app, Message::Query("REPEATED".into()));
     assert_eq!(app.outline.results, vec![1, 2, 5]);
     command(&mut app, Message::Step(1));
     command(&mut app, Message::Step(1));
     command(&mut app, Message::Accept);
-    assert_eq!(app.selection.head, source.rfind("## Repeated").unwrap());
+    assert_eq!(
+        app.session.selection.head,
+        source.rfind("## Repeated").unwrap()
+    );
     assert!(app.overlay.is_none());
     assert!(!app.outline.folded[4]);
     command(&mut app, Message::Filter);
@@ -135,10 +141,10 @@ fn outline_search_includes_folded_duplicate_headings_and_parent_context() {
     assert!(app.outline.filter_open && app.overlay.is_none());
     command(&mut app, Message::CancelFilter);
     assert!(app.overlay.is_none());
-    assert_ne!(app.selection, original_selection);
-    assert_eq!(app.document.source(), source);
-    assert!(!app.dirty);
-    assert!(!app.document.can_undo());
+    assert_ne!(app.session.selection, original_selection);
+    assert_eq!(app.session.document.source(), source);
+    assert!(!app.session.dirty);
+    assert!(!app.session.document.can_undo());
 }
 
 #[test]
@@ -151,9 +157,9 @@ fn inline_filter_preserves_reverse_selection_folds_and_history() {
             anchor: source.find("🦀").unwrap() + "🦀".len(),
             head: source.find("café").unwrap(),
         };
-        app.selection = selection;
+        app.session.selection = selection;
         app.sync_editor();
-        let generation = app.document.collaboration().generation();
+        let generation = app.session.document.collaboration().generation();
         command(&mut app, Message::FoldAll(true));
         assert_eq!(app.outline.visible(), vec![0, 2]);
         app.chrome.outline.open = false;
@@ -164,16 +170,19 @@ fn inline_filter_preserves_reverse_selection_folds_and_history() {
         assert!(!app.chrome.sidebars_hidden && app.overlay.is_none());
         assert_eq!(app.outline.results, vec![1]);
         assert_eq!(app.outline.visible(), vec![0, 1]);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.collaboration().generation(), generation);
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(
+            app.session.document.collaboration().generation(),
+            generation
+        );
         command(&mut app, Message::Query("absent".into()));
         assert!(app.outline.visible().is_empty());
         command(&mut app, Message::CancelFilter);
         assert!(!app.outline.filter_open);
         assert_eq!(app.outline.visible(), vec![0, 2]);
-        assert_eq!(app.selection, selection);
-        assert_eq!(app.document.source(), source);
-        assert!(!app.dirty && !app.document.can_undo());
+        assert_eq!(app.session.selection, selection);
+        assert_eq!(app.session.document.source(), source);
+        assert!(!app.session.dirty && !app.session.document.can_undo());
     }
 }
 
@@ -223,7 +232,7 @@ fn outline_fold_anchors_survive_remote_prefix_and_undo_but_not_deleted_headings(
     let mut app = app(source);
     command(&mut app, Message::Toggle(0));
     command(&mut app, Message::BeginDrag(0));
-    let mut peer = Document::from_state(&app.document.collaboration().state()).unwrap();
+    let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     peer.replace(0..0, "Preface\n\n").unwrap();
     send(
         &mut app,
@@ -238,10 +247,10 @@ fn outline_fold_anchors_survive_remote_prefix_and_undo_but_not_deleted_headings(
             after: true,
         }),
     );
-    assert!(app.document.source().starts_with("Preface\n\n# A"));
+    assert!(app.session.document.source().starts_with("Preface\n\n# A"));
     let start = app.outline.sections[0].range.start;
     let end = app.outline.sections[2].range.start;
-    app.document.replace(start..end, "").unwrap();
+    app.session.document.replace(start..end, "").unwrap();
     app.sync_editor();
     assert!(
         !app.outline.folded[0],
@@ -268,8 +277,8 @@ fn outline_commands_obey_loading_and_modal_guards_and_cancel_cleanly() {
         ] {
             command(&mut app, message);
         }
-        assert_eq!(app.document.source(), source);
-        assert!(!app.document.can_undo());
+        assert_eq!(app.session.document.source(), source);
+        assert!(!app.session.document.can_undo());
         assert!(app.outline.drag.is_none());
         assert!(!app.outline.folded[0]);
     }
@@ -283,7 +292,7 @@ fn outline_commands_obey_loading_and_modal_guards_and_cancel_cleanly() {
     assert!(app.outline.drag.is_none());
     command(&mut app, Message::FoldCurrent(true));
     assert!(app.outline.folded[0]);
-    app.selection = Selection::caret(source.find("Child").unwrap());
+    app.session.selection = Selection::caret(source.find("Child").unwrap());
     command(&mut app, Message::FoldCurrent(false));
     assert!(!app.outline.folded[0]);
 }
@@ -297,9 +306,12 @@ fn outline_read_jump_updates_current_section_without_leaving_read_mode() {
     command(&mut app, Message::Query("B".into()));
     command(&mut app, Message::Accept);
     assert_eq!(app.mode, EditorMode::Read);
-    assert_eq!(app.selection, Selection::caret(source.find("# B").unwrap()));
-    assert_eq!(app.document.source(), source);
-    assert!(!app.document.can_undo());
+    assert_eq!(
+        app.session.selection,
+        Selection::caret(source.find("# B").unwrap())
+    );
+    assert_eq!(app.session.document.source(), source);
+    assert!(!app.session.document.can_undo());
 }
 
 struct Harness {
@@ -584,7 +596,7 @@ fn performance_outline_sections() {
             let start = Instant::now();
             drop(app.update_message(AppMessage::Undo));
             undos.push(start.elapsed());
-            assert_eq!(app.document.source(), source);
+            assert_eq!(app.session.document.source(), source);
         }
         for (label, mut times) in [("move-section", moves), ("undo-section", undos)] {
             times.sort_unstable();
@@ -627,7 +639,7 @@ fn outline_real_drag_moves_a_folded_subtree_and_outside_release_cancels() {
         destination,
     );
     assert_eq!(
-        harness.app.document.source(),
+        harness.app.session.document.source(),
         "# B\n\nlast\n\n# A\n\n## Child\n\nbody\n\n"
     );
     assert!(harness.app.outline.drag.is_none());
@@ -638,7 +650,7 @@ fn outline_real_drag_moves_a_folded_subtree_and_outside_release_cancels() {
         Point::new(800.0, 700.0),
     );
     assert!(harness.app.outline.drag.is_none());
-    assert_eq!(harness.app.document.source(), source);
+    assert_eq!(harness.app.session.document.source(), source);
 }
 
 #[test]
@@ -669,22 +681,25 @@ fn outline_real_keyboard_filter_navigation_escape_and_source_shortcuts() {
             assert_eq!(harness.app.outline.selected, 1);
             harness.key(Key::Named(key::Named::Enter), keyboard::Modifiers::empty());
             assert!(harness.app.overlay.is_none());
-            assert_eq!(harness.app.selection.head, source.find("# B").unwrap());
+            assert_eq!(
+                harness.app.session.selection.head,
+                source.find("# B").unwrap()
+            );
             harness.focus(EDITOR);
             harness.key(
                 Key::Named(key::Named::ArrowUp),
                 command_key | keyboard::Modifiers::ALT,
             );
-            assert!(harness.app.document.source().starts_with("# B\n"));
+            assert!(harness.app.session.document.source().starts_with("# B\n"));
             harness.focus(EDITOR);
             harness.key(Key::Character("z".into()), command_key);
-            assert_eq!(harness.app.document.source(), source);
-            let selection = harness.app.selection;
+            assert_eq!(harness.app.session.document.source(), source);
+            let selection = harness.app.session.selection;
             command(&mut harness.app, Message::Filter);
             harness.focus(FILTER);
             harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
             assert!(harness.app.overlay.is_none());
-            assert_eq!(harness.app.selection, selection);
+            assert_eq!(harness.app.session.selection, selection);
         }
     }
 }
