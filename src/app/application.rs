@@ -53,6 +53,8 @@ pub(super) mod outline;
 pub(super) mod quick_open;
 #[path = "recovery.rs"]
 mod recovery;
+#[path = "section_folding.rs"]
+pub(super) mod section_folding;
 #[path = "session.rs"]
 mod session;
 #[path = "table.rs"]
@@ -143,6 +145,7 @@ pub struct App {
     footnotes: footnotes::State,
     recovery: recovery::State,
     outline: outline::State,
+    section_folds: section_folding::State,
     table: table::State,
     table_editing: Option<table::EditingCell>,
     grid: table_grid::State,
@@ -179,6 +182,7 @@ pub enum Message {
     Table(table::Message),
     Footnote(footnotes::Message),
     Outline(outline::Message),
+    ToggleSectionFold(Option<(usize, Arc<()>)>),
     Writing(writing::Message),
     Recovery(recovery::Message),
     Edit(text_editor::Action),
@@ -397,6 +401,7 @@ impl App {
             footnotes: footnotes::State::default(),
             recovery: recovery::State::default(),
             outline: outline::State::default(),
+            section_folds: section_folding::State::default(),
             table: table::State::default(),
             table_editing: None,
             grid: table_grid::State::default(),
@@ -618,6 +623,7 @@ impl App {
                             | writing::Message::ResumeImage
                     )
                     | Message::Footnote(_)
+                    | Message::ToggleSectionFold(_)
                     | Message::Outline(
                         outline::Message::Toggle(_)
                             | outline::Message::FoldAll(_)
@@ -809,6 +815,7 @@ impl App {
             Message::Table(message) => return self.update_table(message),
             Message::Footnote(message) => return self.update_footnote(message),
             Message::Outline(message) => return self.update_outline(message),
+            Message::ToggleSectionFold(clicked) => return self.toggle_section_fold(clicked),
             Message::Writing(message) => return self.update_writing(message),
             Message::Recovery(message) => return self.update_recovery(message),
             Message::CommitComposition { target, text } => {
@@ -1617,7 +1624,7 @@ impl App {
     }
 
     fn edit(&mut self, action: text_editor::Action) -> Task<Message> {
-        if self.mode == EditorMode::Read {
+        if self.mode == EditorMode::Read || self.reveal_section_at_boundary(&action) {
             return Task::none();
         }
         if !self.editor_focused {
@@ -1963,6 +1970,7 @@ impl App {
             self.session.selection = selection;
         }
         self.session.selection = self.session.selection.clamp(self.session.document.source());
+        self.sync_section_folds();
         let caret = (self.mode == EditorMode::Live && self.editor_focused)
             .then_some(self.session.selection.head);
         let cell = self.editing_cell_range();
@@ -2598,6 +2606,7 @@ impl App {
         self.writing = writing::State::default();
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
+        self.section_folds = section_folding::State::default();
         self.quick_open.clear();
         self.table = table::State::default();
         self.table_editing = None;
@@ -3018,6 +3027,7 @@ impl App {
             .zoom(self.zoom)
             .selection(self.session.selection)
             .focused(self.editor_focused)
+            .section_folds(&self.section_folds.targets, &self.section_folds.hidden)
             .table_grid(self.grid_view(), self.cell_editor())
             .table_resume(self.grid_resume())
             .into();
@@ -3634,6 +3644,9 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 "x" if modifiers.shift() => Some(Message::Format(Format::Strikethrough)),
                 "k" => Some(Message::Format(Format::Link)),
                 "j" if modifiers.shift() => Some(Message::Outline(outline::Message::Filter)),
+                "l" if modifiers.alt() && !modifiers.shift() => {
+                    Some(Message::ToggleSectionFold(None))
+                }
                 "m" if modifiers.shift() => Some(Message::ToggleSource),
                 "z" => Some(if modifiers.shift() {
                     Message::Redo

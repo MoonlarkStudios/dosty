@@ -14,7 +14,7 @@ With a place open, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Fi
 
 Moving to another document never interrupts you. The one you leave stays open in the background with its unsaved changes and undo history, and **Back** (Cmd/Ctrl+[) and **Forward** (Cmd/Ctrl+]) move through the documents you have visited. Dosty asks about unsaved changes only when you close the window, once, naming every unsaved document.
 
-Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter.
+Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter. In Write, hover next to a heading in the left margin and click its chevron to fold the section body. Cmd/Ctrl+Alt+L toggles the fold for the current section.
 
 Files also shows the images in a place. Choose one to preview it, and use **Insert into document** there, or in its menu, to reference it from the page where it already lives; nothing is copied. Images cannot be renamed or moved here, because pages that use them would lose them.
 

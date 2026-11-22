@@ -12,6 +12,7 @@ use std::sync::Arc;
 use iced::{Point, Rectangle, Size};
 
 use super::rich_layout::{LayoutInput, LayoutUnit, RichLayout, UnitKind, layout_units};
+use crate::app::SectionFoldTarget;
 use crate::document::projection::{HighlightLines, OffsetMap};
 use crate::theme::{Tokens, Typography, styles};
 
@@ -95,6 +96,7 @@ pub(super) struct VirtualLayout {
     highlights: Option<Arc<HighlightLines>>,
     metrics: Option<Metrics>,
     eager: bool,
+    folds: Option<Arc<[SectionFoldTarget]>>,
 }
 
 impl VirtualLayout {
@@ -106,7 +108,7 @@ impl VirtualLayout {
         self.geometry.height
     }
 
-    pub fn rebuild(&mut self, input: LayoutInput<'_>) {
+    pub fn rebuild(&mut self, input: LayoutInput<'_>, folds: Option<&Arc<[SectionFoldTarget]>>) {
         let metrics = Metrics {
             tokens: input.theme.tokens,
             typography: input.theme.typography,
@@ -116,7 +118,12 @@ impl VirtualLayout {
             images: input.images.revision(),
         };
         let same_metrics = self.metrics.as_ref() == Some(&metrics);
-        if same_metrics && !self.eager && self.patch_index(input) {
+        let same_folds = match (&self.folds, folds) {
+            (Some(previous), Some(current)) => Arc::ptr_eq(previous, current),
+            (None, None) => true,
+            _ => false,
+        };
+        if same_metrics && !self.eager && same_folds && self.patch_index(input) {
             return;
         }
         if !same_metrics {
@@ -126,20 +133,50 @@ impl VirtualLayout {
         self.mapping = Some(Arc::clone(&input.projection.mapping));
         self.highlights = Some(Arc::clone(&input.projection.highlights));
         self.units = layout_units(input.projection);
+        self.folds = folds.cloned();
+        let folded = folds.map_or(&[][..], |folds| folds.as_ref());
+        if !folded.is_empty() {
+            let mut bodies = folded
+                .iter()
+                .map(|target| {
+                    let body = input.projection.to_display(target.body.start)
+                        ..input.projection.to_display(target.body.end);
+                    (body, target.body.end == input.projection.source.len())
+                })
+                .peekable();
+            self.units.retain(|unit| {
+                let start = unit.range.start;
+                while bodies
+                    .peek()
+                    .is_some_and(|(body, eof)| body.end <= start && !eof)
+                {
+                    bodies.next();
+                }
+                bodies
+                    .peek()
+                    .is_none_or(|(body, _)| start < body.start || start > body.end)
+            });
+        }
         self.eager = self.units.len() <= EAGER_UNITS;
         self.resident = 0..0;
         if self.eager {
             self.heights = Heights::default();
             self.keys = Vec::new();
             self.known_heights.clear();
-            self.geometry.rebuild(
-                input.projection,
-                input.theme,
-                input.zoom,
-                input.width,
-                input.base,
-                input.images,
-            );
+            if !folded.is_empty() {
+                let heights = self.geometry.rebuild_units(input, &self.units, TOP as f32);
+                self.geometry.height =
+                    (TOP + heights.into_iter().map(f64::from).sum::<f64>() + BOTTOM) as f32;
+            } else {
+                self.geometry.rebuild(
+                    input.projection,
+                    input.theme,
+                    input.zoom,
+                    input.width,
+                    input.base,
+                    input.images,
+                );
+            }
             return;
         }
         self.keys.clear();
@@ -542,7 +579,7 @@ mod tests {
                     width: 230.0,
                     base: None,
                 };
-                window.rebuild(input);
+                window.rebuild(input, None);
                 window.show_source(input, head, 400.0);
                 let mut full = RichLayout::default();
                 full.rebuild(&projection, &theme, 1.0, 230.0, None, &images);
@@ -613,7 +650,7 @@ mod tests {
         let mut full = RichLayout::default();
         full.rebuild(&projection, &theme, 1.0, 250.0, None, &images);
         let mut window = VirtualLayout::default();
-        window.rebuild(input);
+        window.rebuild(input, None);
         for chapter in [0, 80, 149, 2, 110, 40, 0] {
             let head = source.find(&format!("Paragraph {chapter}:")).unwrap() + 3;
             let scroll = window.show_source(input, head, 500.0);
@@ -713,7 +750,7 @@ mod tests {
                     width: 240.0,
                     base: None,
                 };
-                window.rebuild(input);
+                window.rebuild(input, None);
                 window.show_source(input, head, 500.0);
             }
             match step % 7 {
@@ -767,7 +804,7 @@ mod tests {
                 width: 240.0,
                 base: None,
             };
-            window.rebuild(input);
+            window.rebuild(input, None);
             assert_eq!(window.units, layout_units(&projection));
             window.show_source(input, head, 500.0);
             let mut fresh = RichLayout::default();
@@ -823,7 +860,7 @@ mod tests {
                 width: 450.0,
                 base: None,
             };
-            window.rebuild(input);
+            window.rebuild(input, None);
             window.show_source(input, head, 500.0);
             assert_eq!(window.units, layout_units(&projection));
             let mut fresh = RichLayout::default();
@@ -865,7 +902,7 @@ mod tests {
             base: None,
         };
         let mut window = VirtualLayout::default();
-        window.rebuild(input);
+        window.rebuild(input, None);
         for head in [0, source.len() / 2, source.len(), source.len() / 4, 0] {
             window.show_source(input, head, 800.0);
             assert!(window.geometry.fragments.len() < 110);
@@ -883,7 +920,7 @@ mod tests {
             width: 200.0,
             ..input
         };
-        window.rebuild(input);
+        window.rebuild(input, None);
         let head = source.find("Row 1999").unwrap() + 4;
         window.show_source(input, head, 500.0);
         assert!(window.geometry.fragments.len() < 50);

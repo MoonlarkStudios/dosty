@@ -8,18 +8,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use iced::advanced::graphics::geometry::Renderer as _;
 use iced::advanced::image::{self, Renderer as _};
 use iced::advanced::text::{self, Renderer as _};
 use iced::advanced::widget::{self, operation};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, input_method, layout, mouse, renderer};
 use iced::keyboard;
+use iced::widget::canvas::{Frame, LineCap, Path as CanvasPath, Stroke};
 use iced::widget::text_editor::{Action, Binding, Content, Edit, KeyPress, Motion, Status};
 use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector, window};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::app::{
-    FootnoteMessage, Message, TableExtent, TableGridMessage, TableGridView, TableMessage,
-    WritingMessage,
+    FootnoteMessage, Message, SectionFoldTarget, TableExtent, TableGridMessage, TableGridView,
+    TableMessage, WritingMessage,
 };
 use crate::document::collaboration::{Collaboration, CompositionTarget, StablePosition};
 use crate::document::projection::{HighlightLines, Projection};
@@ -42,6 +44,8 @@ pub struct RichEditor<'a> {
     source_selection: Selection,
     app_focused: bool,
     preserve_viewport: bool,
+    fold_targets: &'a [SectionFoldTarget],
+    folded: Option<&'a Arc<[SectionFoldTarget]>>,
     key_binding: fn(KeyPress) -> Option<Binding<Message>>,
     grid: Option<TableGridView>,
     grid_resume: Option<TableGridView>,
@@ -173,6 +177,8 @@ impl<'a> RichEditor<'a> {
             source_selection: Selection::default(),
             app_focused: false,
             preserve_viewport: false,
+            fold_targets: &[],
+            folded: None,
             key_binding,
             grid: None,
             grid_resume: None,
@@ -184,6 +190,114 @@ impl<'a> RichEditor<'a> {
         self.preserve_viewport = preserve;
         self
     }
+    pub(crate) fn section_folds(
+        mut self,
+        targets: &'a [SectionFoldTarget],
+        folded: &'a Arc<[SectionFoldTarget]>,
+    ) -> Self {
+        self.fold_targets = targets;
+        self.folded = Some(folded);
+        self
+    }
+
+    fn folded(&self) -> &[SectionFoldTarget] {
+        self.folded.map_or(&[], |targets| targets.as_ref())
+    }
+
+    fn hovered_fold(
+        &self,
+        state: &State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<&SectionFoldTarget> {
+        if self.fold_targets.is_empty()
+            || state
+                .preedit
+                .as_ref()
+                .is_some_and(|preedit| !preedit.content.is_empty())
+        {
+            return None;
+        }
+        let position = cursor.position()? - (bounds.position() - Point::ORIGIN);
+        if !(-20.0..-2.0).contains(&position.x) || !(0.0..bounds.height).contains(&position.y) {
+            return None;
+        }
+        let point = position + Vector::new(0.0, state.scroll);
+        let (source, _) = state
+            .rich
+            .resident()
+            .hit_source_with_row(Point::new(0.0, point.y));
+        let index = self
+            .fold_targets
+            .partition_point(|target| target.heading.start <= source)
+            .checked_sub(1)?;
+        let target = &self.fold_targets[index];
+        fold_handle_bounds(state, target)
+            .contains(point)
+            .then_some(target)
+    }
+
+    fn draw_fold_handles(
+        &self,
+        renderer: &mut Renderer,
+        state: &State,
+        bounds: Rectangle,
+        clip: Rectangle,
+        cursor: mouse::Cursor,
+    ) {
+        let hovered = self.hovered_fold(state, bounds, cursor);
+        let folded = self.folded();
+        if hovered.is_none() && folded.is_empty() {
+            return;
+        }
+        let visible = state.scroll..state.scroll + bounds.height;
+        let geometry = state.rich.resident();
+        let first = geometry
+            .viewport_anchor(visible.start)
+            .map_or(0, |(source, _)| source);
+        let last = geometry
+            .viewport_anchor(visible.end)
+            .map_or(self.source.len(), |(source, _)| source);
+        // The first visible row may be a wrapped continuation of a heading.
+        let start = folded.partition_point(|target| target.heading.end < first);
+        let end = folded.partition_point(|target| target.heading.start <= last);
+        let shown = &folded[start.min(end)..end];
+        if hovered.is_none() && shown.is_empty() {
+            return;
+        }
+        let mut frame = Frame::new(renderer, clip.size());
+        let translation = bounds.position() - clip.position() - Vector::new(0.0, state.scroll);
+        for target in shown {
+            let color = if hovered == Some(target) {
+                self.theme.tokens.accent
+            } else {
+                self.theme.tokens.muted
+            };
+            draw_fold_chevron(
+                &mut frame,
+                fold_handle_bounds(state, target).center() + translation,
+                true,
+                color,
+            );
+        }
+        if let Some(target) = hovered
+            && folded
+                .binary_search_by_key(&target.heading.start, |item| item.heading.start)
+                .is_err()
+        {
+            draw_fold_chevron(
+                &mut frame,
+                fold_handle_bounds(state, target).center() + translation,
+                false,
+                self.theme.tokens.accent,
+            );
+        }
+        use iced::advanced::Renderer as _;
+        renderer.with_translation(clip.position() - Point::ORIGIN, |renderer| {
+            renderer.draw_geometry(frame.into_geometry());
+        });
+    }
+
     pub(crate) fn table_grid(
         mut self,
         grid: Option<TableGridView>,
@@ -798,6 +912,7 @@ struct State {
     grid_drag_revision: Option<Arc<()>>,
     hovered_handle: Option<(usize, usize, usize, TableExtent)>,
     hovered_menu: bool,
+    hovered_fold: Option<usize>,
     stable_viewport: Option<(StablePosition, f32)>,
     stable_wrap: Option<(StablePosition, bool)>,
     composition_target: Option<CompositionTarget>,
@@ -829,6 +944,7 @@ struct TaskPress {
 struct LayoutKey {
     lines: Arc<HighlightLines>,
     source: Arc<()>,
+    folded: Option<Arc<[SectionFoldTarget]>>,
     tokens: Tokens,
     typography: Typography,
     width: f32,
@@ -1035,6 +1151,11 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         }
         let content_changed = state.layout_key.as_ref().is_none_or(|key| {
             !Arc::ptr_eq(&key.source, &self.projection.source_id)
+                || match (&key.folded, self.folded) {
+                    (Some(previous), Some(current)) => !Arc::ptr_eq(previous, current),
+                    (None, None) => false,
+                    _ => true,
+                }
                 || key.tokens != self.theme.tokens
                 || key.typography != self.theme.typography
                 || key.width != bounds.width
@@ -1075,14 +1196,23 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         {
             viewport_anchor = Some((offset, state.scroll + *screen_y));
         }
+        if let Some((source, y)) = viewport_anchor
+            && let Some(target) = self
+                .folded()
+                .iter()
+                .find(|target| target.body.contains(&source))
+        {
+            viewport_anchor = Some((target.heading.start, y));
+        }
         let affinity = state.visual_cursor;
         if changed {
             state.layout_epoch = state.layout_epoch.wrapping_add(1);
             state.visual_cursor = None;
-            state.rich.rebuild(input);
+            state.rich.rebuild(input, self.folded);
             state.layout_key = Some(LayoutKey {
                 lines: Arc::clone(&self.projection.highlights),
                 source: Arc::clone(&self.projection.source_id),
+                folded: self.folded.cloned(),
                 tokens: self.theme.tokens,
                 typography: self.theme.typography,
                 width: bounds.width,
@@ -1260,6 +1390,13 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             event,
             Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft)
         ) {
+            let fold = self
+                .hovered_fold(state, bounds, cursor)
+                .map(|target| target.heading.start);
+            if state.hovered_fold != fold {
+                state.hovered_fold = fold;
+                shell.request_redraw();
+            }
             let hovered = if matches!(event, Event::Mouse(mouse::Event::CursorLeft)) {
                 None
             } else {
@@ -1408,6 +1545,14 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(target) = self.hovered_fold(state, bounds, cursor) {
+                    shell.publish(Message::ToggleSectionFold(Some((
+                        target.heading.start,
+                        Arc::clone(&self.projection.source_id),
+                    ))));
+                    shell.capture_event();
+                    return;
+                }
                 let position = cursor
                     .position()
                     .map(|point| point - (bounds.position() - Point::ORIGIN))
@@ -2336,7 +2481,8 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     translation,
                     handle_clip,
                     cursor.position().map(|point| point - translation),
-                )
+                );
+                self.draw_fold_handles(renderer, state, bounds, handle_clip, cursor);
             });
         }
         if let (Some(child), Some(child_layout)) = (&self.cell_editor, layout.children().next()) {
@@ -2363,6 +2509,9 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         _renderer: &Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<State>();
+        if self.hovered_fold(state, layout.bounds(), cursor).is_some() {
+            return mouse::Interaction::Pointer;
+        }
         if state.table_menu_available()
             && cursor
                 .position()
@@ -2426,6 +2575,35 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             mouse::Interaction::None
         }
     }
+}
+
+fn fold_handle_bounds(state: &State, target: &SectionFoldTarget) -> Rectangle {
+    let caret = state.rich.source_caret(target.heading.start, None);
+    Rectangle::new(
+        Point::new(-20.0, caret.center_y() - 9.0),
+        Size::new(18.0, 18.0),
+    )
+}
+
+fn draw_fold_chevron(frame: &mut Frame<Renderer>, center: Point, folded: bool, color: iced::Color) {
+    let offsets = if folded {
+        [(-2.0, -4.0), (2.0, 0.0), (-2.0, 4.0)]
+    } else {
+        [(-4.0, -2.0), (0.0, 2.0), (4.0, -2.0)]
+    };
+    let path = CanvasPath::new(|path| {
+        let [start, middle, end] = offsets.map(|(x, y)| center + Vector::new(x, y));
+        path.move_to(start);
+        path.line_to(middle);
+        path.line_to(end);
+    });
+    frame.stroke(
+        &path,
+        Stroke::default()
+            .with_color(color)
+            .with_width(1.5)
+            .with_line_cap(LineCap::Round),
+    );
 }
 
 // Handles are overlays: entering a table never changes cell or text geometry.
@@ -2811,7 +2989,7 @@ mod tests {
                 images: &images,
             };
             let mut rich = VirtualLayout::default();
-            rich.rebuild(input);
+            rich.rebuild(input, None);
             rich.show_viewport(input, 0.0, 1600.0);
             for table in 0..2 {
                 let first = rich.resident().cell_bounds(table, 0, 0).unwrap();
@@ -2837,6 +3015,174 @@ mod tests {
         }
     }
     use crate::theme::Preset;
+
+    #[test]
+    fn section_folding_gutter_is_clickable_and_vertical_motion_skips_the_body() {
+        let source = "# Title\r\nBody 🦀\r\n# Next\r\nTail";
+        let next = source.find("# Next").unwrap();
+        let target = SectionFoldTarget {
+            heading: 0.."# Title".len(),
+            body: source.find("Body").unwrap()..next,
+        };
+        let targets = [target.clone()];
+        let collapsed: Arc<[_]> = [target.clone()].into();
+        let expanded: Arc<[SectionFoldTarget]> = Arc::from([]);
+        let projection = Projection::new(source);
+        let content = native_buffer::with_text(&projection.text);
+        let theme = Preset::Paper.resolve();
+        let images = ImageStore::default();
+        let mut editor = RichEditor::new(
+            &content,
+            &projection,
+            source,
+            &theme,
+            &images,
+            Binding::from_key_press,
+        )
+        .selection(Selection::caret(2))
+        .section_folds(&targets, &expanded);
+        let renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            iced::Font::DEFAULT,
+            18.0.into(),
+        ));
+        let mut tree = widget::Tree::new(&editor as &dyn Widget<Message, Theme, Renderer>);
+        let size = Size::new(600.0, 300.0);
+        let limits = layout::Limits::new(Size::ZERO, size);
+        let mut node = editor.layout(&mut tree, &renderer, &limits);
+        node.move_to_mut(Point::new(35.0, 20.0));
+        let state = tree.state.downcast_ref::<State>();
+        let handle = fold_handle_bounds(state, &targets[0]).center()
+            + Vector::new(35.0, 20.0 - state.scroll);
+        let viewport = Rectangle::with_size(Size::new(670.0, 360.0));
+        let cursor = mouse::Cursor::Available(handle);
+        assert_eq!(
+            editor.mouse_interaction(&tree, Layout::new(&node), cursor, &viewport, &renderer),
+            mouse::Interaction::Pointer
+        );
+        let mut messages = Vec::new();
+        editor.update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            Layout::new(&node),
+            cursor,
+            &renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut Shell::new(&mut messages),
+            &viewport,
+        );
+        assert!(
+            matches!(messages.as_slice(), [Message::ToggleSectionFold(Some((0, revision)))] if Arc::ptr_eq(revision, &projection.source_id))
+        );
+
+        editor.folded = Some(&collapsed);
+        let node = editor.layout(&mut tree, &renderer, &limits);
+        let state = tree.state.downcast_mut::<State>();
+        assert!(state.rich.resident().fragments.iter().all(|fragment| {
+            !targets[0].body.contains(&projection.to_source(
+                fragment.range.start,
+                crate::document::projection::Affinity::After,
+                None,
+            ))
+        }));
+        for (at, motion, expected) in [
+            (2, Motion::Down, next..next + 6),
+            (next + 2, Motion::Up, 0..7),
+        ] {
+            editor.source_selection = Selection::caret(at);
+            messages.clear();
+            editor.apply_binding(
+                Binding::Move(motion),
+                state,
+                &mut iced::advanced::clipboard::Null,
+                &mut Shell::new(&mut messages),
+                size,
+            );
+            assert!(
+                matches!(messages.as_slice(), [Message::SelectSource(selection)] if expected.contains(&selection.head)),
+                "{messages:?}"
+            );
+        }
+        let pointer = |at| {
+            let caret = state.caret(at);
+            Point::new(caret.x, caret.center_y() - state.scroll)
+        };
+        let start = pointer(3);
+        let end = pointer(next + 4);
+        messages.clear();
+        for (event, point) in [
+            (mouse::Event::ButtonPressed(mouse::Button::Left), start),
+            (mouse::Event::CursorMoved { position: end }, end),
+        ] {
+            editor.update(
+                &mut tree,
+                &Event::Mouse(event),
+                Layout::new(&node),
+                mouse::Cursor::Available(point),
+                &renderer,
+                &mut iced::advanced::clipboard::Null,
+                &mut Shell::new(&mut messages),
+                &viewport,
+            );
+        }
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Message::SelectSource(selection)
+            if selection.anchor < targets[0].body.start && selection.head > targets[0].body.end))
+        );
+    }
+
+    #[test]
+    fn section_folding_above_the_viewport_keeps_the_visible_source_row_anchored() {
+        let mut source = String::from("# Fold\n\n");
+        source.push_str(&"Hidden paragraph.\n\n".repeat(450));
+        let next = source.len();
+        source.push_str("# Next\n\n");
+        source.push_str(&"Visible paragraph.\n\n".repeat(450));
+        let target = SectionFoldTarget {
+            heading: 0..6,
+            body: 7..next,
+        };
+        let targets = [target.clone()];
+        let collapsed: Arc<[_]> = [target].into();
+        let expanded: Arc<[SectionFoldTarget]> = Arc::from([]);
+        let projection = Projection::new(&source);
+        let content = native_buffer::with_text(&projection.text);
+        let theme = Preset::Paper.resolve();
+        let images = ImageStore::default();
+        let selection = Selection::caret(next + 100);
+        let mut editor = RichEditor::new(
+            &content,
+            &projection,
+            &source,
+            &theme,
+            &images,
+            Binding::from_key_press,
+        )
+        .selection(selection)
+        .focused(true)
+        .section_folds(&targets, &expanded);
+        let renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            iced::Font::DEFAULT,
+            18.0.into(),
+        ));
+        let mut tree = widget::Tree::new(&editor as &dyn Widget<Message, Theme, Renderer>);
+        let limits = layout::Limits::new(Size::ZERO, Size::new(620.0, 400.0));
+        editor.layout(&mut tree, &renderer, &limits);
+        let state = tree.state.downcast_ref::<State>();
+        let screen_y = state.caret(selection.head).y - state.scroll;
+        let before = state.rich.height();
+        for folds in [&collapsed, &expanded] {
+            editor.folded = Some(folds);
+            editor.layout(&mut tree, &renderer, &limits);
+            let state = tree.state.downcast_ref::<State>();
+            assert!((state.caret(selection.head).y - state.scroll - screen_y).abs() < 0.2);
+            assert_eq!(state.last_selection, Some(selection));
+            if !folds.is_empty() {
+                assert!(state.rich.height() < before * 0.75);
+            }
+        }
+    }
 
     #[test]
     fn strikethrough_remains_visible_over_opaque_forward_and_reverse_selections() {
