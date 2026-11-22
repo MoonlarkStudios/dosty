@@ -39,6 +39,7 @@ pub enum Command {
     Outline,
     FilterOutline,
     HideSidebars,
+    DocumentStatistics,
     Mode(EditorMode),
     Preference(chrome::Preference),
     WritingFont(WritingFont),
@@ -295,6 +296,13 @@ impl State {
             state.add(&view, label, command, shortcut, check)?;
         }
         view.append(&PredefinedMenuItem::separator())?;
+        state.add(
+            &view,
+            "Document Statistics…",
+            Command::DocumentStatistics,
+            Some("Meta+Alt+i"),
+            false,
+        )?;
         for (label, preference) in [
             ("Word Count", chrome::Preference::WordCount),
             ("Reading Time", chrome::Preference::ReadingTime),
@@ -424,6 +432,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
             ready && (app.chrome.files.open || app.chrome.outline.open),
             false,
         ),
+        Command::DocumentStatistics => (ready || app.overlay == Some(Overlay::Statistics), false),
         Command::Preference(preference) => (
             true,
             match preference {
@@ -516,6 +525,7 @@ impl App {
             Command::Outline => Message::ToggleSidebar(Sidebar::Outline),
             Command::FilterOutline => Message::Outline(super::outline::Message::Filter),
             Command::HideSidebars => Message::HideSidebars,
+            Command::DocumentStatistics => Message::Chrome(chrome::Message::Statistics),
             Command::Mode(mode) => Message::SetMode(mode),
             Command::WritingFont(font) => Message::WritingFont(font),
             Command::Preference(preference) => Message::Chrome(chrome::Message::Preference(

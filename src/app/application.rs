@@ -306,6 +306,7 @@ pub enum Sidebar {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Overlay {
     Chrome,
+    Statistics,
     Folder,
     QuickOpen,
     Table,
@@ -760,7 +761,12 @@ impl App {
             Message::EscapeCaptured => {
                 if matches!(
                     self.overlay,
-                    Some(Overlay::Chrome | Overlay::Folder | Overlay::QuickOpen)
+                    Some(
+                        Overlay::Chrome
+                            | Overlay::Folder
+                            | Overlay::QuickOpen
+                            | Overlay::Statistics
+                    )
                 ) {
                     return self.update_message(Message::CloseOverlay);
                 }
@@ -1351,6 +1357,10 @@ impl App {
                 self.overlay = Some(Overlay::Settings);
             }
             Message::CloseOverlay => {
+                if self.overlay == Some(Overlay::Statistics) {
+                    self.overlay = None;
+                    return Task::none();
+                }
                 if self.overlay == Some(Overlay::QuickOpen) {
                     return self.cancel_quick_open();
                 }
@@ -2762,12 +2772,14 @@ impl App {
                 if self.context_menu_open(overlay) {
                     return match overlay {
                         Overlay::Chrome => self.chrome_menu_view(size),
+                        Overlay::Statistics => self.statistics_popover(size),
                         Overlay::Folder => self.folder_menu_view(size),
                         _ => self.table_menu_view(size),
                     };
                 }
                 let modal = match overlay {
                     Overlay::Chrome => self.chrome_menu_view(size),
+                    Overlay::Statistics => self.statistics_popover(size),
                     Overlay::Folder => self.folder_overlay_view((size.height - 48.0).max(80.0)),
                     Overlay::Settings => self.settings_view((size.height - 48.0).min(760.0)),
                     Overlay::Collaboration => self.collaboration_view(),
@@ -2816,7 +2828,7 @@ impl App {
 
     fn context_menu_open(&self, overlay: Overlay) -> bool {
         match overlay {
-            Overlay::Chrome => true,
+            Overlay::Chrome | Overlay::Statistics => true,
             Overlay::Folder => self.folder.is_menu(),
             Overlay::Table => self.table.is_menu(),
             _ => false,
@@ -3630,6 +3642,9 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 }),
                 "b" if modifiers.shift() => Some(Message::ToggleSidebar(Sidebar::Files)),
                 "b" => Some(Message::Format(Format::Bold)),
+                "i" if modifiers.alt() && !modifiers.shift() => {
+                    Some(Message::Chrome(chrome::Message::Statistics))
+                }
                 "i" => Some(Message::Format(Format::Italic)),
                 "x" if modifiers.shift() => Some(Message::Format(Format::Strikethrough)),
                 "k" => Some(Message::Format(Format::Link)),

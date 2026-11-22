@@ -134,6 +134,7 @@ pub enum Message {
     DragWindow,
     MaximizeWindow,
     Preference(Preference, bool),
+    Statistics,
     Step(i32),
     Hover(usize),
     Accept,
@@ -256,6 +257,20 @@ pub(super) fn event_message(
     super::event_message(event, status, id)
 }
 
+fn word_label(words: usize) -> String {
+    format!("{words} {}", if words == 1 { "word" } else { "words" })
+}
+
+fn reading_time(words: usize) -> String {
+    if words == 0 {
+        "0 min read".into()
+    } else if words < 200 {
+        "<1 min read".into()
+    } else {
+        format!("~{} min read", words.div_ceil(200))
+    }
+}
+
 impl App {
     pub(super) fn show_sidebar(&mut self, side: Sidebar) -> Task<AppMessage> {
         self.chrome.sidebars_hidden = false;
@@ -351,6 +366,14 @@ impl App {
                     Preference::ReadingTime => self.preferences.show_reading_time = enabled,
                 }
                 return self.persist_preferences();
+            }
+            Message::Statistics => {
+                if self.overlay == Some(Overlay::Statistics) {
+                    self.overlay = None;
+                } else if self.overlay.is_none() && !self.busy && !self.loading {
+                    self.overlay = Some(Overlay::Statistics);
+                }
+                return Task::none();
             }
             Message::Menu(menu) => {
                 if self.busy
@@ -504,36 +527,88 @@ impl App {
         let words = self.session.document.words();
         let mut parts = Vec::with_capacity(2);
         if self.preferences.show_word_count {
-            parts.push(format!(
-                "{words} {}",
-                if words == 1 { "word" } else { "words" }
-            ));
+            parts.push(
+                if self.mode != EditorMode::Read && !self.session.selection.is_caret() {
+                    format!(
+                        "{} selected",
+                        word_label(self.session.document.selected_words(self.session.selection))
+                    )
+                } else {
+                    word_label(words)
+                },
+            );
         }
         if self.preferences.show_reading_time {
-            // A deliberately approximate reading estimate, independent of edit mode.
-            parts.push(if words == 0 {
-                "0 min read".into()
-            } else if words < 200 {
-                "<1 min read".into()
-            } else {
-                format!("~{} min read", words.div_ceil(200))
-            });
+            parts.push(reading_time(words));
         }
         parts.join(" · ")
     }
 
     pub(super) fn statistics_view(&self) -> Element<'_, AppMessage> {
-        // This belongs to the writing column, so it stays centered between any
-        // docked navigation and the writing area's opposite edge. Keep the same
-        // small reading gutter when preferences change to preserve the viewport.
-        container(
-            text(self.writing_statistics())
-                .size(11)
-                .color(self.resolved_theme.tokens.muted),
-        )
-        .center_x(Fill)
-        .center_y(STATISTICS_HEIGHT)
-        .id("writing-statistics")
+        let tokens = self.resolved_theme.tokens;
+        let label = self.writing_statistics();
+        let control: Element<'_, AppMessage> = if label.is_empty() {
+            space().into()
+        } else {
+            tooltip(
+                button(text(label).size(11))
+                    .on_press_maybe(
+                        (!self.loading && !self.busy)
+                            .then_some(AppMessage::Chrome(Message::Statistics)),
+                    )
+                    .padding([3, 8])
+                    .style(styles::button_style(tokens, Button::Quiet)),
+                container(text("Document statistics").size(11))
+                    .padding(5)
+                    .style(styles::context_menu(tokens)),
+                tooltip::Position::Top,
+            )
+            .into()
+        };
+        // A fixed gutter preserves the writing viewport as the label changes.
+        container(control)
+            .center_x(Fill)
+            .center_y(STATISTICS_HEIGHT)
+            .id("writing-statistics")
+            .into()
+    }
+
+    pub(super) fn statistics_popover(&self, size: Size) -> Element<'_, AppMessage> {
+        let tokens = self.resolved_theme.tokens;
+        let words = self.session.document.words();
+        let characters = self.session.document.source().chars().count();
+        let close = self.titlebar_icon(
+            Icon::Close,
+            "Close statistics",
+            AppMessage::CloseOverlay,
+            false,
+        );
+        let details = column![
+            row![
+                text("Document statistics").size(13),
+                space().width(Fill),
+                close
+            ]
+            .align_y(Alignment::Center),
+            text(word_label(words)).size(12),
+            text(format!("{characters} Markdown characters")).size(12),
+            text(reading_time(words)).size(12),
+        ]
+        .spacing(5);
+        let popup = container(details)
+            .padding(12)
+            .width(230.0_f32.min((size.width - 16.0).max(1.0)))
+            .style(styles::context_menu(tokens));
+        let (files, outline) = self.docked_sidebars(size.width);
+        row![
+            space().width(if files { FILES_WIDTH } else { 0.0 }),
+            container(popup)
+                .center_x(Fill)
+                .align_bottom(Fill)
+                .padding(Padding::new(0.0).bottom(STATISTICS_HEIGHT + 6.0)),
+            space().width(if outline { OUTLINE_WIDTH } else { 0.0 }),
+        ]
+        .height(Fill)
         .into()
     }
 
@@ -940,6 +1015,12 @@ impl App {
                     Icon::Search,
                     AppMessage::Outline(super::outline::Message::Filter),
                     !self.outline.sections.is_empty(),
+                ),
+                Command::action(
+                    "Document statistics…",
+                    Icon::Document,
+                    AppMessage::Chrome(Message::Statistics),
+                    ready && !self.loading,
                 ),
                 Command::action(
                     if self.chrome.sidebars_hidden {
