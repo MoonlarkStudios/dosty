@@ -110,6 +110,45 @@ pub enum Message {
     CancelFilter,
 }
 
+pub(super) fn heading_label(section: &Section) -> &str {
+    if section.title.is_empty() {
+        "Untitled heading"
+    } else {
+        &section.title
+    }
+}
+
+pub(super) fn heading_parents(
+    sections: &[Section],
+    index: usize,
+) -> impl Iterator<Item = &Section> {
+    std::iter::successors(sections[index].parent, |&parent| sections[parent].parent)
+        .map(|parent| &sections[parent])
+}
+
+pub(super) fn matching_headings<'a>(
+    sections: &'a [Section],
+    terms: &'a [&str],
+) -> impl Iterator<Item = usize> + 'a {
+    sections
+        .iter()
+        .enumerate()
+        .filter_map(move |(index, section)| {
+            if terms.is_empty() {
+                return Some(index);
+            }
+            let mut label = heading_label(section).to_lowercase();
+            for parent in heading_parents(sections, index) {
+                label.push(' ');
+                label.push_str(&heading_label(parent).to_lowercase());
+            }
+            terms
+                .iter()
+                .all(|term| label.contains(term))
+                .then_some(index)
+        })
+}
+
 #[derive(Default)]
 pub(super) struct State {
     revision: Option<u64>,
@@ -174,25 +213,7 @@ impl State {
             self.selected = self.selected.min(self.results.len().saturating_sub(1));
             return;
         }
-        self.results = self
-            .sections
-            .iter()
-            .enumerate()
-            .filter_map(|(index, section)| {
-                let title = section.title.to_lowercase();
-                let mut label = title.clone();
-                let mut parent = section.parent;
-                while let Some(index) = parent {
-                    label.push(' ');
-                    label.push_str(&self.sections[index].title.to_lowercase());
-                    parent = self.sections[index].parent;
-                }
-                terms
-                    .iter()
-                    .all(|term| label.contains(term))
-                    .then_some(index)
-            })
-            .collect();
+        self.results = matching_headings(&self.sections, &terms).collect();
         self.selected = self.selected.min(self.results.len().saturating_sub(1));
     }
 
@@ -210,6 +231,7 @@ impl App {
         self.outline.cancel_drag();
         self.outline.sections = outline::sections(&self.session.document);
         self.outline.revision = Some(self.session.document.revision());
+        self.refresh_quick_open_headings();
         self.refresh_folds();
         if self.outline.sections.is_empty() {
             self.outline.filter_open = false;
@@ -597,11 +619,7 @@ impl App {
             } else {
                 space().width(16).into()
             };
-            let title = if section.title.is_empty() {
-                "Untitled heading"
-            } else {
-                &section.title
-            };
+            let title = heading_label(section);
             let label = button(
                 container(
                     text(title)

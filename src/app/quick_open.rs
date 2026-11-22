@@ -18,7 +18,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Fill, Padding, Size, Task};
 
 use super::session::SessionId;
-use super::{App, EDITOR, Message as AppMessage, Overlay, Pending, chrome};
+use super::{App, EDITOR, Message as AppMessage, Overlay, Pending, chrome, outline};
 use crate::app::icon::{self, Icon};
 use crate::editor::outline_filter::FilterInput;
 use crate::io::folder as discovery;
@@ -30,7 +30,6 @@ const MAX_RESULTS: usize = 100;
 const MAX_RECENT: usize = 6;
 /// Documents indexed from places other than the open one, across all of them.
 const MAX_LIBRARY_DOCUMENTS: usize = 65_536;
-const RECENT: &str = "Recent";
 /// Height of a row that shows where its document is, and of one that does not.
 const RESULT_HEIGHT: f32 = 48.0;
 const PLAIN_RESULT_HEIGHT: f32 = 34.0;
@@ -54,6 +53,11 @@ pub enum Message {
     Accept,
     /// Activate the row at this position.
     Pick(usize),
+    PickHeading {
+        index: usize,
+        revision: u64,
+        request: u64,
+    },
     /// Open a document of the open place.
     Choose(PathBuf),
     /// Step into the selected folder, or out of the one being browsed.
@@ -87,6 +91,7 @@ pub(super) enum Target {
     Session(SessionId),
     Folder(PathBuf),
     Place(PathBuf),
+    Heading { index: usize, revision: u64 },
 }
 
 pub(super) struct Row {
@@ -107,6 +112,7 @@ pub(super) struct State {
     folders: Vec<PathBuf>,
     unsaved: Vec<Unsaved>,
     places: Vec<PathBuf>,
+    pins: Vec<PathBuf>,
     /// The folder being browsed while the query is empty; `None` is the top.
     location: Option<PathBuf>,
     query: String,
@@ -220,6 +226,11 @@ impl State {
 
     /// Rebuild the rows for the current query, or for the folder being browsed.
     fn list(&mut self) {
+        // Outline owns heading rows. A pending library or place scan can
+        // refresh file candidates without replacing a heading query.
+        if self.heading_query().is_some() {
+            return;
+        }
         let query = self.query.trim().to_lowercase();
         let query = if cfg!(target_os = "windows") {
             query.replace('\\', "/")
@@ -236,6 +247,24 @@ impl State {
         self.matches = self.matches.max(self.rows.len());
         self.rows.truncate(MAX_RESULTS);
         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
+    }
+
+    fn heading_query(&self) -> Option<&str> {
+        let query = self.query.trim_start();
+        if query == "#" {
+            Some("")
+        } else {
+            query.strip_prefix("# ")
+        }
+    }
+
+    fn previous_document(&self) -> Option<Target> {
+        self.candidates
+            .iter()
+            .find(|candidate| {
+                candidate.recency != usize::MAX && Some(&candidate.path) != self.active.as_ref()
+            })
+            .map(|candidate| Target::File(candidate.path.clone()))
     }
 
     fn search(&mut self, query: &str) {
@@ -288,14 +317,26 @@ impl State {
         let mut section = Vec::from_iter(self.unsaved.iter().map(Unsaved::row));
         self.push_section("Unsaved", &mut section);
         let mut section: Vec<_> = self
+            .pins
+            .iter()
+            .filter_map(|pin| {
+                self.candidates
+                    .iter()
+                    .find(|candidate| candidate.place.is_none() && &candidate.path == pin)
+            })
+            .map(Candidate::row)
+            .collect();
+        self.push_section("Pinned", &mut section);
+        let mut section: Vec<_> = self
             .candidates
             .iter()
             .filter(|candidate| candidate.recency != usize::MAX)
             .filter(|candidate| Some(&candidate.path) != self.active.as_ref())
+            .filter(|candidate| !self.pins.contains(&candidate.path))
             .take(MAX_RECENT)
             .map(Candidate::row)
             .collect();
-        self.push_section(RECENT, &mut section);
+        self.push_section("Recent", &mut section);
         if let Some(root) = self.root.clone() {
             self.push_children(&root, super::folder::name(&root));
         }
@@ -442,6 +483,13 @@ impl App {
             .cloned()
             .collect();
         self.quick_open.root.clone_from(&root);
+        self.quick_open.pins = root.as_ref().map_or_else(Vec::new, |root| {
+            self.workspace
+                .pins(root)
+                .iter()
+                .map(|pin| root.join(pin))
+                .collect()
+        });
         match root {
             Some(root) => {
                 let recent = self.workspace.recent_documents();
@@ -480,6 +528,42 @@ impl App {
             },
             move |snapshots| AppMessage::QuickOpen(Message::Library { request, snapshots }),
         )
+    }
+
+    pub(super) fn refresh_quick_open_headings(&mut self) {
+        if self.overlay != Some(Overlay::QuickOpen) {
+            return;
+        }
+        let Some(query) = self.quick_open.heading_query() else {
+            return;
+        };
+        let query = query.to_lowercase();
+        let terms: Vec<_> = query.split_whitespace().collect();
+        let sections = &self.outline.sections;
+        let revision = self.session.document.revision();
+        self.quick_open.rows.clear();
+        self.quick_open.matches = 0;
+        for index in outline::matching_headings(sections, &terms) {
+            self.quick_open.matches += 1;
+            if self.quick_open.rows.len() == MAX_RESULTS {
+                continue;
+            }
+            let mut parents: Vec<_> = outline::heading_parents(sections, index)
+                .map(outline::heading_label)
+                .collect();
+            parents.reverse();
+            self.quick_open.rows.push(Row {
+                target: Target::Heading { index, revision },
+                title: outline::heading_label(&sections[index]).to_owned(),
+                location: parents.join(" › "),
+                unsaved: false,
+                heading: None,
+            });
+        }
+        self.quick_open.selected = self
+            .quick_open
+            .selected
+            .min(self.quick_open.rows.len().saturating_sub(1));
     }
 
     pub(super) fn refresh_quick_open(&mut self) -> Task<AppMessage> {
@@ -534,14 +618,9 @@ impl App {
             }
             self.quick_open.clear();
             self.index_quick_open();
-            // Recent leads with the document before this one, so opening the
-            // switcher and pressing Enter switches back.
-            let previous = self
-                .quick_open
-                .rows
-                .iter()
-                .position(|row| row.heading.as_deref() == Some(RECENT));
-            self.quick_open.selected = previous.unwrap_or(0);
+            // Enter still switches back when the previous document is pinned.
+            let previous = self.quick_open.previous_document();
+            self.quick_open.select(previous.as_ref());
             self.chrome.menu = None;
             self.overlay = Some(Overlay::QuickOpen);
             self.preserve_viewport_generation =
@@ -597,7 +676,11 @@ impl App {
             Message::Query(query) => {
                 self.quick_open.query = query.chars().take(1024).collect();
                 self.quick_open.selected = 0;
-                self.quick_open.list();
+                if self.quick_open.heading_query().is_some() {
+                    self.refresh_quick_open_headings();
+                } else {
+                    self.quick_open.list();
+                }
                 return operation::snap_to(RESULTS, scrollable::RelativeOffset::START);
             }
             Message::Step(direction) => {
@@ -625,12 +708,24 @@ impl App {
                 };
                 return self.pick_quick_open(target);
             }
+            Message::PickHeading {
+                index,
+                revision,
+                request,
+            } => {
+                if self.quick_open.request == request {
+                    return self.pick_quick_open(Target::Heading { index, revision });
+                }
+            }
             Message::StepIn => {
                 if let Some(Target::Folder(folder)) = self.quick_open.selected_target().cloned() {
                     return self.pick_quick_open(Target::Folder(folder));
                 }
             }
             Message::StepOut => {
+                if !self.quick_open.query.is_empty() {
+                    return Task::none();
+                }
                 let Some(folder) = self.quick_open.location.take() else {
                     return Task::none();
                 };
@@ -672,6 +767,18 @@ impl App {
 
     fn pick_quick_open(&mut self, target: Target) -> Task<AppMessage> {
         match target {
+            Target::Heading { index, revision }
+                if !self.busy
+                    && !self.loading
+                    && self.quick_open.heading_query().is_some()
+                    && revision == self.session.document.revision()
+                    && self.quick_open.rows.iter().any(|row| row.target == target) =>
+            {
+                self.quick_open.clear();
+                self.overlay = None;
+                self.preserve_viewport_generation = None;
+                self.update_message(AppMessage::Outline(outline::Message::Jump(index)))
+            }
             Target::Folder(folder) => {
                 self.quick_open.query.clear();
                 self.quick_open.location = Some(folder);
@@ -710,7 +817,9 @@ impl App {
                     None => focus,
                 }
             }
-            Target::Place(_) | Target::File(_) | Target::Session(_) => Task::none(),
+            Target::Place(_) | Target::File(_) | Target::Session(_) | Target::Heading { .. } => {
+                Task::none()
+            }
         }
     }
 
@@ -761,7 +870,13 @@ impl App {
 
     pub(super) fn quick_open_view(&self, size: Size) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let input = text_input("Search or jump to…", &self.quick_open.query)
+        let headings = self.quick_open.heading_query().is_some();
+        let placeholder = if self.outline.sections.is_empty() {
+            "Search or jump to…"
+        } else {
+            "Search or jump to…  # then Space for headings"
+        };
+        let input = text_input(placeholder, &self.quick_open.query)
             .id(INPUT)
             .on_input(|query| AppMessage::QuickOpen(Message::Query(query)))
             .on_submit(AppMessage::QuickOpen(Message::Accept))
@@ -819,6 +934,7 @@ impl App {
                 _ if entry.unsaved => Some(Icon::Modified),
                 Target::Folder(_) | Target::Place(_) => Some(Icon::Folder),
                 Target::File(path) if crate::io::assets::is_image(path) => Some(Icon::Image),
+                Target::Heading { .. } => Some(Icon::Heading),
                 Target::File(_) | Target::Session(_) => None,
             };
             let mut line = row![].spacing(8).align_y(Alignment::Center);
@@ -826,11 +942,19 @@ impl App {
                 line = line.push(icon::sized(mark, tokens.muted, 14.0));
             }
             line = line.push(container(label).clip(true).width(Fill));
+            let activate = match entry.target {
+                Target::Heading { index, revision } => Message::PickHeading {
+                    index,
+                    revision,
+                    request: self.quick_open.request,
+                },
+                _ => Message::Pick(position),
+            };
             let choice = button(container(line).center_y(Fill))
                 .padding([6, 10])
                 .height(entry.height())
                 .width(Fill)
-                .on_press(AppMessage::QuickOpen(Message::Pick(position)))
+                .on_press(AppMessage::QuickOpen(activate))
                 .style(styles::button_style(
                     tokens,
                     if position == self.quick_open.selected {
@@ -846,7 +970,7 @@ impl App {
                     tooltip::Position::Bottom,
                 )
                 .into(),
-                Target::Session(_) => choice.into(),
+                Target::Session(_) | Target::Heading { .. } => choice.into(),
             };
             results = results.push(
                 iced::widget::mouse_area(choice)
@@ -856,7 +980,9 @@ impl App {
         if self.quick_open.rows.is_empty() {
             results = results.push(
                 container(
-                    text(if !self.quick_open.query.trim().is_empty() {
+                    text(if headings {
+                        "No matching headings"
+                    } else if !self.quick_open.query.trim().is_empty() {
                         "No matching documents"
                     } else if self.quick_open.location.is_some() {
                         "This folder holds no documents"
@@ -876,14 +1002,21 @@ impl App {
             .style(styles::scrollbar(tokens));
         let mut content = column![
             row![
-                text("Quick Open").size(13),
+                text(if headings {
+                    "Jump to Heading"
+                } else {
+                    "Quick Open"
+                })
+                .size(13),
                 container(
-                    text(
+                    text(if headings {
+                        self.session.display_name.clone()
+                    } else {
                         self.folder
                             .root()
                             .map(super::folder::name)
                             .unwrap_or_default()
-                    )
+                    })
                     .size(12)
                     .color(tokens.muted)
                     .wrapping(text::Wrapping::None)
