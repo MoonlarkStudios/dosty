@@ -976,14 +976,17 @@ impl State {
             .filter(|(head, _)| *head == source)
             .map(|(_, upstream)| upstream)
     }
-    fn painted_caret(&self, source: usize) -> Rectangle {
-        if self.rich.contains_source(source) {
+    fn window_caret(&self, source: usize, bounds: Rectangle) -> Rectangle {
+        let mut caret = if self.rich.contains_source(source) {
             self.rich
                 .resident()
                 .painted_caret(source, self.caret_affinity(source))
         } else {
             self.caret(source)
-        }
+        };
+        // A stop at the far edge of a full-width row must remain visible.
+        caret.x = caret.x.min((bounds.width - caret.width).max(0.0));
+        caret + (bounds.position() - Point::ORIGIN) - Vector::new(0.0, self.scroll)
     }
     fn set_visual_cursor(&mut self, source: usize, y: f32) {
         self.visual_cursor = Some((source, self.rich.resident().upstream_affinity(source, y)));
@@ -2096,11 +2099,8 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     .blink_started
                     .map_or(0, |start| now.saturating_duration_since(start).as_millis());
                 shell.request_redraw_at(*now + Duration::from_millis((500 - elapsed % 500) as u64));
-                let caret = state.caret(self.source_selection.head)
-                    + (bounds.position() - Point::ORIGIN)
-                    - Vector::new(0.0, state.scroll);
                 shell.request_input_method(&input_method::InputMethod::Enabled {
-                    cursor: caret,
+                    cursor: state.window_caret(self.source_selection.head, bounds),
                     purpose: input_method::Purpose::Normal,
                     preedit: state.preedit.as_ref().map(input_method::Preedit::as_ref),
                 });
@@ -2456,7 +2456,8 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             if self.grid.is_none() && self.display_selection().is_caret() && state.caret_visible() {
                 renderer.fill_quad(
                     renderer::Quad {
-                        bounds: state.painted_caret(self.source_selection.head) + translation,
+                        bounds: state.window_caret(self.source_selection.head, bounds),
+                        snap: true,
                         ..renderer::Quad::default()
                     },
                     tokens.accent,

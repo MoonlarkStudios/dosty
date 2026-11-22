@@ -3790,9 +3790,9 @@ mod tests {
     }
 
     #[test]
-    fn write_caret_keeps_its_height_when_typing_and_erasing_the_first_letter() {
+    fn write_caret_stays_on_the_same_baseline_when_typing_and_erasing_the_first_letter() {
         use iced::advanced::{
-            Layout, Renderer as _, Shell, clipboard, layout, mouse, renderer, widget,
+            Layout, Renderer as _, Shell, clipboard, input_method, layout, mouse, renderer, widget,
         };
         use iced::keyboard::{self, Key, key};
         use iced::{Background, Event, Rectangle, Renderer, Size};
@@ -3800,26 +3800,42 @@ mod tests {
         let size = Size::new(480.0, 320.0);
         let clip = Rectangle::with_size(size);
         let limits = layout::Limits::new(Size::ZERO, size);
-        for (prefix, suffix) in [("", ""), ("Before\n", "\nAfter")] {
+        for (prefix, suffix) in [
+            ("", ""),
+            ("Before\n", "\nAfter"),
+            ("# ", "\nAfter"),
+            ("```text\n", "\n```"),
+            (
+                "A long paragraph of ordinary words that wraps more than once at this writing width.\n\n",
+                "",
+            ),
+        ] {
             let blank = format!("{prefix}{suffix}");
-            let typed = format!("{prefix}a{suffix}");
-            for zoom in [1.0, 1.5] {
+            let typed = format!("{prefix}T{suffix}");
+            for zoom in [0.75, 1.0, 1.5] {
                 let mut app = app(&blank);
                 app.zoom = zoom;
                 app.editor_focused = true;
-                select(&mut app, Selection::caret(prefix.len()));
+                send(
+                    &mut app,
+                    Message::SelectSource(Selection::caret(prefix.len())),
+                );
                 assert_eq!(app.mode, EditorMode::Live);
                 let mut tree = widget::Tree::new(app.editor_view(false).as_widget());
                 let mut renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
                     iced::Font::DEFAULT,
                     17.0.into(),
                 ));
-                let mut caret_heights = Vec::new();
-                for (source, next_key, text) in [
-                    (&blank, Some(Key::Character("a".into())), Some("a")),
+                let mut carets = Vec::new();
+                let mut following_rows = Vec::new();
+                for (frame, (source, next_key, text)) in [
+                    (&blank, Some(Key::Character("T".into())), Some("T")),
                     (&typed, Some(Key::Named(key::Named::Backspace)), None),
                     (&blank, None, None),
-                ] {
+                ]
+                .into_iter()
+                .enumerate()
+                {
                     assert_eq!(app.session.document.source(), source);
                     let head = prefix.len() + usize::from(source == &typed);
                     assert_eq!(app.session.selection, Selection::caret(head));
@@ -3828,14 +3844,41 @@ mod tests {
                     let widget = editor.as_widget_mut();
                     let node = widget.layout(&mut tree, &renderer, &limits);
                     let layout = Layout::new(&node);
-                    widget.operate(
+                    if frame == 0 {
+                        widget.operate(
+                            &mut tree,
+                            layout,
+                            &renderer,
+                            &mut widget::operation::focusable::focus::<()>(widget::Id::from(
+                                super::EDITOR,
+                            )),
+                        );
+                    }
+                    if suffix == "\nAfter" {
+                        following_rows.push(super::RichEditor::screen_y(
+                            &tree,
+                            source.len() - "After".len(),
+                        ));
+                    }
+                    let mut messages = Vec::new();
+                    let mut shell = Shell::new(&mut messages);
+                    widget.update(
                         &mut tree,
-                        layout,
-                        &renderer,
-                        &mut widget::operation::focusable::focus::<()>(widget::Id::from(
-                            super::EDITOR,
+                        &Event::Window(iced::window::Event::RedrawRequested(
+                            iced::time::Instant::now(),
                         )),
+                        layout,
+                        mouse::Cursor::Unavailable,
+                        &renderer,
+                        &mut clipboard::Null,
+                        &mut shell,
+                        &clip,
                     );
+                    let input_method::InputMethod::Enabled { cursor, .. } = shell.input_method()
+                    else {
+                        panic!("focused editor positions the input method");
+                    };
+                    let ime_caret = *cursor;
                     let tokens = app.resolved_theme.tokens;
                     renderer.reset(clip);
                     widget.draw(
@@ -3857,10 +3900,12 @@ mod tests {
                         .iter()
                         .flat_map(|layer| &layer.quads)
                         .find(|(quad, fill)| {
-                            *fill == Background::Color(tokens.accent) && quad.bounds.width == 1.5
+                            *fill == Background::Color(tokens.accent) && quad.bounds.width == 1.0
                         })
                         .expect("focused editor draws a caret");
-                    caret_heights.push(caret.0.bounds.height);
+                    assert!(caret.0.snap);
+                    assert_eq!(caret.0.bounds, ime_caret);
+                    carets.push(caret.0.bounds);
 
                     if let Some(key) = next_key {
                         let event = Event::Keyboard(keyboard::Event::KeyPressed {
@@ -3874,7 +3919,6 @@ mod tests {
                             text: text.map(Into::into),
                             repeat: false,
                         });
-                        let mut messages = Vec::new();
                         widget.update(
                             &mut tree,
                             &event,
@@ -3891,10 +3935,17 @@ mod tests {
                         }
                     }
                 }
-                assert_eq!(
-                    caret_heights, [caret_heights[0]; 3],
-                    "zoom {zoom}, source {blank:?}"
+                assert!(carets[1].x > carets[0].x);
+                assert_eq!(carets[0], carets[2]);
+                assert!(
+                    (carets[0].y - carets[1].y).abs() < 0.01,
+                    "zoom {zoom}, source {blank:?}, carets {carets:?}"
                 );
+                assert_eq!(carets[0].height, carets[1].height);
+                assert_eq!(carets[0].width, carets[1].width);
+                if let Some(first) = following_rows.first() {
+                    assert_eq!(following_rows, [*first; 3]);
+                }
             }
         }
     }

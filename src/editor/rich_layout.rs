@@ -21,7 +21,8 @@ use crate::io::image_store::{Asset, ImageStore};
 use crate::theme::styles;
 use crate::theme::{ResolvedTheme, Tokens, Typography, WritingFont};
 
-const FALLBACK_CARET: Rectangle = Rectangle::new(Point::ORIGIN, Size::new(1.5, 24.0));
+pub(super) const CARET_WIDTH: f32 = 1.0;
+const FALLBACK_CARET: Rectangle = Rectangle::new(Point::ORIGIN, Size::new(CARET_WIDTH, 24.0));
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParagraphKey {
@@ -92,7 +93,6 @@ pub struct ParagraphStyle {
     size: f32,
     bold: bool,
     alignment: u8,
-    caret_height: Option<f32>,
 }
 
 /// A physical paragraph or one table row, with global display offsets.
@@ -263,8 +263,15 @@ impl VisualRow {
             .map_or(self.bounds.x, |(_, x)| self.origin_x + x);
         Rectangle::new(
             Point::new(x, self.bounds.y),
-            Size::new(1.5, self.bounds.height),
+            Size::new(CARET_WIDTH, self.bounds.height),
         )
+    }
+
+    fn painted_caret(&self, offset: usize) -> Rectangle {
+        let mut caret = self.display_caret(offset);
+        caret.height = self.caret_height.min(self.bounds.height);
+        caret.y += (self.bounds.height - caret.height) * 0.5;
+        caret
     }
 }
 
@@ -320,13 +327,7 @@ impl RichLayout {
                 let top = builder.y;
                 match unit.kind {
                     UnitKind::Line(heading) => {
-                        let size = styles::line_size(
-                            builder.size,
-                            heading,
-                            projection.text[unit.range.clone()]
-                                .trim_matches('\r')
-                                .is_empty(),
-                        );
+                        let size = styles::line_size(builder.size, heading);
                         builder.line(unit.range.clone(), size, heading.is_some());
                     }
                     UnitKind::TableRow { table, row } => {
@@ -423,11 +424,7 @@ impl RichLayout {
                 )
                 .filter(|heading| heading.range.start <= start && start < heading.range.end)
                 .map(|heading| heading.level);
-            let size = styles::line_size(
-                builder.size,
-                heading,
-                projection.text[start..end].trim_matches('\r').is_empty(),
-            );
+            let size = styles::line_size(builder.size, heading);
             builder.line(start..end, size, heading.is_some());
             if end == projection.text.len() {
                 break;
@@ -701,13 +698,8 @@ impl RichLayout {
     }
 
     pub(super) fn painted_caret(&self, source: usize, upstream: Option<bool>) -> Rectangle {
-        let Some((row, offset)) = self.source_caret_row(source, None, upstream) else {
-            return FALLBACK_CARET;
-        };
-        let mut caret = row.display_caret(offset);
-        caret.y += (caret.height - row.caret_height) / 2.0;
-        caret.height = row.caret_height;
-        caret
+        self.source_caret_row(source, None, upstream)
+            .map_or(FALLBACK_CARET, |(row, offset)| row.painted_caret(offset))
     }
 
     pub fn visible_fragments(&self, y: Range<f32>) -> impl Iterator<Item = &Fragment> {
@@ -1048,12 +1040,6 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    fn prose_caret_height(&self) -> f32 {
-        // Keep the caret inside even a compact blank paragraph at this zoom.
-        let blank_height = styles::line_size(self.size, None, true) * self.line_height;
-        self.size.min(blank_height)
-    }
-
     fn line(&mut self, range: Range<usize>, size: f32, bold: bool) {
         if let Some((index, block)) = self.projection.rich.code_line(&range) {
             let first = range.start <= block.range.start;
@@ -1087,7 +1073,6 @@ impl Builder<'_> {
                     size,
                     bold: false,
                     alignment: 0,
-                    caret_height: None,
                 },
             );
             self.y += height + if last { 10.0 * self.zoom } else { 0.0 };
@@ -1105,7 +1090,6 @@ impl Builder<'_> {
                 size,
                 bold,
                 alignment: 0,
-                caret_height: (!bold).then(|| self.prose_caret_height()),
             },
         );
         self.y += height;
@@ -1159,7 +1143,7 @@ impl Builder<'_> {
             self.layout.rows.push(VisualRow {
                 display_range: image.range.clone(),
                 bounds: Rectangle::new(Point::new(position.x, bounds.y), Size::new(width, height)),
-                caret_height: height,
+                caret_height: style.size,
                 display_stops: Arc::from([
                     (0, bounds.x),
                     (image.range.len(), bounds.x + bounds.width),
@@ -1199,7 +1183,6 @@ impl Builder<'_> {
             size,
             bold,
             alignment,
-            caret_height,
         } = style;
         let line_index = self
             .line_starts
@@ -1221,17 +1204,6 @@ impl Builder<'_> {
                 Some((start - range.start..end - range.start, *style))
             })
             .collect::<Vec<_>>();
-        let size = if !range.is_empty()
-            && marks.first().is_some_and(|(mark, _)| mark.start == 0)
-            && marks
-                .last()
-                .is_some_and(|(mark, _)| mark.end == range.len())
-            && marks.iter().all(|(_, style)| style.contains(Style::SYNTAX))
-        {
-            self.size * 0.8
-        } else {
-            size
-        };
         let code = self.projection.rich.code_line(&range);
         let syntax = if let Some((index, block)) = code
             && block.body.start <= range.start
@@ -1264,6 +1236,8 @@ impl Builder<'_> {
         } else {
             self.line_height
         };
+        let row_height = size * if bold { 1.3 } else { line_height };
+        let paragraph_line_height = text::LineHeight::Absolute(row_height.into());
         let key = ParagraphKey {
             text: self.projection.text[range.clone()].to_owned(),
             marks,
@@ -1317,15 +1291,18 @@ impl Builder<'_> {
                     spans.push(if style.0 == Style::STRIKETHROUGH {
                         span
                     } else {
-                        span.font_maybe(format.font).color_maybe(format.color).size(
-                            if style.contains(Style::SYNTAX) {
+                        // Glyph sizes can change as syntax is disclosed. Every
+                        // span still takes the paragraph's normal line height.
+                        span.font_maybe(format.font)
+                            .color_maybe(format.color)
+                            .size(if style.contains(Style::SYNTAX) {
                                 self.size * 0.8
                             } else if style.contains(Style::CODE) {
                                 styles::code_size(size)
                             } else {
                                 size
-                            },
-                        )
+                            })
+                            .line_height(paragraph_line_height)
                     });
                     start = mark.end;
                 }
@@ -1336,7 +1313,7 @@ impl Builder<'_> {
                     content: spans.as_slice(),
                     bounds: Size::new(width.max(1.0), f32::INFINITY),
                     size: size.into(),
-                    line_height: text::LineHeight::Relative(if bold { 1.3 } else { line_height }),
+                    line_height: paragraph_line_height,
                     font: Font {
                         weight: if bold {
                             iced::font::Weight::Bold
@@ -1457,9 +1434,7 @@ impl Builder<'_> {
                 })
             });
         let paragraph = &cached.paragraph;
-        let height = paragraph
-            .min_height()
-            .max(size * if bold { 1.3 } else { line_height });
+        let height = paragraph.min_height().max(row_height);
         let origin = Rectangle::new(position, Size::new(width, height)).anchor(
             paragraph.min_bounds(),
             paragraph.align_x(),
@@ -1479,7 +1454,7 @@ impl Builder<'_> {
         for row in &cached.rows {
             self.layout.rows.push(VisualRow {
                 display_range: range.start + row.range.start..range.start + row.range.end,
-                caret_height: caret_height.unwrap_or(row.height),
+                caret_height: size,
                 display_stops: Arc::clone(&row.stops),
                 display_start: range.start,
                 origin_x: origin.x,
@@ -1497,7 +1472,7 @@ impl Builder<'_> {
                 paragraph: paragraph.clone(),
                 origin,
                 display_start: range.start,
-                style: ParagraphStyle { size, ..style },
+                style,
             },
         });
         height
@@ -1538,7 +1513,6 @@ impl Builder<'_> {
                     size: self.size,
                     bold: row_index == 0,
                     alignment,
-                    caret_height: None,
                 },
             );
             height = height.max(h + padding * 2.0);
@@ -1959,6 +1933,24 @@ mod tests {
                 layout.hit(Point::new(caret.x + 0.1, caret.center_y())),
                 offset
             );
+        }
+    }
+
+    #[test]
+    fn inline_styles_and_disclosed_markers_inherit_the_prose_caret_box() {
+        let theme = Preset::Paper.resolve();
+        let images = ImageStore::default();
+        let (_, ordinary) = layout("Type here", 200.0);
+        let expected = ordinary.painted_caret(0, None);
+        for source in ["`Type here`", "**Type here**", "[Type here](url)"] {
+            let head = source.find('T').unwrap();
+            for disclosure in [None, Some(head)] {
+                let projection = Projection::with_context(source, disclosure);
+                let mut rich = RichLayout::default();
+                rich.rebuild(&projection, &theme, 1.0, 200.0, None, &images);
+                let caret = rich.painted_caret(head, None);
+                assert_eq!((caret.y, caret.height), (expected.y, expected.height));
+            }
         }
     }
 
