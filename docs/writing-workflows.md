@@ -232,7 +232,7 @@ On macOS the compact row shares the native titlebar and the system menu bar prov
 
 The filename and save indicator stay visible: an empty circle means never saved, a filled dot means modified, a check means saved, a save icon means saving, and a warning means the last save failed. Hover for details; click to save. Save completion only marks its captured snapshot as saved, so later edits remain modified. Dismissing an error notification leaves the warning until a successful save or different document.
 
-Word count and reading time stay at the bottom center of the writing column while typing. Settings configures them independently and offers a Typeface preference: system sans-serif by default, or Newsreader serif. Typeface changes preserve the source selection and writing viewport, and remain selected when switching color themes. Reading time assumes about 200 words per minute. Changing statistics visibility preserves the writing viewport. macOS View also exposes these preferences; the fallback File menu groups writing preferences and Help/settings on other platforms. Preferences retain no recent-file or folder-session history.
+Word count and reading time stay at the bottom center of the writing column while typing. A selection shows its prose word count alongside the document reading time. Click the statistics or press Cmd/Ctrl+Alt+I for the document word count, Markdown character count, and reading time. Escape closes the details and keeps the selection. Settings configures the gutter statistics independently and offers a Typeface preference: system sans-serif by default, or Newsreader serif. Typeface changes preserve the source selection and writing viewport, and remain selected when switching color themes. Reading time assumes about 200 words per minute. Changing statistics visibility preserves the writing viewport. macOS View also exposes these preferences; the fallback File menu groups writing preferences and Help/settings on other platforms. Preferences retain no recent-file or folder-session history.
 
 ### Quick Open
 
@@ -244,8 +244,11 @@ With an empty query it shows, in order:
 
 - **Unsaved:** documents open in the background with unsaved changes, marked, and
   never the page itself. Choosing one returns it as it was left.
+- **Pinned:** files pinned from their context menu in Files for this place.
+  The pins are remembered in Dosty's workspace state.
 - **Recent:** up to six recently active documents of the open place, leaving out
-  the page. The first is preselected, so Cmd/Ctrl+P then Enter switches back.
+  the page and pinned files. The previous document is preselected in Pinned or
+  Recent, so Cmd/Ctrl+P then Enter switches back.
 - **The open place:** its top-level folders, then its top-level documents. Right
   or Enter steps into the selected folder and Left steps out, returning to the
   folder that was left. Stepping never changes the page.
@@ -259,6 +262,10 @@ lead, then the open place, then other places. A document in another place can be
 matched by its place's name and shows that place beside its folder. Unsaved
 documents match by title. Documents are shown by filename without the Markdown
 extension. The first 100 rows are shown with a match count when more exist.
+
+Type `#` followed by a space and heading terms to search the current document's
+headings, including on a standalone page. Parent titles distinguish repeated
+headings. Use Up/Down and Enter to jump in your current editing mode.
 
 The open place is searched from the same bounded snapshot as Files, including
 collapsed folders; after external file changes, use Refresh in the place-name

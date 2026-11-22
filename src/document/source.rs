@@ -1,6 +1,6 @@
 //! CRDT-authoritative Markdown with an incrementally maintained parsing cache.
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::collections::VecDeque;
 use std::ops::Range;
 
@@ -43,6 +43,7 @@ pub(crate) struct Document {
     collaboration: Collaboration,
     global_dependencies: bool,
     block_changes: Vec<BlockChange>,
+    selected_words: Cell<Option<(Selection, usize)>>,
 }
 
 impl Document {
@@ -58,6 +59,7 @@ impl Document {
             revision: 0,
             global_dependencies: false,
             block_changes: Vec::new(),
+            selected_words: Cell::new(None),
         };
         document.reparse();
         document
@@ -79,6 +81,47 @@ impl Document {
 
     pub(crate) fn words(&self) -> usize {
         self.words
+    }
+
+    pub(crate) fn selected_words(&self, selection: Selection) -> usize {
+        let range = selection.clamp(&self.source).range();
+        if range.is_empty() {
+            return 0;
+        }
+        if range == (0..self.source.len()) {
+            return self.words;
+        }
+        let selection = Selection {
+            anchor: range.start,
+            head: range.end,
+        };
+        if let Some((previous, words)) = self.selected_words.get()
+            && previous == selection
+        {
+            return words;
+        }
+        let first = self
+            .blocks
+            .partition_point(|block| block.range.end <= range.start);
+        let end = self
+            .blocks
+            .partition_point(|block| block.range.start < range.end);
+        let words = self.blocks[first..end]
+            .iter()
+            .map(|block| {
+                if range.start <= block.range.start && range.end >= block.range.end {
+                    block.words
+                } else {
+                    prose_words(
+                        &self.source[block.range.clone()],
+                        range.start.saturating_sub(block.range.start)
+                            ..range.end.min(block.range.end) - block.range.start,
+                    )
+                }
+            })
+            .sum();
+        self.selected_words.set(Some((selection, words)));
+        words
     }
 
     pub(crate) fn revision(&self) -> u64 {
@@ -132,6 +175,7 @@ impl Document {
             revision: 0,
             global_dependencies: false,
             block_changes: Vec::new(),
+            selected_words: Cell::new(None),
         };
         document.reparse();
         Ok(document)
@@ -252,6 +296,7 @@ impl Document {
             }
         }
         self.revision += 1;
+        self.selected_words.set(None);
         // Global footnote numbers and source-offset preview links can change in
         // otherwise untouched blocks. This includes removing the final note.
         if invalidate_read || self.global_dependencies {
@@ -628,30 +673,51 @@ fn parse_block(source: &str, range: Range<usize>, independent: bool) -> Block {
             _ => {}
         }
     }
-    let mut plain = String::new();
-    for event in Parser::new_ext(source, MARKDOWN_OPTIONS) {
-        match event {
-            Event::Text(text) | Event::Code(text) => {
-                plain.push_str(&text);
-            }
-            Event::SoftBreak
-            | Event::HardBreak
-            | Event::End(
-                pulldown_cmark::TagEnd::Paragraph
-                | pulldown_cmark::TagEnd::Heading(_)
-                | pulldown_cmark::TagEnd::Item,
-            ) => plain.push(' '),
-            _ => {}
-        }
-    }
     Block {
         range,
         rendered: OnceCell::new(),
         heading,
-        words: plain.split_whitespace().count(),
+        words: prose_words(source, 0..source.len()),
         characters: source.chars().count(),
         independent,
     }
+}
+
+/// Parse with the containing block so a range that ends inside emphasis or a
+/// link counts the words the delimiters enclose. Whole interior blocks reuse
+/// their cached totals, and only boundary blocks need this ranged pass.
+fn prose_words(source: &str, selected: Range<usize>) -> usize {
+    let mut plain = String::new();
+    for (event, range) in Parser::new_ext(source, MARKDOWN_OPTIONS).into_offset_iter() {
+        let start = selected.start.max(range.start);
+        let end = selected.end.min(range.end);
+        match event {
+            Event::Text(text) | Event::Code(text) if start == range.start && end == range.end => {
+                plain.push_str(&text);
+            }
+            Event::Text(_) if start < end => plain.push_str(&source[start..end]),
+            Event::Code(_) if start < end => {
+                let delimiter = source[range.clone()]
+                    .bytes()
+                    .take_while(|&byte| byte == b'`')
+                    .count();
+                let start = start.max(range.start + delimiter);
+                let end = end.min(range.end - delimiter);
+                if start < end {
+                    plain.push_str(&source[start..end]);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak if start < end => plain.push(' '),
+            Event::End(
+                pulldown_cmark::TagEnd::Paragraph
+                | pulldown_cmark::TagEnd::Heading(_)
+                | pulldown_cmark::TagEnd::Item
+                | pulldown_cmark::TagEnd::TableCell,
+            ) if start < end => plain.push(' '),
+            _ => {}
+        }
+    }
+    plain.split_whitespace().count()
 }
 
 #[cfg(test)]
@@ -1021,6 +1087,33 @@ mod tests {
     fn word_count_does_not_count_inline_delimiters_or_punctuation_as_words() {
         let document = Document::new("Hello **world**! And `code`.\n\n- First\n- Second\n".into());
         assert_eq!(document.words, 6);
+    }
+
+    #[test]
+    fn selection_statistics_count_prose_inside_partially_selected_markdown() {
+        let source = "# Draft\n\n**café and 🦀** [one two](notes.md) `three four`\n\n| A | B |\n|---|---|\n| C | D |";
+        let mut document = Document::new(source.into());
+        let within = |start: &str, end: &str| Selection {
+            anchor: source.find(end).unwrap() + end.len(),
+            head: source.find(start).unwrap(),
+        };
+        assert_eq!(document.selected_words(within("fé", "one")), 4);
+        assert_eq!(document.selected_words(within("notes.md", "notes.md")), 0);
+        assert_eq!(document.selected_words(within("three", "three")), 1);
+        assert_eq!(document.selected_words(within("A | B", "C | D")), 4);
+        assert_eq!(
+            document.selected_words(Selection {
+                anchor: source.len(),
+                head: 0
+            }),
+            document.words()
+        );
+
+        // Same selection coordinates after an edit must use the new prose.
+        let selected = within("one", "two");
+        assert_eq!(document.selected_words(selected), 2);
+        document.replace(selected.range(), "one-two").unwrap();
+        assert_eq!(document.selected_words(selected), 1);
     }
 
     #[test]

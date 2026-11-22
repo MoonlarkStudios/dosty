@@ -181,7 +181,8 @@ the other places on a cancellable worker task whose results it ignores once
 closed or superseded. Its focused query intercepts row navigation locally.
 Acceptance reuses file loading, background resumption, or place opening;
 cancellation restores the previous widget focus without committing a table draft
-or editing the source. Closing discards its index, query, and running scan.
+or editing the source. Closing discards its index, query, and running scan. Heading queries reuse the current Outline. Per-place pins live
+in the remembered workspace state and follow checked file moves.
 
 The folder workflow owns navigation, expanded paths, bounded scan generations,
 and operation identities. Folder discovery returns path-only snapshots from a
