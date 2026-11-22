@@ -460,3 +460,72 @@ fn cancelling_keeps_a_table_draft_and_window_close_still_uses_the_save_guard() {
     assert!(matches!(app.pending, Some(Pending::Close(_))));
     assert!(app.quick_open.candidates.is_empty());
 }
+
+#[test]
+fn heading_scope_works_without_a_place_and_survives_a_library_result() {
+    let source = "# First\n\n## Notes\n\n# 🦀 Ship\n\n## Notes";
+    for mode in [EditorMode::Live, EditorMode::Source, EditorMode::Read] {
+        let (mut app, tasks) = App::new();
+        drop(tasks);
+        app.set_document(
+            source.into(),
+            Some("/standalone/Notes.md".into()),
+            "Notes.md".into(),
+        );
+        drop(app.update_message(AppMessage::SetMode(mode)));
+        drop(app.update_message(AppMessage::HideSidebars));
+        let hidden = app.chrome.sidebars_hidden;
+        drop(app.update_quick_open(Message::Open));
+        drop(app.update_quick_open(Message::Query("# 🦀 notes".into())));
+        assert_eq!(rows(&app.quick_open), ["Notes@🦀 Ship"]);
+        drop(app.update_quick_open(Message::Library {
+            request: app.quick_open.request,
+            snapshots: vec![discovery::Snapshot {
+                root: "/other".into(),
+                entries: entries(&["/other/#Notes.md"], &[]),
+                limited: false,
+                warnings: Vec::new(),
+            }],
+        }));
+        assert_eq!(rows(&app.quick_open), ["Notes@🦀 Ship"]);
+        drop(app.update_quick_open(Message::Accept));
+        assert!(app.overlay.is_none());
+        assert_eq!(
+            app.session.selection,
+            Selection::caret(source.rfind("## Notes").unwrap())
+        );
+        assert_eq!(app.mode, mode);
+        assert_eq!(app.chrome.sidebars_hidden, hidden);
+        assert_eq!(app.session.document.source(), source);
+    }
+}
+
+#[test]
+fn pinned_files_launch_normally_and_preserve_quick_switch() {
+    let root = Path::new("/writing");
+    let active = root.join("Active.md");
+    let a = root.join("A.md");
+    let b = root.join("B.md");
+    let mut app = app(
+        root,
+        &[active.clone(), a.clone(), b.clone(), root.join("#Notes.md")],
+    );
+    app.set_document("# A".into(), Some(a.clone()), "A.md".into());
+    app.set_document("# Active".into(), Some(active), "Active.md".into());
+    drop(app.workspace_pin(&b, true));
+    drop(app.workspace_pin(&a, true));
+    drop(app.update_quick_open(Message::Open));
+    assert_eq!(
+        rows(&app.quick_open)[..2],
+        ["Pinned>B@writing", "A@writing"]
+    );
+    assert_eq!(app.quick_open.selected_target(), Some(&Target::File(a)));
+    assert!(
+        !rows(&app.quick_open)
+            .iter()
+            .any(|row| row.starts_with("Recent>"))
+    );
+
+    drop(app.update_quick_open(Message::Query("#notes".into())));
+    assert_eq!(rows(&app.quick_open), ["#Notes@writing"]);
+}

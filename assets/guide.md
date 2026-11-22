@@ -8,7 +8,9 @@ Dosty reopens where you left off. When there is nothing to return to, it opens a
 
 With a place open, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Files. Use the right button or Cmd/Ctrl+Alt+O to toggle Outline independently. Each toggle keeps its sidebar open until you close it. When both panels cannot fit comfortably, Outline overlays the document rather than squeezing the writing column. **Hide Sidebars** (Cmd/Ctrl+Shift+F) hides both panels while retaining their open state; the same command restores them. Escape dismisses the current editing context rather than restoring hidden sidebars.
 
-**Quick Open** (Cmd/Ctrl+P, or the search icon in Files) is the one place to move between documents. Before you type, it lists documents with unsaved changes, the documents you used most recently, the folders and documents of the open place, and your other places. Use Up/Down to choose, Right or Enter to step into a folder, Left to step back out, and Enter to open a document. Type one or more terms to search by name or path across every place in your library. Escape returns focus to where you were working. The search is cleared when closed.
+**Quick Open** (Cmd/Ctrl+P, or the search icon in Files) is the one place to move between documents. Before you type, it lists documents with unsaved changes, the documents you used most recently, the folders and documents of the open place, and your other places. Use Up/Down to choose, Right or Enter to step into a folder, Left to step back out, and Enter to open a document. Type one or more terms to search by name or path across every place in your library. Escape returns focus to where you were working. The search is cleared when closed. Type `#` and a space to jump to a heading in the current document. Use **Pin in Quick Open** from a file's context menu to keep it above recent files for its place.
+
+**Find in Folder** (Cmd/Ctrl+Alt+F) searches Markdown in the open place. Type a phrase and press Enter. Choose a result to select the match in its file. Escape returns to writing.
 
 **New document** (Cmd/Ctrl+N) gives you an empty page immediately. It takes its title from its first line and belongs to the folder of the document you were in; the first save puts it there without asking, and never over an existing file. Use **Name…** in the document menu to choose the file name yourself first.
 
@@ -24,7 +26,7 @@ In the file tree, Up/Down selects a row, Left/Right collapses or expands folders
 
 Titlebar navigation, the filename, and the save indicator stay visible while you type: a check means saved, a filled dot means unsaved changes, an empty circle means never saved, and a warning means saving failed. Click the indicator to save; hover it for details. The document-name menu holds Save, Rename, Move, and the **Write / Source / Read** modes. Source and Read show a small label beside the filename while active.
 
-**Format** in the titlebar opens formatting and insertion commands on demand. On macOS, the native menu bar also offers File, Edit, Format, View, Window, and Help; Edit commands act on the focused editor, table draft, or text field. **Dosty → Settings…** configures appearance, writing typeface, word count, and reading time. System sans-serif is the default; choose **Writing → Typeface → Serif** for Newsreader. The typeface remains selected when switching themes. Statistics stay at the bottom center of the writing column while you type. Reading time assumes about 200 words per minute. View also exposes the writing preferences. On Windows/Linux, the in-window File menu contains the equivalent command groups. F10 opens that keyboard-operated command menu on every platform.
+**Format** in the titlebar opens formatting and insertion commands on demand. On macOS, the native menu bar also offers File, Edit, Format, View, Window, and Help; Edit commands act on the focused editor, table draft, or text field. **Dosty → Settings…** configures appearance, writing typeface, word count, and reading time. System sans-serif is the default; choose **Writing → Typeface → Serif** for Newsreader. The typeface remains selected when switching themes. Statistics stay at the bottom center of the writing column while you type. Select text to count its words. Click the statistics or press Cmd/Ctrl+Alt+I for document totals, including the Markdown character count. Reading time assumes about 200 words per minute. View also exposes the writing preferences. On Windows/Linux, the in-window File menu contains the equivalent command groups. F10 opens that keyboard-operated command menu on every platform.
 
 ## The essentials
 
@@ -62,6 +64,7 @@ fn main() {
 | Cmd/Ctrl + Shift + B | Toggle Files |
 | Cmd/Ctrl + Alt + O | Toggle Outline |
 | Cmd/Ctrl + F | Find and replace |
+| Cmd/Ctrl + Alt + F | Find in Folder |
 | Cmd/Ctrl + B | Bold selection |
 | Cmd/Ctrl + I | Italic selection |
 | Cmd/Ctrl + K | Create or edit a link |
@@ -76,6 +79,13 @@ fn main() {
 | Cmd/Ctrl + Alt + Left / Right | Collapse / expand its outline branch |
 | Cmd/Ctrl + Z | Undo |
 | Cmd/Ctrl + Shift + Z | Redo |
+
+## Link files in a place
+
+Use **Find file or heading…** in the link dialog to pick a file in the open place or
+one of its headings. Apply writes a relative Markdown link. Open **Linked
+from…** in the filename menu to see which files in the open place link to the current
+document. Choose a result to follow it back to its source.
 
 ## Tables and images, without leaving the page
 

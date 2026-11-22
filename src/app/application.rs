@@ -38,12 +38,16 @@ mod background;
 pub(super) mod chrome;
 #[path = "folder.rs"]
 pub(super) mod folder;
+#[path = "folder_search.rs"]
+mod folder_search;
 #[path = "footnotes.rs"]
 pub(super) mod footnotes;
 #[path = "home.rs"]
 mod home;
 #[path = "image_preview.rs"]
 pub(super) mod image_preview;
+#[path = "document_links.rs"]
+pub(super) mod links;
 #[cfg(target_os = "macos")]
 #[path = "native_menus.rs"]
 pub(super) mod native_menus;
@@ -128,6 +132,7 @@ pub struct App {
     #[cfg(target_os = "macos")]
     native_menu_queue: std::collections::VecDeque<native_menus::Command>,
     folder: folder::State,
+    folder_search: folder_search::State,
     workspace: workspace::State,
     quick_open: quick_open::State,
     image_preview: image_preview::State,
@@ -142,6 +147,7 @@ pub struct App {
     notification: Option<String>,
     zoom: f32,
     writing: writing::State,
+    links: links::State,
     footnotes: footnotes::State,
     recovery: recovery::State,
     outline: outline::State,
@@ -163,6 +169,7 @@ pub enum Message {
     NativeMenusReady,
     Chrome(chrome::Message),
     Folder(folder::Message),
+    FolderSearch(folder_search::Message),
     ImagePreview(image_preview::Message),
     Workspace(workspace::Message),
     QuickOpen(quick_open::Message),
@@ -184,6 +191,7 @@ pub enum Message {
     Outline(outline::Message),
     ToggleSectionFold(Option<(usize, Arc<()>)>),
     Writing(writing::Message),
+    Links(links::Message),
     Recovery(recovery::Message),
     Edit(text_editor::Action),
     CopyCode(String),
@@ -241,6 +249,8 @@ pub enum Message {
     SaveAs,
     ChosenFile(Option<PathBuf>),
     Loaded(Result<LoadedFile, FileError>),
+    LoadedLinked(Result<LoadedFile, FileError>, links::Jump),
+    ResolvedLinked(Result<PathBuf, FileError>, Option<links::Jump>),
     Saved {
         result: Result<PathBuf, FileError>,
         source: Arc<String>,
@@ -310,16 +320,24 @@ pub enum Sidebar {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Overlay {
     Chrome,
+    Statistics,
     Folder,
     QuickOpen,
+    FolderSearch,
     Table,
     Settings,
     Collaboration,
     Unsaved,
     Writing,
+    Backlinks,
     Footnote,
     Recovery,
     Image,
+}
+
+enum OpenPosition {
+    Search(Range<usize>),
+    Link(links::Jump),
 }
 
 #[derive(Debug, Clone)]
@@ -327,6 +345,10 @@ enum Pending {
     FolderNew(PathBuf),
     New,
     Open(Option<PathBuf>),
+    FolderMatch {
+        root: PathBuf,
+        target: crate::io::folder_search::Target,
+    },
     Replica,
     Guide,
     Welcome,
@@ -384,6 +406,7 @@ impl App {
             #[cfg(target_os = "macos")]
             native_menu_queue: std::collections::VecDeque::new(),
             folder: folder::State::default(),
+            folder_search: folder_search::State::default(),
             workspace: workspace::State::default(),
             quick_open: quick_open::State::default(),
             image_preview: image_preview::State::default(),
@@ -398,6 +421,7 @@ impl App {
             notification: None,
             zoom: 1.0,
             writing: writing::State::default(),
+            links: links::State::default(),
             footnotes: footnotes::State::default(),
             recovery: recovery::State::default(),
             outline: outline::State::default(),
@@ -489,6 +513,7 @@ impl App {
                 Some(Overlay::Chrome) => chrome::event_message,
                 Some(Overlay::Folder) => folder::event_message,
                 Some(Overlay::Table) => table::event_message,
+                Some(Overlay::Backlinks) => links::event_message,
                 _ => event_message,
             }),
             #[cfg(target_os = "macos")]
@@ -764,9 +789,17 @@ impl App {
         }
         match message {
             Message::EscapeCaptured => {
+                if self.overlay == Some(Overlay::FolderSearch) {
+                    return self.cancel_folder_search();
+                }
                 if matches!(
                     self.overlay,
-                    Some(Overlay::Chrome | Overlay::Folder | Overlay::QuickOpen)
+                    Some(
+                        Overlay::Chrome
+                            | Overlay::Folder
+                            | Overlay::QuickOpen
+                            | Overlay::Statistics
+                    )
                 ) {
                     return self.update_message(Message::CloseOverlay);
                 }
@@ -796,6 +829,7 @@ impl App {
             Message::NativeMenusReady => self.attach_native_menus(),
             Message::Chrome(message) => return self.update_chrome(message),
             Message::Folder(message) => return self.update_folder(message),
+            Message::FolderSearch(message) => return self.update_folder_search(message),
             Message::ImagePreview(message) => return self.update_image_preview(message),
             Message::Workspace(message) => return self.update_workspace(message),
             Message::QuickOpen(message) => return self.update_quick_open(message),
@@ -817,6 +851,7 @@ impl App {
             Message::Outline(message) => return self.update_outline(message),
             Message::ToggleSectionFold(clicked) => return self.toggle_section_fold(clicked),
             Message::Writing(message) => return self.update_writing(message),
+            Message::Links(message) => return self.update_document_links(message),
             Message::Recovery(message) => return self.update_recovery(message),
             Message::CommitComposition { target, text } => {
                 if let Some(selection) = self
@@ -1170,59 +1205,18 @@ impl App {
                     return self.execute(Pending::Open(Some(path)));
                 }
             }
-            Message::Loaded(result) => {
+            Message::Loaded(result) => return self.complete_document_load(result, None),
+            Message::LoadedLinked(result, jump) => {
+                return self.complete_document_load(result, Some(OpenPosition::Link(jump)));
+            }
+            Message::ResolvedLinked(result, jump) => {
                 self.busy = false;
                 self.loading = false;
                 match result {
-                    Ok(file) => {
-                        let version = file
-                            .collaboration
-                            .as_ref()
-                            .map(collaboration_store::version);
-                        let document = match file.collaboration {
-                            Some(state) => match Document::from_state(&state) {
-                                Ok(document) if document.source() == file.source => document,
-                                Ok(_) => {
-                                    self.notification =
-                                        Some(FileError::MetadataConflict.to_string());
-                                    return Task::none();
-                                }
-                                Err(error) => {
-                                    self.notification = Some(error.to_string());
-                                    return Task::none();
-                                }
-                            },
-                            None => Document::new(file.source),
-                        };
-                        match self.background.take_unchanged(
-                            &file.path,
-                            document.source(),
-                            version.as_deref(),
-                        ) {
-                            Some(parked) => self.install_parked(parked),
-                            None => {
-                                self.install_document(
-                                    document,
-                                    Some(file.path.clone()),
-                                    filename(&file.path),
-                                );
-                                self.session.saved_version = version;
-                            }
-                        }
-                        let folder_task = self.folder_document_changed();
-                        let focus = if self.restore_workspace_caret() {
-                            operation::focus(EDITOR)
-                        } else {
-                            Task::none()
-                        };
-                        return Task::batch([
-                            folder_task,
-                            self.follow_document(),
-                            self.persist_workspace(),
-                            focus,
-                            operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
-                        ]);
+                    Ok(path) if self.session.path.as_ref() == Some(&path) => {
+                        return self.focus_link_target(jump);
                     }
+                    Ok(path) => return self.open_file(path, jump),
                     Err(error) => self.notification = Some(error.to_string()),
                 }
             }
@@ -1358,8 +1352,15 @@ impl App {
                 self.overlay = Some(Overlay::Settings);
             }
             Message::CloseOverlay => {
+                if self.overlay == Some(Overlay::Statistics) {
+                    self.overlay = None;
+                    return Task::none();
+                }
                 if self.overlay == Some(Overlay::QuickOpen) {
                     return self.cancel_quick_open();
+                }
+                if self.overlay == Some(Overlay::FolderSearch) {
+                    return self.cancel_folder_search();
                 }
                 drop(self.update_outline(outline::Message::CancelDrag));
                 if self.overlay.is_none() && self.outline.filter_open {
@@ -1371,7 +1372,8 @@ impl App {
                 if self.overlay == Some(Overlay::Chrome) {
                     self.chrome.menu = None;
                 }
-                let chrome = self.overlay == Some(Overlay::Chrome);
+                let restore_focus =
+                    matches!(self.overlay, Some(Overlay::Chrome | Overlay::Backlinks));
                 let table = matches!(self.overlay, Some(Overlay::Table));
                 if !self.busy {
                     if self.overlay.is_none() {
@@ -1383,6 +1385,7 @@ impl App {
                     }
                     self.overlay = None;
                     self.writing.close_details();
+                    self.links.close();
                     self.footnotes.close();
                     self.table = table::State::default();
                     self.image_preview.close();
@@ -1391,7 +1394,7 @@ impl App {
                         self.editor_focused = true;
                         self.sync_editor();
                     }
-                    if table || chrome {
+                    if table || restore_focus {
                         self.preserve_viewport_generation =
                             Some(self.session.document.collaboration().generation());
                         return operation::focus(EDITOR);
@@ -1573,6 +1576,10 @@ impl App {
                 }
             }
             Message::CloseRequested(id) => {
+                if self.overlay == Some(Overlay::FolderSearch) {
+                    drop(self.cancel_folder_search());
+                    return self.update_message(Message::CloseRequested(id));
+                }
                 if self.overlay == Some(Overlay::QuickOpen) {
                     // Re-enter the ordinary close path after dismissing the
                     // picker so a pending table draft reaches the save guard.
@@ -2367,6 +2374,10 @@ impl App {
         let Some(range) = self.matches.get(self.match_index).cloned() else {
             return Task::none();
         };
+        self.reveal_source_match(range)
+    }
+
+    fn reveal_source_match(&mut self, range: Range<usize>) -> Task<Message> {
         if self.mode == EditorMode::Read {
             self.mode = EditorMode::Live;
         }
@@ -2431,16 +2442,33 @@ impl App {
 
     /// Brings a background document back to the page as it was left.
     fn resume(&mut self, parked: Parked) -> Task<Message> {
+        self.resume_at(parked, None)
+    }
+
+    fn jump_to_open_position(&mut self, jump: OpenPosition) -> Option<Task<Message>> {
+        match jump {
+            OpenPosition::Search(range) => Some(self.jump_to_folder_match(range)),
+            OpenPosition::Link(jump) => self.jump_to_document_link(jump),
+        }
+    }
+
+    fn resume_at(&mut self, parked: Parked, jump: Option<OpenPosition>) -> Task<Message> {
         self.install_parked(parked);
         self.editor_focused = true;
         self.sync_editor();
-        // The same sequence that follows loading a file and restoring its caret.
+        let navigation = jump
+            .and_then(|jump| self.jump_to_open_position(jump))
+            .unwrap_or_else(|| {
+                Task::batch([
+                    operation::focus(EDITOR),
+                    operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+                ])
+            });
         Task::batch([
             self.folder_document_changed(),
             self.follow_document(),
             self.persist_workspace(),
-            operation::focus(EDITOR),
-            operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+            navigation,
         ])
     }
 
@@ -2477,25 +2505,10 @@ impl App {
                 None,
                 "Welcome.md".into(),
             ),
-            Pending::Open(Some(path)) => {
-                // Reading the page's own file would replace its unsaved writing
-                // with the saved copy. A clean page is reread as it always was.
-                if self.session.dirty && self.session.path.as_ref() == Some(&path) {
-                    self.notification = Some(format!(
-                        "{} is already open with unsaved changes.",
-                        self.session.display_name
-                    ));
-                    return Task::none();
-                }
-                // Unsaved writing is newer than the file, so it returns without
-                // a read. Saving still checks the file against its baseline.
-                if let Some(parked) = self.background.take_dirty(Some(&path)) {
-                    return self.resume(parked);
-                }
-                self.busy = true;
-                self.loading = true;
-                return Task::perform(storage::load(path), Message::Loaded);
+            Pending::FolderMatch { root, target } => {
+                return self.open_folder_match(root, target);
             }
+            Pending::Open(Some(path)) => return self.open_file(path, None),
             Pending::Open(None) => {
                 self.busy = true;
                 self.loading = true;
@@ -2544,6 +2557,93 @@ impl App {
             }
         }
         operation::snap_to(SCROLL, scrollable::RelativeOffset::START)
+    }
+
+    fn open_file(&mut self, path: PathBuf, jump: Option<links::Jump>) -> Task<Message> {
+        // Reading the page's own file would replace its unsaved writing
+        // with the saved copy. A clean page is reread as it always was.
+        if self.session.dirty && self.session.path.as_ref() == Some(&path) {
+            self.notification = Some(format!(
+                "{} is already open with unsaved changes.",
+                self.session.display_name
+            ));
+            return Task::none();
+        }
+        // Unsaved writing is newer than the file, so it returns without
+        // a read. Saving still checks the file against its baseline.
+        if let Some(parked) = self.background.take_dirty(Some(&path)) {
+            return self.resume_at(parked, jump.map(OpenPosition::Link));
+        }
+        self.busy = true;
+        self.loading = true;
+        Task::perform(storage::load(path), move |result| match &jump {
+            Some(jump) => Message::LoadedLinked(result, jump.clone()),
+            None => Message::Loaded(result),
+        })
+    }
+
+    fn complete_document_load(
+        &mut self,
+        result: Result<LoadedFile, FileError>,
+        jump: Option<OpenPosition>,
+    ) -> Task<Message> {
+        self.busy = false;
+        self.loading = false;
+        let file = match result {
+            Ok(file) => file,
+            Err(error) => {
+                self.notification = Some(error.to_string());
+                return Task::none();
+            }
+        };
+        let version = file
+            .collaboration
+            .as_ref()
+            .map(collaboration_store::version);
+        let document = match file.collaboration {
+            Some(state) => match Document::from_state(&state) {
+                Ok(document) if document.source() == file.source => document,
+                Ok(_) => {
+                    self.notification = Some(FileError::MetadataConflict.to_string());
+                    return Task::none();
+                }
+                Err(error) => {
+                    self.notification = Some(error.to_string());
+                    return Task::none();
+                }
+            },
+            None => Document::new(file.source),
+        };
+        match self
+            .background
+            .take_unchanged(&file.path, document.source(), version.as_deref())
+        {
+            Some(parked) => self.install_parked(parked),
+            None => {
+                self.install_document(document, Some(file.path.clone()), filename(&file.path));
+                self.session.saved_version = version;
+            }
+        }
+        let folder_task = self.folder_document_changed();
+        let navigation = jump
+            .and_then(|jump| self.jump_to_open_position(jump))
+            .unwrap_or_else(|| {
+                let focus = if self.restore_workspace_caret() {
+                    operation::focus(EDITOR)
+                } else {
+                    Task::none()
+                };
+                Task::batch([
+                    focus,
+                    operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+                ])
+            });
+        Task::batch([
+            folder_task,
+            self.follow_document(),
+            self.persist_workspace(),
+            navigation,
+        ])
     }
 
     fn set_document(&mut self, source: String, path: Option<PathBuf>, name: String) {
@@ -2604,10 +2704,12 @@ impl App {
         #[cfg(target_os = "macos")]
         self.native_menu_queue.clear();
         self.writing = writing::State::default();
+        self.links.close();
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
         self.section_folds = section_folding::State::default();
         self.quick_open.clear();
+        self.folder_search.clear();
         self.table = table::State::default();
         self.table_editing = None;
         self.grid = table_grid::State::default();
@@ -2771,21 +2873,25 @@ impl App {
                 if self.context_menu_open(overlay) {
                     return match overlay {
                         Overlay::Chrome => self.chrome_menu_view(size),
+                        Overlay::Statistics => self.statistics_popover(size),
                         Overlay::Folder => self.folder_menu_view(size),
                         _ => self.table_menu_view(size),
                     };
                 }
                 let modal = match overlay {
                     Overlay::Chrome => self.chrome_menu_view(size),
+                    Overlay::Statistics => self.statistics_popover(size),
                     Overlay::Folder => self.folder_overlay_view((size.height - 48.0).max(80.0)),
                     Overlay::Settings => self.settings_view((size.height - 48.0).min(760.0)),
                     Overlay::Collaboration => self.collaboration_view(),
                     Overlay::Unsaved => self.unsaved_view(),
                     Overlay::Writing => self.writing_view(),
+                    Overlay::Backlinks => self.backlinks_view(),
                     Overlay::Footnote => self.footnote_view(),
                     Overlay::Recovery => self.recovery_view(),
                     Overlay::Image => self.image_preview_view(),
                     Overlay::QuickOpen => self.quick_open_view(size),
+                    Overlay::FolderSearch => self.folder_search_view(size.height),
                     Overlay::Table => self.table_view(),
                 };
                 container(
@@ -2825,7 +2931,7 @@ impl App {
 
     fn context_menu_open(&self, overlay: Overlay) -> bool {
         match overlay {
-            Overlay::Chrome => true,
+            Overlay::Chrome | Overlay::Statistics => true,
             Overlay::Folder => self.folder.is_menu(),
             Overlay::Table => self.table.is_menu(),
             _ => false,
@@ -3633,6 +3739,9 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 } else {
                     Message::Save
                 }),
+                "f" if modifiers.alt() && !modifiers.shift() => {
+                    Some(Message::FolderSearch(folder_search::Message::Open))
+                }
                 "f" => Some(if modifiers.shift() {
                     Message::HideSidebars
                 } else {
@@ -3640,6 +3749,9 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 }),
                 "b" if modifiers.shift() => Some(Message::ToggleSidebar(Sidebar::Files)),
                 "b" => Some(Message::Format(Format::Bold)),
+                "i" if modifiers.alt() && !modifiers.shift() => {
+                    Some(Message::Chrome(chrome::Message::Statistics))
+                }
                 "i" => Some(Message::Format(Format::Italic)),
                 "x" if modifiers.shift() => Some(Message::Format(Format::Strikethrough)),
                 "k" => Some(Message::Format(Format::Link)),

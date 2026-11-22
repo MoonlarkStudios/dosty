@@ -110,16 +110,18 @@ pub async fn save_preferences(preferences: Preferences) -> Result<(), FileError>
 }
 
 pub async fn load(path: PathBuf) -> Result<LoadedFile, FileError> {
-    tokio::task::spawn_blocking(move || {
-        let (source, collaboration) = crate::io::collaboration_store::load(&path)?;
-        Ok(LoadedFile {
-            path,
-            source,
-            collaboration,
-        })
+    tokio::task::spawn_blocking(move || load_blocking(path))
+        .await
+        .map_err(|error| FileError::Io(error.to_string()))?
+}
+
+pub(super) fn load_blocking(path: PathBuf) -> Result<LoadedFile, FileError> {
+    let (source, collaboration) = crate::io::collaboration_store::load(&path)?;
+    Ok(LoadedFile {
+        path,
+        source,
+        collaboration,
     })
-    .await
-    .map_err(|error| FileError::Io(error.to_string()))?
 }
 
 pub async fn save(

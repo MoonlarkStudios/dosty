@@ -97,6 +97,18 @@ impl State {
         self.loaded = true;
     }
 
+    pub(super) fn pins(&self, root: &Path) -> &[PathBuf] {
+        self.current
+            .as_ref()
+            .filter(|workspace| workspace.root == root)
+            .map_or(&[], |workspace| workspace.pins.as_slice())
+    }
+
+    pub(super) fn pin_status(&self, path: &Path) -> Option<bool> {
+        let workspace = self.current.as_ref()?;
+        workspace.pin_status(path.strip_prefix(&workspace.root).ok()?)
+    }
+
     /// Absolute paths of the current workspace's documents, most recent first.
     pub(super) fn recent_documents(&self) -> Vec<PathBuf> {
         self.current.as_ref().map_or_else(Vec::new, |workspace| {
@@ -266,7 +278,7 @@ impl App {
 
     /// Adopt a successfully scanned root as the current workspace, applying
     /// its remembered state when it was opened through [`Self::open_workspace`].
-    pub(super) fn workspace_scanned(&mut self, root: &Path) -> Task<AppMessage> {
+    pub(super) fn workspace_scanned(&mut self, root: &Path, complete: bool) -> Task<AppMessage> {
         let opening = self
             .workspace
             .opening
@@ -277,7 +289,11 @@ impl App {
             .as_ref()
             .is_some_and(|current| current.root == root)
         {
-            return Task::none();
+            return if complete && self.prune_workspace_pins() {
+                self.persist_workspace()
+            } else {
+                Task::none()
+            };
         }
         self.capture_workspace();
         if let Some(outgoing) = self.workspace.current.take() {
@@ -317,8 +333,39 @@ impl App {
             self.notification = Some(LIBRARY_FULL.into());
         }
         self.workspace.current = Some(workspace);
+        if complete {
+            self.prune_workspace_pins();
+        }
         let open = reopen.map_or_else(Task::none, |path| self.request(Pending::Open(Some(path))));
         Task::batch([self.persist_workspace(), open])
+    }
+
+    /// Only a complete scan can confirm that a pin is no longer available.
+    fn prune_workspace_pins(&mut self) -> bool {
+        let Some(workspace) = &mut self.workspace.current else {
+            return false;
+        };
+        let before = workspace.pins.len();
+        workspace
+            .pins
+            .retain(|path| self.folder.has_file(&workspace.root.join(path)));
+        workspace.pins.len() != before
+    }
+
+    pub(super) fn workspace_pin(&mut self, path: &Path, pinned: bool) -> Task<AppMessage> {
+        let Some(workspace) = &mut self.workspace.current else {
+            return Task::none();
+        };
+        let Ok(relative) = path.strip_prefix(&workspace.root) else {
+            return Task::none();
+        };
+        match workspace.set_pin(relative, pinned) {
+            Ok(()) => self.persist_workspace(),
+            Err(error) => {
+                self.notification = Some(error.into());
+                Task::none()
+            }
+        }
     }
 
     /// Remove the open place from the library. Its remembered state is

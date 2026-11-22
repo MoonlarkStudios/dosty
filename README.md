@@ -17,6 +17,7 @@ place. Files shows the open place in the left sidebar; an optional Outline lives
 the right. The place-name menu moves between places and manages the open one. Quick Open (Cmd/Ctrl+P) is the
 one surface for moving between documents: unsaved and recent documents, the open
 place's folders to step through, and search across every place by name or path.
+Find in Folder (Cmd/Ctrl+Alt+F) searches Markdown text in the open place.
 An always-visible titlebar offers formatting on demand and a document menu for editing
 modes. Writing uses sans-serif text by default, with serif available in Settings. macOS uses native application menus. Configurable word count and reading
 time sit below the writing area. Places stay in the library until you remove them:

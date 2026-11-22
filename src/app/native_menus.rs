@@ -33,12 +33,14 @@ pub enum Command {
     Close,
     Edit(menu_input::Command),
     Find,
+    FindInFolder,
     Format(Format),
     Image,
     Files,
     Outline,
     FilterOutline,
     HideSidebars,
+    DocumentStatistics,
     ToggleSectionFold,
     Mode(EditorMode),
     Preference(chrome::Preference),
@@ -255,6 +257,13 @@ impl State {
             Some("Meta+f"),
             false,
         )?;
+        state.add(
+            &edit,
+            "Find in Folder…",
+            Command::FindInFolder,
+            Some("Meta+Alt+f"),
+            false,
+        )?;
         state.root.append(&edit)?;
 
         let format = Submenu::new("Format", true);
@@ -302,6 +311,13 @@ impl State {
             state.add(&view, label, command, shortcut, check)?;
         }
         view.append(&PredefinedMenuItem::separator())?;
+        state.add(
+            &view,
+            "Document Statistics…",
+            Command::DocumentStatistics,
+            Some("Meta+Alt+i"),
+            false,
+        )?;
         for (label, preference) in [
             ("Word Count", chrome::Preference::WordCount),
             ("Reading Time", chrome::Preference::ReadingTime),
@@ -411,6 +427,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
     match command {
         Command::QuickOpen => (ready, false),
+        Command::FindInFolder => (ready && app.folder.root().is_some(), false),
         Command::Step(direction) => (ready && app.trail.can_step(direction), false),
         Command::OpenPlace(index) => (ready && index < app.workspace.places().len(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),
@@ -435,6 +452,7 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
             ready && (app.chrome.files.open || app.chrome.outline.open),
             false,
         ),
+        Command::DocumentStatistics => (ready || app.overlay == Some(Overlay::Statistics), false),
         Command::Preference(preference) => (
             true,
             match preference {
@@ -512,6 +530,7 @@ impl App {
             Command::SaveAs => Message::SaveAs,
             Command::Export => Message::Export,
             Command::Find => Message::ToggleSearch,
+            Command::FindInFolder => Message::FolderSearch(super::folder_search::Message::Open),
             Command::Settings => Message::ShowSettings,
             Command::Welcome => Message::Welcome,
             Command::Guide => Message::Guide,
@@ -527,6 +546,7 @@ impl App {
             Command::Outline => Message::ToggleSidebar(Sidebar::Outline),
             Command::FilterOutline => Message::Outline(super::outline::Message::Filter),
             Command::HideSidebars => Message::HideSidebars,
+            Command::DocumentStatistics => Message::Chrome(chrome::Message::Statistics),
             Command::ToggleSectionFold => Message::ToggleSectionFold(None),
             Command::Mode(mode) => Message::SetMode(mode),
             Command::WritingFont(font) => Message::WritingFont(font),

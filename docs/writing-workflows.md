@@ -232,7 +232,7 @@ On macOS the compact row shares the native titlebar and the system menu bar prov
 
 The filename and save indicator stay visible: an empty circle means never saved, a filled dot means modified, a check means saved, a save icon means saving, and a warning means the last save failed. Hover for details; click to save. Save completion only marks its captured snapshot as saved, so later edits remain modified. Dismissing an error notification leaves the warning until a successful save or different document.
 
-Word count and reading time stay at the bottom center of the writing column while typing. Settings configures them independently and offers a Typeface preference: system sans-serif by default, or Newsreader serif. Typeface changes preserve the source selection and writing viewport, and remain selected when switching color themes. Reading time assumes about 200 words per minute. Changing statistics visibility preserves the writing viewport. macOS View also exposes these preferences; the fallback File menu groups writing preferences and Help/settings on other platforms. Preferences retain no recent-file or folder-session history.
+Word count and reading time stay at the bottom center of the writing column while typing. A selection shows its prose word count alongside the document reading time. Click the statistics or press Cmd/Ctrl+Alt+I for the document word count, Markdown character count, and reading time. Escape closes the details and keeps the selection. Settings configures the gutter statistics independently and offers a Typeface preference: system sans-serif by default, or Newsreader serif. Typeface changes preserve the source selection and writing viewport, and remain selected when switching color themes. Reading time assumes about 200 words per minute. Changing statistics visibility preserves the writing viewport. macOS View also exposes these preferences; the fallback File menu groups writing preferences and Help/settings on other platforms. Preferences retain no recent-file or folder-session history.
 
 ### Quick Open
 
@@ -244,8 +244,11 @@ With an empty query it shows, in order:
 
 - **Unsaved:** documents open in the background with unsaved changes, marked, and
   never the page itself. Choosing one returns it as it was left.
+- **Pinned:** files pinned from their context menu in Files for this place.
+  The pins are remembered in Dosty's workspace state.
 - **Recent:** up to six recently active documents of the open place, leaving out
-  the page. The first is preselected, so Cmd/Ctrl+P then Enter switches back.
+  the page and pinned files. The previous document is preselected in Pinned or
+  Recent, so Cmd/Ctrl+P then Enter switches back.
 - **The open place:** its top-level folders, then its top-level documents. Right
   or Enter steps into the selected folder and Left steps out, returning to the
   folder that was left. Stepping never changes the page.
@@ -259,6 +262,10 @@ lead, then the open place, then other places. A document in another place can be
 matched by its place's name and shows that place beside its folder. Unsaved
 documents match by title. Documents are shown by filename without the Markdown
 extension. The first 100 rows are shown with a match count when more exist.
+
+Type `#` followed by a space and heading terms to search the current document's
+headings, including on a standalone page. Parent titles distinguish repeated
+headings. Use Up/Down and Enter to jump in your current editing mode.
 
 The open place is searched from the same bounded snapshot as Files, including
 collapsed folders; after external file changes, use Refresh in the place-name
@@ -275,6 +282,22 @@ document on the page only closes the switcher. Opening a place from outside the
 switcher closes it; a refresh updates its rows. It is unavailable while another
 modal or file load is active.
 
+### Find in Folder
+
+Press Cmd/Ctrl+Alt+F to search the open place. Enter a literal, case-sensitive
+phrase and press Enter or choose **Search**. Results show an excerpt, relative
+filename, and line number. Use Up/Down and Enter, or click a result, to select
+the match in its document. Matches in concealed Markdown syntax open in Source.
+Switching files keeps unsaved writing open in the background. If a result has
+changed since the search, run the search again to update its location.
+
+Search uses the current Files snapshot and includes the active Markdown file
+and unsaved background versions of files in the open place. Refresh the folder
+to discover newly added files. Search examines up to 4,096 files and 128 MiB of
+text, including up to 32 MiB of open buffers, and shows up to 100 matches. The
+status reports partial results or skipped files. Reading files runs on a worker
+and stops when the query changes or the dialog closes.
+
 ## Writing and details
 
 - **Link:** select a phrase and use Cmd/Ctrl+K or the link control. Apply edits
@@ -282,10 +305,22 @@ modal or file load is active.
   label formatting and Markdown titles. Editing a reference-style link normalizes
   it to an inline link. Pasting a web/email URL over selected text creates a link;
   cross-paragraph selections do not become one link.
+- **Find file or heading:** when a document is saved in the open place or a
+  draft will first save there, open the link dialog and choose **Find file or heading…**, or press Down in the
+  Destination field. Filter file names or paths, choose a result, and pick the
+  whole file or one of its headings. Up/Down and Enter choose a result. Escape
+  returns to the destination. Apply inserts an ordinary relative Markdown link
+  such as `[Methods](<chapter-2.md#methods>)`.
 - **Open a link:** Cmd/Ctrl-click or use Open in its details. HTTP/HTTPS and email
-  use the OS handler. `#heading-slug` navigates locally. Relative `.md`, `.markdown`,
-  and `.txt` links keep the outgoing document open in the background. Unsupported schemes produce
-  a message. Cross-file fragments and hover cards are unsupported.
+  use the OS handler. `#heading-slug` navigates within the current file.
+  Links to `.md`, `.markdown`, and `.txt` files keep the outgoing document
+  open in the background and can jump to a named heading. Heading labels become
+  lowercase slugs, or use an explicit ID from `{#id}`. Repeated IDs receive a
+  numeric suffix.
+- **Linked from:** open the filename menu to find files in the open place that
+  link to the current file. Choose a result to switch to that file and jump to
+  the link. The panel reads saved Markdown and marks incomplete scans. A
+  document edited since the scan returns with its remembered position.
 - **Image:** choose a file/URL, paste one copied image file or raster image, or
   drop PNG/JPEG/GIF/WebP at the current source selection. Double-click an image,
   or use Image from its caption/credit, to edit details. Images preserve aspect
