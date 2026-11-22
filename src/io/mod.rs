@@ -2,6 +2,7 @@
 
 pub(crate) mod assets;
 pub(crate) mod collaboration_store;
+pub(crate) mod document_links;
 pub(crate) mod export;
 pub(crate) mod file_ops;
 pub(crate) mod folder;

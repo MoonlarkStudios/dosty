@@ -200,6 +200,13 @@ result goes through the ordinary opening and save guards, and its source
 digest is checked before selecting its byte range. Query changes and dialog
 dismissal cancel the worker.
 
+Link suggestions use the current folder snapshot for file paths and a bounded
+worker read for target headings. The **Linked from** action scans saved
+workspace files for explicit Markdown links on a cancellable worker. Resolved
+destinations use the ordinary document opening path, including resumption of
+unsaved background sessions. The destination document supplies the heading or
+validates a backlink's source offset against the scanned bytes.
+
 Markdown/checkpoint publication uses cooperative locks, checked baselines, atomic
 writes, and a recovery journal. Conflicts preserve files and surface an error.
 Each reopen uses a fresh writer identity. See [persistence and recovery](collaboration.md#persistence-and-recovery)

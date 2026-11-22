@@ -11,7 +11,7 @@ use iced::keyboard::key::Named;
 use iced::widget::{button, column, container, operation, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Fill, Task};
 
-use super::{App, EDITOR, Message as AppMessage, Overlay, Pending};
+use super::{App, EDITOR, Message as AppMessage, OpenPosition, Overlay, Pending};
 use crate::app::icon::Icon;
 use crate::document::selection::Selection;
 use crate::editor::outline_filter::FilterInput;
@@ -107,8 +107,10 @@ impl App {
             Message::Complete(result) => return self.finish_folder_search(result),
             Message::Opened(result) => {
                 return match result {
-                    Ok((file, range)) => self.finish_load(Ok(file), Some(range)),
-                    Err(error) => self.finish_load(Err(error), None),
+                    Ok((file, range)) => {
+                        self.complete_document_load(Ok(file), Some(OpenPosition::Search(range)))
+                    }
+                    Err(error) => self.complete_document_load(Err(error), None),
                 };
             }
             Message::Open => return self.show_folder_search(),
@@ -340,7 +342,7 @@ impl App {
             let Some(parked) = self.background.take_unsaved(id) else {
                 return Task::none();
             };
-            return self.resume_at(parked, Some(range));
+            return self.resume_at(parked, Some(OpenPosition::Search(range)));
         }
         self.busy = true;
         self.loading = true;

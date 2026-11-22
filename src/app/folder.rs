@@ -222,7 +222,7 @@ impl State {
             .map(|entry| entry.path.as_path())
     }
     pub(super) fn incomplete(&self) -> bool {
-        self.limited || !self.warnings.is_empty()
+        self.scanning || self.limited || self.error.is_some() || !self.warnings.is_empty()
     }
 
     pub(super) fn notice(&self) -> Option<&str> {

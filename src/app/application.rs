@@ -46,6 +46,8 @@ pub(super) mod footnotes;
 mod home;
 #[path = "image_preview.rs"]
 pub(super) mod image_preview;
+#[path = "document_links.rs"]
+pub(super) mod links;
 #[cfg(target_os = "macos")]
 #[path = "native_menus.rs"]
 pub(super) mod native_menus;
@@ -143,6 +145,7 @@ pub struct App {
     notification: Option<String>,
     zoom: f32,
     writing: writing::State,
+    links: links::State,
     footnotes: footnotes::State,
     recovery: recovery::State,
     outline: outline::State,
@@ -184,6 +187,7 @@ pub enum Message {
     Footnote(footnotes::Message),
     Outline(outline::Message),
     Writing(writing::Message),
+    Links(links::Message),
     Recovery(recovery::Message),
     Edit(text_editor::Action),
     CopyCode(String),
@@ -241,6 +245,8 @@ pub enum Message {
     SaveAs,
     ChosenFile(Option<PathBuf>),
     Loaded(Result<LoadedFile, FileError>),
+    LoadedLinked(Result<LoadedFile, FileError>, links::Jump),
+    ResolvedLinked(Result<PathBuf, FileError>, Option<links::Jump>),
     Saved {
         result: Result<PathBuf, FileError>,
         source: Arc<String>,
@@ -319,9 +325,15 @@ enum Overlay {
     Collaboration,
     Unsaved,
     Writing,
+    Backlinks,
     Footnote,
     Recovery,
     Image,
+}
+
+enum OpenPosition {
+    Search(Range<usize>),
+    Link(links::Jump),
 }
 
 #[derive(Debug, Clone)]
@@ -405,6 +417,7 @@ impl App {
             notification: None,
             zoom: 1.0,
             writing: writing::State::default(),
+            links: links::State::default(),
             footnotes: footnotes::State::default(),
             recovery: recovery::State::default(),
             outline: outline::State::default(),
@@ -495,6 +508,7 @@ impl App {
                 Some(Overlay::Chrome) => chrome::event_message,
                 Some(Overlay::Folder) => folder::event_message,
                 Some(Overlay::Table) => table::event_message,
+                Some(Overlay::Backlinks) => links::event_message,
                 _ => event_message,
             }),
             #[cfg(target_os = "macos")]
@@ -830,6 +844,7 @@ impl App {
             Message::Footnote(message) => return self.update_footnote(message),
             Message::Outline(message) => return self.update_outline(message),
             Message::Writing(message) => return self.update_writing(message),
+            Message::Links(message) => return self.update_document_links(message),
             Message::Recovery(message) => return self.update_recovery(message),
             Message::CommitComposition { target, text } => {
                 if let Some(selection) = self
@@ -1183,7 +1198,21 @@ impl App {
                     return self.execute(Pending::Open(Some(path)));
                 }
             }
-            Message::Loaded(result) => return self.finish_load(result, None),
+            Message::Loaded(result) => return self.complete_document_load(result, None),
+            Message::LoadedLinked(result, jump) => {
+                return self.complete_document_load(result, Some(OpenPosition::Link(jump)));
+            }
+            Message::ResolvedLinked(result, jump) => {
+                self.busy = false;
+                self.loading = false;
+                match result {
+                    Ok(path) if self.session.path.as_ref() == Some(&path) => {
+                        return self.focus_link_target(jump);
+                    }
+                    Ok(path) => return self.open_file(path, jump),
+                    Err(error) => self.notification = Some(error.to_string()),
+                }
+            }
             Message::Saved {
                 result,
                 source,
@@ -1336,7 +1365,8 @@ impl App {
                 if self.overlay == Some(Overlay::Chrome) {
                     self.chrome.menu = None;
                 }
-                let chrome = self.overlay == Some(Overlay::Chrome);
+                let restore_focus =
+                    matches!(self.overlay, Some(Overlay::Chrome | Overlay::Backlinks));
                 let table = matches!(self.overlay, Some(Overlay::Table));
                 if !self.busy {
                     if self.overlay.is_none() {
@@ -1348,6 +1378,7 @@ impl App {
                     }
                     self.overlay = None;
                     self.writing.close_details();
+                    self.links.close();
                     self.footnotes.close();
                     self.table = table::State::default();
                     self.image_preview.close();
@@ -1356,7 +1387,7 @@ impl App {
                         self.editor_focused = true;
                         self.sync_editor();
                     }
-                    if table || chrome {
+                    if table || restore_focus {
                         self.preserve_viewport_generation =
                             Some(self.session.document.collaboration().generation());
                         return operation::focus(EDITOR);
@@ -2331,74 +2362,6 @@ impl App {
         Task::batch([task, operation::focus(EDITOR)])
     }
 
-    fn finish_load(
-        &mut self,
-        result: Result<LoadedFile, FileError>,
-        match_range: Option<Range<usize>>,
-    ) -> Task<Message> {
-        self.busy = false;
-        self.loading = false;
-        match result {
-            Ok(file) => {
-                let version = file
-                    .collaboration
-                    .as_ref()
-                    .map(collaboration_store::version);
-                let document = match file.collaboration {
-                    Some(state) => match Document::from_state(&state) {
-                        Ok(document) if document.source() == file.source => document,
-                        Ok(_) => {
-                            self.notification = Some(FileError::MetadataConflict.to_string());
-                            return Task::none();
-                        }
-                        Err(error) => {
-                            self.notification = Some(error.to_string());
-                            return Task::none();
-                        }
-                    },
-                    None => Document::new(file.source),
-                };
-                match self.background.take_unchanged(
-                    &file.path,
-                    document.source(),
-                    version.as_deref(),
-                ) {
-                    Some(parked) => self.install_parked(parked),
-                    None => {
-                        self.install_document(
-                            document,
-                            Some(file.path.clone()),
-                            filename(&file.path),
-                        );
-                        self.session.saved_version = version;
-                    }
-                }
-                let folder_task = self.folder_document_changed();
-                let position = if let Some(range) = match_range {
-                    self.jump_to_folder_match(range)
-                } else {
-                    let focus = if self.restore_workspace_caret() {
-                        operation::focus(EDITOR)
-                    } else {
-                        Task::none()
-                    };
-                    Task::batch([
-                        focus,
-                        operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
-                    ])
-                };
-                return Task::batch([
-                    folder_task,
-                    self.follow_document(),
-                    self.persist_workspace(),
-                    position,
-                ]);
-            }
-            Err(error) => self.notification = Some(error.to_string()),
-        }
-        Task::none()
-    }
-
     fn reveal_match(&mut self) -> Task<Message> {
         let Some(range) = self.matches.get(self.match_index).cloned() else {
             return Task::none();
@@ -2474,24 +2437,30 @@ impl App {
         self.resume_at(parked, None)
     }
 
-    fn resume_at(&mut self, parked: Parked, match_range: Option<Range<usize>>) -> Task<Message> {
+    fn jump_to_open_position(&mut self, jump: OpenPosition) -> Option<Task<Message>> {
+        match jump {
+            OpenPosition::Search(range) => Some(self.jump_to_folder_match(range)),
+            OpenPosition::Link(jump) => self.jump_to_document_link(jump),
+        }
+    }
+
+    fn resume_at(&mut self, parked: Parked, jump: Option<OpenPosition>) -> Task<Message> {
         self.install_parked(parked);
-        let position = if let Some(range) = match_range {
-            self.jump_to_folder_match(range)
-        } else {
-            self.editor_focused = true;
-            self.sync_editor();
-            Task::batch([
-                operation::focus(EDITOR),
-                operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
-            ])
-        };
-        // The same sequence that follows loading a file and restoring its caret.
+        self.editor_focused = true;
+        self.sync_editor();
+        let navigation = jump
+            .and_then(|jump| self.jump_to_open_position(jump))
+            .unwrap_or_else(|| {
+                Task::batch([
+                    operation::focus(EDITOR),
+                    operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+                ])
+            });
         Task::batch([
             self.folder_document_changed(),
             self.follow_document(),
             self.persist_workspace(),
-            position,
+            navigation,
         ])
     }
 
@@ -2531,25 +2500,7 @@ impl App {
             Pending::FolderMatch { root, target } => {
                 return self.open_folder_match(root, target);
             }
-            Pending::Open(Some(path)) => {
-                // Reading the page's own file would replace its unsaved writing
-                // with the saved copy. A clean page is reread as it always was.
-                if self.session.dirty && self.session.path.as_ref() == Some(&path) {
-                    self.notification = Some(format!(
-                        "{} is already open with unsaved changes.",
-                        self.session.display_name
-                    ));
-                    return Task::none();
-                }
-                // Unsaved writing is newer than the file, so it returns without
-                // a read. Saving still checks the file against its baseline.
-                if let Some(parked) = self.background.take_dirty(Some(&path)) {
-                    return self.resume(parked);
-                }
-                self.busy = true;
-                self.loading = true;
-                return Task::perform(storage::load(path), Message::Loaded);
-            }
+            Pending::Open(Some(path)) => return self.open_file(path, None),
             Pending::Open(None) => {
                 self.busy = true;
                 self.loading = true;
@@ -2598,6 +2549,93 @@ impl App {
             }
         }
         operation::snap_to(SCROLL, scrollable::RelativeOffset::START)
+    }
+
+    fn open_file(&mut self, path: PathBuf, jump: Option<links::Jump>) -> Task<Message> {
+        // Reading the page's own file would replace its unsaved writing
+        // with the saved copy. A clean page is reread as it always was.
+        if self.session.dirty && self.session.path.as_ref() == Some(&path) {
+            self.notification = Some(format!(
+                "{} is already open with unsaved changes.",
+                self.session.display_name
+            ));
+            return Task::none();
+        }
+        // Unsaved writing is newer than the file, so it returns without
+        // a read. Saving still checks the file against its baseline.
+        if let Some(parked) = self.background.take_dirty(Some(&path)) {
+            return self.resume_at(parked, jump.map(OpenPosition::Link));
+        }
+        self.busy = true;
+        self.loading = true;
+        Task::perform(storage::load(path), move |result| match &jump {
+            Some(jump) => Message::LoadedLinked(result, jump.clone()),
+            None => Message::Loaded(result),
+        })
+    }
+
+    fn complete_document_load(
+        &mut self,
+        result: Result<LoadedFile, FileError>,
+        jump: Option<OpenPosition>,
+    ) -> Task<Message> {
+        self.busy = false;
+        self.loading = false;
+        let file = match result {
+            Ok(file) => file,
+            Err(error) => {
+                self.notification = Some(error.to_string());
+                return Task::none();
+            }
+        };
+        let version = file
+            .collaboration
+            .as_ref()
+            .map(collaboration_store::version);
+        let document = match file.collaboration {
+            Some(state) => match Document::from_state(&state) {
+                Ok(document) if document.source() == file.source => document,
+                Ok(_) => {
+                    self.notification = Some(FileError::MetadataConflict.to_string());
+                    return Task::none();
+                }
+                Err(error) => {
+                    self.notification = Some(error.to_string());
+                    return Task::none();
+                }
+            },
+            None => Document::new(file.source),
+        };
+        match self
+            .background
+            .take_unchanged(&file.path, document.source(), version.as_deref())
+        {
+            Some(parked) => self.install_parked(parked),
+            None => {
+                self.install_document(document, Some(file.path.clone()), filename(&file.path));
+                self.session.saved_version = version;
+            }
+        }
+        let folder_task = self.folder_document_changed();
+        let navigation = jump
+            .and_then(|jump| self.jump_to_open_position(jump))
+            .unwrap_or_else(|| {
+                let focus = if self.restore_workspace_caret() {
+                    operation::focus(EDITOR)
+                } else {
+                    Task::none()
+                };
+                Task::batch([
+                    focus,
+                    operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+                ])
+            });
+        Task::batch([
+            folder_task,
+            self.follow_document(),
+            self.persist_workspace(),
+            navigation,
+        ])
     }
 
     fn set_document(&mut self, source: String, path: Option<PathBuf>, name: String) {
@@ -2658,6 +2696,7 @@ impl App {
         #[cfg(target_os = "macos")]
         self.native_menu_queue.clear();
         self.writing = writing::State::default();
+        self.links.close();
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
         self.quick_open.clear();
@@ -2838,6 +2877,7 @@ impl App {
                     Overlay::Collaboration => self.collaboration_view(),
                     Overlay::Unsaved => self.unsaved_view(),
                     Overlay::Writing => self.writing_view(),
+                    Overlay::Backlinks => self.backlinks_view(),
                     Overlay::Footnote => self.footnote_view(),
                     Overlay::Recovery => self.recovery_view(),
                     Overlay::Image => self.image_preview_view(),

@@ -344,6 +344,62 @@ pub fn quote_at(source: &str, offset: usize) -> Option<(Details, String)> {
     None
 }
 
+/// Read heading text as exposed by the document outline.
+pub(crate) fn parse_heading(source: &str) -> Option<(usize, String, Option<String>)> {
+    let mut events = Parser::new_ext(source, MARKDOWN_OPTIONS);
+    let Event::Start(Tag::Heading { level, id, .. }) = events.next()? else {
+        return None;
+    };
+    let mut label = String::new();
+    for event in events {
+        match event {
+            Event::Text(text) | Event::Code(text) => label.push_str(&text),
+            Event::SoftBreak | Event::HardBreak => label.push(' '),
+            Event::End(pulldown_cmark::TagEnd::Heading(_)) => {
+                return Some((level as usize, label, id.map(|id| id.into_string())));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[derive(Default)]
+pub(crate) struct HeadingIds {
+    used: std::collections::HashSet<String>,
+    next_suffix: std::collections::HashMap<String, usize>,
+}
+
+impl HeadingIds {
+    pub(crate) fn assign_for_block(&mut self, label: &str, source: &str) -> String {
+        // Only headings with a possible attribute list need to be reparsed.
+        let custom = if source.contains('{') {
+            match Parser::new_ext(source, MARKDOWN_OPTIONS).next() {
+                Some(Event::Start(Tag::Heading { id, .. })) => id,
+                _ => None,
+            }
+        } else {
+            None
+        };
+        self.assign(label, custom.as_deref())
+    }
+
+    pub(crate) fn assign(&mut self, label: &str, custom: Option<&str>) -> String {
+        let slug = custom.map_or_else(|| heading_slug(label), str::to_owned);
+        if self.used.insert(slug.clone()) {
+            return slug;
+        }
+        let suffix = self.next_suffix.entry(slug.clone()).or_insert(1);
+        loop {
+            let candidate = format!("{slug}-{suffix}");
+            *suffix += 1;
+            if self.used.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+    }
+}
+
 pub fn heading_slug(label: &str) -> String {
     label
         .to_lowercase()

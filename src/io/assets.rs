@@ -183,8 +183,7 @@ pub fn local_path(destination: &str, base: Option<&Path>) -> Result<Option<PathB
 /// Win32 resolves `.` and `..` lexically, but a verbatim `\\?\` path passes
 /// them to the filesystem unchanged. Apply the Win32 rule so references resolve
 /// the same way below canonical bases as anywhere else on Windows.
-#[cfg(any(windows, test))]
-fn lexically_normalized(path: &Path) -> PathBuf {
+pub(super) fn lexically_normalized(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
