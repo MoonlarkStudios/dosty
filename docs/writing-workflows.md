@@ -282,6 +282,22 @@ document on the page only closes the switcher. Opening a place from outside the
 switcher closes it; a refresh updates its rows. It is unavailable while another
 modal or file load is active.
 
+### Find in Folder
+
+Press Cmd/Ctrl+Alt+F to search the open place. Enter a literal, case-sensitive
+phrase and press Enter or choose **Search**. Results show an excerpt, relative
+filename, and line number. Use Up/Down and Enter, or click a result, to select
+the match in its document. Matches in concealed Markdown syntax open in Source.
+Switching files keeps unsaved writing open in the background. If a result has
+changed since the search, run the search again to update its location.
+
+Search uses the current Files snapshot and includes the active Markdown file
+and unsaved background versions of files in the open place. Refresh the folder
+to discover newly added files. Search examines up to 4,096 files and 128 MiB of
+text, including up to 32 MiB of open buffers, and shows up to 100 matches. The
+status reports partial results or skipped files. Reading files runs on a worker
+and stops when the query changes or the dialog closes.
+
 ## Writing and details
 
 - **Link:** select a phrase and use Cmd/Ctrl+K or the link control. Apply edits
