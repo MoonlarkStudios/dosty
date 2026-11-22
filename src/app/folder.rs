@@ -51,6 +51,10 @@ pub enum Message {
     NewDocument(PathBuf),
     NewFolder(PathBuf),
     Rename(PathBuf),
+    SetPin {
+        path: PathBuf,
+        pinned: bool,
+    },
     MoveTo(PathBuf),
     ChooseDestination(PathBuf),
     Destination(PathBuf),
@@ -366,7 +370,8 @@ impl App {
                             self.reveal_navigation();
                         }
                         let root = self.folder.root.clone().expect("root was just set");
-                        let workspace = self.workspace_scanned(&root);
+                        let complete = !self.folder.limited && self.folder.warnings.is_empty();
+                        let workspace = self.workspace_scanned(&root, complete);
                         return Task::batch([workspace, self.refresh_quick_open()]);
                     }
                     Err(error) => {
@@ -579,6 +584,11 @@ impl App {
             }
             Message::Rename(path) if !self.busy && self.folder.root.as_ref() != Some(&path) => {
                 return self.folder_name(NameAction::Rename(path));
+            }
+            Message::SetPin { path, pinned } if !self.busy && self.folder.has_file(&path) => {
+                let save = self.workspace_pin(&path, pinned);
+                let close = self.update_folder(Message::Cancel);
+                return Task::batch([save, close]);
             }
             Message::MoveTo(source) if !self.busy && self.folder.root.as_ref() != Some(&source) => {
                 if !self
@@ -1313,6 +1323,19 @@ impl App {
                         ("Rename", Message::Rename(path.clone())),
                         ("Move to…", Message::MoveTo(path.clone())),
                     ]);
+                }
+                if !directory && let Some(pinned) = self.workspace.pin_status(path) {
+                    actions.push((
+                        if pinned {
+                            "Unpin from Quick Open"
+                        } else {
+                            "Pin in Quick Open"
+                        },
+                        Message::SetPin {
+                            path: path.clone(),
+                            pinned: !pinned,
+                        },
+                    ));
                 }
                 actions.push(("Show location", Message::ShowLocation(path.clone())));
                 if root {

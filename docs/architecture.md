@@ -158,6 +158,9 @@ guarded loading, and heading choices use the same jump path as Outline. Cancelin
 restores the previous widget focus without committing a table draft or editing
 the source. Workspace changes invalidate the picker, refreshes update it, and
 closing discards its index and query.
+Pins store workspace-relative file paths in the existing workspace state. Complete
+scans discard pins for missing files, and checked moves remap them alongside
+remembered document paths.
 
 The folder workflow owns navigation, expanded paths, bounded scan generations,
 and operation identities. Folder discovery returns path-only snapshots from a

@@ -23,6 +23,7 @@ use super::storage::{self, FileError, atomic_write};
 
 pub const MAX_RECENT_WORKSPACES: usize = 12;
 const MAX_DOCUMENTS: usize = 64;
+const MAX_PINS: usize = 32;
 const MAX_EXPANDED: usize = 1_024;
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 const REGISTRY: &str = "workspaces.toml";
@@ -82,6 +83,8 @@ pub struct Workspace {
     pub expanded: Vec<PathBuf>,
     /// Documents, most recently active first. The first is reopened.
     pub documents: Vec<DocumentState>,
+    /// Pinned files, in the order they were pinned.
+    pub pins: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +129,28 @@ impl Workspace {
         self.documents.truncate(MAX_DOCUMENTS);
     }
 
+    pub fn pin_status(&self, relative: &Path) -> Option<bool> {
+        portable_relative(relative).then(|| self.pins.iter().any(|path| path == relative))
+    }
+
+    pub fn set_pin(&mut self, relative: &Path, pinned: bool) -> Result<(), &'static str> {
+        match self.pin_status(relative) {
+            None => Err("This file’s path cannot be remembered."),
+            Some(false) if pinned && self.pins.len() == MAX_PINS => {
+                Err("This workspace already has 32 pinned files.")
+            }
+            Some(false) if pinned => {
+                self.pins.push(relative.to_owned());
+                Ok(())
+            }
+            Some(true) if !pinned => {
+                self.pins.retain(|path| path != relative);
+                Ok(())
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
     /// Follow a checked move or rename of `from` (a file or folder) to `to`.
     pub fn moved(&mut self, from: &Path, to: &Path) {
         let follow = |path: &mut PathBuf| {
@@ -138,6 +163,7 @@ impl Workspace {
             }
         };
         self.expanded.iter_mut().for_each(follow);
+        self.pins.iter_mut().for_each(follow);
         self.documents
             .iter_mut()
             .for_each(|document| follow(&mut document.path));
@@ -149,6 +175,10 @@ impl Workspace {
         let mut seen = std::collections::HashSet::new();
         self.expanded.retain(|path| seen.insert(path.clone()));
         self.expanded.truncate(MAX_EXPANDED);
+        self.pins.retain(|path| portable_relative(path));
+        seen.clear();
+        self.pins.retain(|path| seen.insert(path.clone()));
+        self.pins.truncate(MAX_PINS);
         self.documents
             .retain(|document| portable_relative(&document.path));
         let mut seen = std::collections::HashSet::new();
@@ -353,6 +383,8 @@ mod tests {
         workspace.expanded.push("Drafts".into());
         workspace.visited(Path::new("Drafts/One.md"), 3, 9);
         workspace.visited(Path::new("Two.md"), 0, 0);
+        workspace.set_pin(Path::new("Two.md"), true).unwrap();
+        workspace.set_pin(Path::new("Drafts/One.md"), true).unwrap();
         workspace.visited(Path::new("Drafts/One.md"), 4, 4);
         save_in(data.path(), &registry, std::slice::from_ref(&workspace)).unwrap();
 
@@ -403,12 +435,14 @@ mod tests {
 
         let escaping = format!(
             "root = {:?}\nexpanded = [\"../outside\", \"/absolute\", \"Kept\"]\n\
+             pins = [\"../secret.md\", \"/absolute.md\", \"Kept.md\", \"Kept.md\"]\n\
              [[documents]]\npath = \"../secret.md\"\n[[documents]]\npath = \"Kept.md\"\n",
             essays.to_str().unwrap()
         );
         fs::write(folder.join(STATE), escaping).unwrap();
         let workspace = load_workspace_in(data.path(), &essays);
         assert_eq!(workspace.expanded, [PathBuf::from("Kept")]);
+        assert_eq!(workspace.pins, [PathBuf::from("Kept.md")]);
         assert_eq!(workspace.documents.len(), 1);
         assert_eq!(workspace.documents[0].path, Path::new("Kept.md"));
 
@@ -425,6 +459,10 @@ mod tests {
         workspace.expanded = vec!["Drafts".into(), "Drafts/Old".into(), "Notes".into()];
         workspace.visited(Path::new("Drafts/Old/a.md"), 1, 1);
         workspace.visited(Path::new("Drafts.md"), 0, 0);
+        workspace
+            .set_pin(Path::new("Drafts/Old/a.md"), true)
+            .unwrap();
+        workspace.set_pin(Path::new("Drafts.md"), true).unwrap();
         workspace.moved(Path::new("Drafts"), Path::new("Archive/Drafts"));
         assert_eq!(
             workspace.expanded,
@@ -439,6 +477,27 @@ mod tests {
             paths,
             [PathBuf::from("Drafts.md"), "Archive/Drafts/Old/a.md".into()]
         );
+        assert_eq!(
+            workspace.pins,
+            [PathBuf::from("Archive/Drafts/Old/a.md"), "Drafts.md".into()]
+        );
+        workspace.moved(Path::new("Archive/Drafts"), Path::new("Drafts"));
+        assert_eq!(workspace.pins[0], Path::new("Drafts/Old/a.md"));
+    }
+
+    #[test]
+    fn pinning_is_bounded_and_explicit() {
+        let mut workspace = Workspace::default();
+        for index in 0..MAX_PINS {
+            workspace
+                .set_pin(Path::new(&format!("{index}.md")), true)
+                .unwrap();
+        }
+        workspace.set_pin(Path::new("0.md"), true).unwrap();
+        assert!(workspace.set_pin(Path::new("extra.md"), true).is_err());
+        workspace.set_pin(Path::new("0.md"), false).unwrap();
+        workspace.set_pin(Path::new("extra.md"), true).unwrap();
+        assert_eq!(workspace.pins.last().unwrap(), Path::new("extra.md"));
     }
 
     #[test]

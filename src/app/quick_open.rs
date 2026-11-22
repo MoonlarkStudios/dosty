@@ -42,6 +42,7 @@ pub enum Message {
 
 struct Candidate {
     recency: usize,
+    pin: Option<usize>,
     path: PathBuf,
     name: String,
     relative: String,
@@ -71,12 +72,13 @@ impl State {
     }
 
     /// Index workspace files. Documents in `recent` (most recent first) lead
-    /// the list and break ties within each match rank.
+    /// the list and break ties within each match rank. Pins lead only the empty query.
     fn index(
         &mut self,
         root: &Path,
         files: impl Iterator<Item = impl AsRef<Path>>,
         recent: &[PathBuf],
+        pins: &[PathBuf],
     ) {
         let recency: std::collections::HashMap<&Path, usize> = recent
             .iter()
@@ -84,16 +86,23 @@ impl State {
             .map(|(rank, path)| (path.as_path(), rank))
             .collect();
         let recency = |path: &Path| recency.get(path).copied().unwrap_or(usize::MAX);
+        let pins: std::collections::HashMap<&Path, usize> = pins
+            .iter()
+            .enumerate()
+            .map(|(rank, path)| (path.as_path(), rank))
+            .collect();
         self.candidates = files
             .filter_map(|path| {
                 let path = path.as_ref();
                 let relative = path.strip_prefix(root).ok()?;
+                let pin = pins.get(relative).copied();
                 let name = path.file_name()?.to_string_lossy().into_owned();
                 let relative = relative
                     .to_string_lossy()
                     .replace(std::path::MAIN_SEPARATOR, "/");
                 Some(Candidate {
                     recency: recency(path),
+                    pin,
                     path: path.to_owned(),
                     name_lower: name.to_lowercase(),
                     path_lower: relative.to_lowercase(),
@@ -110,6 +119,42 @@ impl State {
         });
     }
 
+    fn initial_results(&self) -> Vec<usize> {
+        let mut pinned: Vec<_> = self
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| candidate.pin.map(|rank| (rank, index)))
+            .collect();
+        pinned.sort_unstable();
+        pinned
+            .into_iter()
+            .map(|(_, index)| index)
+            .chain(
+                self.candidates
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, candidate)| candidate.pin.is_none())
+                    .map(|(index, _)| index),
+            )
+            .take(MAX_RESULTS)
+            .collect()
+    }
+
+    fn select_previous_file(&mut self, current: &Path) {
+        let mut available = self
+            .results
+            .iter()
+            .enumerate()
+            .filter(|&(_, index)| self.candidates[*index].path != current);
+        self.selected = available
+            .clone()
+            .filter(|&(_, index)| self.candidates[*index].recency != usize::MAX)
+            .min_by_key(|&(_, index)| self.candidates[*index].recency)
+            .or_else(|| available.next())
+            .map_or(0, |(position, _)| position);
+    }
+
     fn search_files(&mut self) {
         let query = self.query.trim().to_lowercase();
         let query = if cfg!(target_os = "windows") {
@@ -117,6 +162,12 @@ impl State {
         } else {
             query
         };
+        if query.is_empty() {
+            self.matches = self.candidates.len();
+            self.results = self.initial_results();
+            self.selected = self.selected.min(self.results.len().saturating_sub(1));
+            return;
+        }
         let terms: Vec<_> = query.split_whitespace().collect();
         let mut ranked: [Vec<usize>; 3] = Default::default();
         self.matches = 0;
@@ -198,7 +249,12 @@ impl App {
         let selected = self.quick_open.selected_path().map(Path::to_owned);
         if let Some(root) = self.folder.root() {
             let recent = self.workspace.recent_documents();
-            self.quick_open.index(root, self.folder.files(), &recent);
+            self.quick_open.index(
+                root,
+                self.folder.files(),
+                &recent,
+                self.workspace.pins(root),
+            );
         }
         if self.quick_open.headings() {
             return Task::none();
@@ -243,13 +299,16 @@ impl App {
             if let Some(root) = self.folder.root() {
                 self.quick_open.root = Some(root.to_owned());
                 let recent = self.workspace.recent_documents();
-                self.quick_open.index(root, self.folder.files(), &recent);
+                self.quick_open.index(
+                    root,
+                    self.folder.files(),
+                    &recent,
+                    self.workspace.pins(root),
+                );
                 self.quick_open.search_files();
-                // Preselect the previous document when the active one ranks first.
-                if self.quick_open.selected_path() == self.path.as_deref()
-                    && self.quick_open.results.len() > 1
-                {
-                    self.quick_open.selected = 1;
+                // Pins change visual order. Keep Enter pointed at the previous file.
+                if let Some(current) = self.path.as_deref().filter(|path| path.starts_with(root)) {
+                    self.quick_open.select_previous_file(current);
                 }
             } else {
                 self.quick_open.search_headings(&self.outline.sections);
@@ -294,7 +353,7 @@ impl App {
             Message::Focus { request, previous } => {
                 if request == self.quick_open.request {
                     self.quick_open.previous = previous;
-                    return operation::focus(INPUT);
+                    return Task::batch([operation::focus(INPUT), self.reveal_quick_open_choice()]);
                 }
             }
             Message::Query(query) => {
@@ -450,20 +509,20 @@ impl App {
         });
         let mut results = column![];
         for (position, &index) in self.quick_open.results.iter().enumerate() {
-            let (title, context, hint, message) = if headings {
-                let section = &self.outline.sections[index];
+            let (title, context, hint, message, pinned) = if headings {
+                let title = outline::heading_label(&self.outline.sections[index]);
                 let mut parents: Vec<_> = outline::heading_parents(&self.outline.sections, index)
-                    .map(|parent| parent.title.as_str())
+                    .map(outline::heading_label)
                     .collect();
                 parents.reverse();
                 let context = parents.join(" › ");
                 let hint = if context.is_empty() {
-                    section.title.clone()
+                    title.to_owned()
                 } else {
-                    format!("{context} › {}", section.title)
+                    format!("{context} › {title}")
                 };
                 (
-                    section.title.as_str(),
+                    title,
                     context,
                     hint,
                     Message::ChooseHeading {
@@ -471,6 +530,7 @@ impl App {
                         revision: self.document.revision(),
                         request: self.quick_open.request,
                     },
+                    false,
                 )
             } else {
                 let file = &self.quick_open.candidates[index];
@@ -487,12 +547,25 @@ impl App {
                     ),
                     file.path.display().to_string(),
                     Message::Choose(file.path.clone()),
+                    file.pin.is_some(),
                 )
+            };
+            let title = row![
+                container(text(title).size(13).wrapping(text::Wrapping::None))
+                    .clip(true)
+                    .width(Fill)
+            ]
+            .align_y(Alignment::Center)
+            .spacing(6);
+            let title = if pinned {
+                title.push(text("Pinned").size(11).color(tokens.muted))
+            } else {
+                title
             };
             let choice = button(
                 container(
                     column![
-                        text(title).size(13).wrapping(text::Wrapping::None),
+                        title,
                         text(context)
                             .size(11)
                             .color(tokens.muted)

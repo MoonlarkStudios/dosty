@@ -18,9 +18,9 @@ A workspace is remembered the way an editor such as VS Code remembers folders.
 Launching Dosty without a document or folder argument reopens the last workspace
 that was open when it quit. For each workspace Dosty remembers which documents
 were active (the most recent is reopened), each document's last selection, the
-expanded folders, and whether Files and Outline were open. Reopening a document
+expanded folders, pinned files, and whether Files and Outline were open. Reopening a document
 in that workspace returns its caret, even after switching away. Quick Open lists
-recently active documents first.
+pinned files and recently active documents.
 
 Opening a workspace reopens its last document only when nothing would be
 displaced: the current page is an empty untitled document or a clean document from
@@ -37,7 +37,7 @@ reopened is removed with a notice.
 State lives in the `workspaces/` folder of Dosty's per-user
 [data directory](identity-migration.md#existing-koan-and-daytrip-data), never in
 the writer's folders: `workspaces.toml` holds recent folders and the folder to
-reopen, and one `state.toml` per remembered folder records how it was left. Files
+reopen, and one `state.toml` per remembered folder records pins and how it was left. Files
 are private to the user on Unix, bounded, and written on workers. Unreadable or
 malformed state is ignored rather than reported. Deleting `workspaces/` forgets
 workspaces and nothing else; the Windows uninstaller removes it while keeping
@@ -112,7 +112,9 @@ Word count and reading time stay at the bottom center of the writing column whil
 
 Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/path search within the current workspace. It searches the same bounded Markdown path snapshot as Files, including collapsed folders. Matching is case-insensitive and requires every whitespace-separated term; exact filenames and filename prefixes rank first. The first 100 results are shown with a match count when more exist. Narrow the query to reach other matches. After external file changes, use the folder-name menu’s Refresh action to update the snapshot.
 
-Up/Down selects a result without moving the query caret; Enter opens it through the existing file-loading and Save/Discard/Cancel guards. Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active workspace documents come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
+Up/Down selects a result without moving the query caret; Enter opens it through the existing file-loading and Save/Discard/Cancel guards. Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, pinned files appear before recent documents. The previous document is still preselected when you are editing a file in the workspace, so Cmd/Ctrl+P then Enter switches back. With a query, matching filenames keep their rank, with recent documents breaking ties. No search history is persisted.
+
+From a file’s Files row menu, choose **Pin in Quick Open** or **Unpin from Quick Open**. Each workspace remembers up to 32 pins in the order they were added. Pins follow renames and moves within the workspace, including undo. A complete folder scan removes pins for files that are no longer available.
 
 To jump to a heading in the current document, type `#` followed by a space
 and the heading terms. Results include parent titles, so `# Chapter 2 Notes`

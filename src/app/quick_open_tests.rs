@@ -58,6 +58,7 @@ fn filename_and_relative_path_terms_rank_exact_and_prefix_matches_first() {
         .into_iter()
         .map(Path::new),
         &[],
+        &[],
     );
     state.query = "DRAFT.md".into();
     state.search_files();
@@ -89,7 +90,7 @@ fn recently_active_documents_lead_and_break_ties_without_overriding_rank() {
     ];
     let recent = [PathBuf::from("/writing/Notes/C.md"), "/writing/B.md".into()];
     let mut state = State::default();
-    state.index(root, files.into_iter().map(Path::new), &recent);
+    state.index(root, files.into_iter().map(Path::new), &recent, &[]);
     state.search_files();
     let relative = |state: &State| -> Vec<String> {
         state
@@ -109,6 +110,97 @@ fn recently_active_documents_lead_and_break_ties_without_overriding_rank() {
     state.query = "c".into();
     state.search_files();
     assert_eq!(relative(&state), ["Notes/C.md", "C draft.md"]);
+}
+
+#[test]
+fn pins_lead_the_empty_picker_and_leave_the_previous_file_selected() {
+    let root = Path::new("/writing");
+    let files = [
+        "Reference.md",
+        "Draft.md",
+        "Previous.md",
+        "plan.md",
+        "Project plan.md",
+    ]
+    .map(|file| root.join(file));
+    let mut app = app(root, &files);
+    app.path = Some(files[2].clone());
+    app.workspace_document_leaving();
+    app.set_document(
+        "# Draft heading\n\nText".into(),
+        Some(files[1].clone()),
+        "Draft.md".into(),
+    );
+    app.workspace_document_leaving();
+    drop(app.update_folder(folder::Message::SetPin {
+        path: files[0].clone(),
+        pinned: true,
+    }));
+    drop(app.update_folder(folder::Message::SetPin {
+        path: files[4].clone(),
+        pinned: true,
+    }));
+
+    drop(app.update_quick_open(Message::Open));
+    let listed = |app: &App, position: usize| {
+        app.quick_open.candidates[app.quick_open.results[position]]
+            .path
+            .clone()
+    };
+    assert_eq!(listed(&app, 0), files[0]);
+    assert_eq!(listed(&app, 1), files[4]);
+    assert_eq!(app.quick_open.selected_path(), Some(files[2].as_path()));
+
+    drop(app.update_quick_open(Message::Query("# draft heading".into())));
+    assert!(app.quick_open.headings());
+    assert_eq!(app.quick_open.results, [0]);
+    drop(app.update_quick_open(Message::Query(String::new())));
+    assert_eq!(listed(&app, 0), files[0]);
+
+    drop(app.update_quick_open(Message::Query("plan.md".into())));
+    assert_eq!(
+        listed(&app, 0),
+        files[3],
+        "exact name outranks a pinned substring"
+    );
+
+    drop(app.update_quick_open(Message::Cancel));
+    drop(app.update_folder(folder::Message::SetPin {
+        path: files[0].clone(),
+        pinned: false,
+    }));
+    drop(app.update_quick_open(Message::Open));
+    assert_eq!(listed(&app, 0), files[4]);
+    assert_eq!(app.quick_open.selected_path(), Some(files[2].as_path()));
+}
+
+#[test]
+fn an_incomplete_scan_hides_pins_without_forgetting_them() {
+    let root = Path::new("/writing");
+    let target = root.join("Target.md");
+    let mut app = app(root, std::slice::from_ref(&target));
+    drop(app.update_folder(folder::Message::SetPin {
+        path: target.clone(),
+        pinned: true,
+    }));
+
+    let refresh = |app: &mut App, limited| {
+        drop(app.update_folder(folder::Message::Scanned {
+            generation: 0,
+            result: Ok(discovery::Snapshot {
+                root: root.to_owned(),
+                entries: Vec::new(),
+                limited,
+                warnings: Vec::new(),
+            }),
+        }));
+    };
+    refresh(&mut app, true);
+    assert_eq!(app.workspace.pin_status(&target), Some(true));
+    drop(app.update_quick_open(Message::Open));
+    assert!(app.quick_open.results.is_empty());
+    refresh(&mut app, false);
+    assert_eq!(app.workspace.pin_status(&target), Some(false));
 }
 
 #[test]
@@ -297,6 +389,16 @@ fn heading_scope_uses_parent_context_and_returns_to_the_same_file_search() {
         app.quick_open.selected_path(),
         Some(root.join("Draft.md").as_path())
     );
+}
+
+#[test]
+fn the_placeholder_label_finds_an_untitled_heading() {
+    let (mut app, tasks) = App::new();
+    drop(tasks);
+    app.set_document("# Named\n\n##\n\nText".into(), None, "Draft.md".into());
+    drop(app.update_quick_open(Message::Open));
+    drop(app.update_quick_open(Message::Query("untitled".into())));
+    assert_eq!(app.quick_open.results, [1]);
 }
 
 #[test]

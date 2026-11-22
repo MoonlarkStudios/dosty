@@ -15,7 +15,8 @@ themes, or switch to the Markdown source at any time.
 Start with a blank document, open one file, or open a folder as a workspace.
 Within a workspace, Files live in the left sidebar; an optional Outline lives on the right.
 The folder-name menu manages the workspace. Quick Open (Cmd/Ctrl+P) finds files
-by name or relative path, including files in collapsed folders.
+by name or relative path, including files in collapsed folders. Pin frequently
+used files from their Files row menus to keep them handy in Quick Open.
 An always-visible titlebar offers formatting on demand and a document menu for editing
 modes. Writing uses sans-serif text by default, with serif available in Settings. macOS uses native application menus. Configurable word count and reading
 time sit below the writing area. A folder is a remembered workspace: Dosty reopens

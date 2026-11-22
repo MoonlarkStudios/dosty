@@ -110,6 +110,14 @@ pub enum Message {
     CancelFilter,
 }
 
+pub(super) fn heading_label(section: &Section) -> &str {
+    if section.title.is_empty() {
+        "Untitled heading"
+    } else {
+        &section.title
+    }
+}
+
 pub(super) fn heading_parents(
     sections: &[Section],
     index: usize,
@@ -129,10 +137,10 @@ pub(super) fn matching_headings<'a>(
             if terms.is_empty() {
                 return Some(index);
             }
-            let mut label = section.title.to_lowercase();
+            let mut label = heading_label(section).to_lowercase();
             for parent in heading_parents(sections, index) {
                 label.push(' ');
-                label.push_str(&parent.title.to_lowercase());
+                label.push_str(&heading_label(parent).to_lowercase());
             }
             terms
                 .iter()
@@ -598,11 +606,7 @@ impl App {
             } else {
                 space().width(16).into()
             };
-            let title = if section.title.is_empty() {
-                "Untitled heading"
-            } else {
-                &section.title
-            };
+            let title = heading_label(section);
             let label = button(
                 container(
                     text(title)
