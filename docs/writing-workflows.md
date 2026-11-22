@@ -244,8 +244,11 @@ With an empty query it shows, in order:
 
 - **Unsaved:** documents open in the background with unsaved changes, marked, and
   never the page itself. Choosing one returns it as it was left.
+- **Pinned:** files pinned from their context menu in Files for this place.
+  The pins are remembered in Dosty's workspace state.
 - **Recent:** up to six recently active documents of the open place, leaving out
-  the page. The first is preselected, so Cmd/Ctrl+P then Enter switches back.
+  the page and pinned files. The previous document is preselected in Pinned or
+  Recent, so Cmd/Ctrl+P then Enter switches back.
 - **The open place:** its top-level folders, then its top-level documents. Right
   or Enter steps into the selected folder and Left steps out, returning to the
   folder that was left. Stepping never changes the page.
@@ -259,6 +262,10 @@ lead, then the open place, then other places. A document in another place can be
 matched by its place's name and shows that place beside its folder. Unsaved
 documents match by title. Documents are shown by filename without the Markdown
 extension. The first 100 rows are shown with a match count when more exist.
+
+Type `#` followed by a space and heading terms to search the current document's
+headings, including on a standalone page. Parent titles distinguish repeated
+headings. Use Up/Down and Enter to jump in your current editing mode.
 
 The open place is searched from the same bounded snapshot as Files, including
 collapsed folders; after external file changes, use Refresh in the place-name
