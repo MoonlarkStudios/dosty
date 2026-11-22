@@ -38,6 +38,8 @@ mod background;
 pub(super) mod chrome;
 #[path = "folder.rs"]
 pub(super) mod folder;
+#[path = "folder_search.rs"]
+mod folder_search;
 #[path = "footnotes.rs"]
 pub(super) mod footnotes;
 #[path = "home.rs"]
@@ -128,6 +130,7 @@ pub struct App {
     #[cfg(target_os = "macos")]
     native_menu_queue: std::collections::VecDeque<native_menus::Command>,
     folder: folder::State,
+    folder_search: folder_search::State,
     workspace: workspace::State,
     quick_open: quick_open::State,
     image_preview: image_preview::State,
@@ -163,6 +166,7 @@ pub enum Message {
     NativeMenusReady,
     Chrome(chrome::Message),
     Folder(folder::Message),
+    FolderSearch(folder_search::Message),
     ImagePreview(image_preview::Message),
     Workspace(workspace::Message),
     QuickOpen(quick_open::Message),
@@ -312,8 +316,10 @@ pub enum Sidebar {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Overlay {
     Chrome,
+    Statistics,
     Folder,
     QuickOpen,
+    FolderSearch,
     Table,
     Settings,
     Collaboration,
@@ -325,11 +331,20 @@ enum Overlay {
     Image,
 }
 
+enum OpenPosition {
+    Search(Range<usize>),
+    Link(links::Jump),
+}
+
 #[derive(Debug, Clone)]
 enum Pending {
     FolderNew(PathBuf),
     New,
     Open(Option<PathBuf>),
+    FolderMatch {
+        root: PathBuf,
+        target: crate::io::folder_search::Target,
+    },
     Replica,
     Guide,
     Welcome,
@@ -387,6 +402,7 @@ impl App {
             #[cfg(target_os = "macos")]
             native_menu_queue: std::collections::VecDeque::new(),
             folder: folder::State::default(),
+            folder_search: folder_search::State::default(),
             workspace: workspace::State::default(),
             quick_open: quick_open::State::default(),
             image_preview: image_preview::State::default(),
@@ -767,9 +783,17 @@ impl App {
         }
         match message {
             Message::EscapeCaptured => {
+                if self.overlay == Some(Overlay::FolderSearch) {
+                    return self.cancel_folder_search();
+                }
                 if matches!(
                     self.overlay,
-                    Some(Overlay::Chrome | Overlay::Folder | Overlay::QuickOpen)
+                    Some(
+                        Overlay::Chrome
+                            | Overlay::Folder
+                            | Overlay::QuickOpen
+                            | Overlay::Statistics
+                    )
                 ) {
                     return self.update_message(Message::CloseOverlay);
                 }
@@ -799,6 +823,7 @@ impl App {
             Message::NativeMenusReady => self.attach_native_menus(),
             Message::Chrome(message) => return self.update_chrome(message),
             Message::Folder(message) => return self.update_folder(message),
+            Message::FolderSearch(message) => return self.update_folder_search(message),
             Message::ImagePreview(message) => return self.update_image_preview(message),
             Message::Workspace(message) => return self.update_workspace(message),
             Message::QuickOpen(message) => return self.update_quick_open(message),
@@ -1175,7 +1200,7 @@ impl App {
             }
             Message::Loaded(result) => return self.complete_document_load(result, None),
             Message::LoadedLinked(result, jump) => {
-                return self.complete_document_load(result, Some(jump));
+                return self.complete_document_load(result, Some(OpenPosition::Link(jump)));
             }
             Message::ResolvedLinked(result, jump) => {
                 self.busy = false;
@@ -1320,8 +1345,15 @@ impl App {
                 self.overlay = Some(Overlay::Settings);
             }
             Message::CloseOverlay => {
+                if self.overlay == Some(Overlay::Statistics) {
+                    self.overlay = None;
+                    return Task::none();
+                }
                 if self.overlay == Some(Overlay::QuickOpen) {
                     return self.cancel_quick_open();
+                }
+                if self.overlay == Some(Overlay::FolderSearch) {
+                    return self.cancel_folder_search();
                 }
                 drop(self.update_outline(outline::Message::CancelDrag));
                 if self.overlay.is_none() && self.outline.filter_open {
@@ -1537,6 +1569,10 @@ impl App {
                 }
             }
             Message::CloseRequested(id) => {
+                if self.overlay == Some(Overlay::FolderSearch) {
+                    drop(self.cancel_folder_search());
+                    return self.update_message(Message::CloseRequested(id));
+                }
                 if self.overlay == Some(Overlay::QuickOpen) {
                     // Re-enter the ordinary close path after dismissing the
                     // picker so a pending table draft reaches the save guard.
@@ -2330,6 +2366,10 @@ impl App {
         let Some(range) = self.matches.get(self.match_index).cloned() else {
             return Task::none();
         };
+        self.reveal_source_match(range)
+    }
+
+    fn reveal_source_match(&mut self, range: Range<usize>) -> Task<Message> {
         if self.mode == EditorMode::Read {
             self.mode = EditorMode::Live;
         }
@@ -2397,12 +2437,19 @@ impl App {
         self.resume_at(parked, None)
     }
 
-    fn resume_at(&mut self, parked: Parked, jump: Option<links::Jump>) -> Task<Message> {
+    fn jump_to_open_position(&mut self, jump: OpenPosition) -> Option<Task<Message>> {
+        match jump {
+            OpenPosition::Search(range) => Some(self.jump_to_folder_match(range)),
+            OpenPosition::Link(jump) => self.jump_to_document_link(jump),
+        }
+    }
+
+    fn resume_at(&mut self, parked: Parked, jump: Option<OpenPosition>) -> Task<Message> {
         self.install_parked(parked);
         self.editor_focused = true;
         self.sync_editor();
         let navigation = jump
-            .and_then(|jump| self.jump_to_document_link(jump))
+            .and_then(|jump| self.jump_to_open_position(jump))
             .unwrap_or_else(|| {
                 Task::batch([
                     operation::focus(EDITOR),
@@ -2450,6 +2497,9 @@ impl App {
                 None,
                 "Welcome.md".into(),
             ),
+            Pending::FolderMatch { root, target } => {
+                return self.open_folder_match(root, target);
+            }
             Pending::Open(Some(path)) => return self.open_file(path, None),
             Pending::Open(None) => {
                 self.busy = true;
@@ -2514,7 +2564,7 @@ impl App {
         // Unsaved writing is newer than the file, so it returns without
         // a read. Saving still checks the file against its baseline.
         if let Some(parked) = self.background.take_dirty(Some(&path)) {
-            return self.resume_at(parked, jump);
+            return self.resume_at(parked, jump.map(OpenPosition::Link));
         }
         self.busy = true;
         self.loading = true;
@@ -2527,7 +2577,7 @@ impl App {
     fn complete_document_load(
         &mut self,
         result: Result<LoadedFile, FileError>,
-        jump: Option<links::Jump>,
+        jump: Option<OpenPosition>,
     ) -> Task<Message> {
         self.busy = false;
         self.loading = false;
@@ -2568,7 +2618,7 @@ impl App {
         }
         let folder_task = self.folder_document_changed();
         let navigation = jump
-            .and_then(|jump| self.jump_to_document_link(jump))
+            .and_then(|jump| self.jump_to_open_position(jump))
             .unwrap_or_else(|| {
                 let focus = if self.restore_workspace_caret() {
                     operation::focus(EDITOR)
@@ -2650,6 +2700,7 @@ impl App {
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
         self.quick_open.clear();
+        self.folder_search.clear();
         self.table = table::State::default();
         self.table_editing = None;
         self.grid = table_grid::State::default();
@@ -2813,12 +2864,14 @@ impl App {
                 if self.context_menu_open(overlay) {
                     return match overlay {
                         Overlay::Chrome => self.chrome_menu_view(size),
+                        Overlay::Statistics => self.statistics_popover(size),
                         Overlay::Folder => self.folder_menu_view(size),
                         _ => self.table_menu_view(size),
                     };
                 }
                 let modal = match overlay {
                     Overlay::Chrome => self.chrome_menu_view(size),
+                    Overlay::Statistics => self.statistics_popover(size),
                     Overlay::Folder => self.folder_overlay_view((size.height - 48.0).max(80.0)),
                     Overlay::Settings => self.settings_view((size.height - 48.0).min(760.0)),
                     Overlay::Collaboration => self.collaboration_view(),
@@ -2829,6 +2882,7 @@ impl App {
                     Overlay::Recovery => self.recovery_view(),
                     Overlay::Image => self.image_preview_view(),
                     Overlay::QuickOpen => self.quick_open_view(size),
+                    Overlay::FolderSearch => self.folder_search_view(size.height),
                     Overlay::Table => self.table_view(),
                 };
                 container(
@@ -2868,7 +2922,7 @@ impl App {
 
     fn context_menu_open(&self, overlay: Overlay) -> bool {
         match overlay {
-            Overlay::Chrome => true,
+            Overlay::Chrome | Overlay::Statistics => true,
             Overlay::Folder => self.folder.is_menu(),
             Overlay::Table => self.table.is_menu(),
             _ => false,
@@ -3675,6 +3729,9 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 } else {
                     Message::Save
                 }),
+                "f" if modifiers.alt() && !modifiers.shift() => {
+                    Some(Message::FolderSearch(folder_search::Message::Open))
+                }
                 "f" => Some(if modifiers.shift() {
                     Message::HideSidebars
                 } else {
@@ -3682,6 +3739,9 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 }),
                 "b" if modifiers.shift() => Some(Message::ToggleSidebar(Sidebar::Files)),
                 "b" => Some(Message::Format(Format::Bold)),
+                "i" if modifiers.alt() && !modifiers.shift() => {
+                    Some(Message::Chrome(chrome::Message::Statistics))
+                }
                 "i" => Some(Message::Format(Format::Italic)),
                 "x" if modifiers.shift() => Some(Message::Format(Format::Strikethrough)),
                 "k" => Some(Message::Format(Format::Link)),

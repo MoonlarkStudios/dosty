@@ -237,7 +237,7 @@ impl App {
                 self.preserve_viewport_generation =
                     Some(self.session.document.collaboration().generation());
                 let paths = self.folder.files().map(Path::to_owned).collect();
-                let complete = self.folder.link_snapshot_complete();
+                let complete = !self.folder.incomplete();
                 return Task::perform(
                     document_links::backlinks(root, paths, origin, Arc::clone(&request)),
                     move |result| {
@@ -631,7 +631,7 @@ impl App {
             return self.focus_link_target(jump);
         }
         if let Some(parked) = self.background.take_dirty(Some(&path)) {
-            return self.resume_at(parked, jump);
+            return self.resume_at(parked, jump.map(super::OpenPosition::Link));
         }
         self.busy = true;
         self.loading = true;

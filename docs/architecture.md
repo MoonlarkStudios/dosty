@@ -181,7 +181,8 @@ the other places on a cancellable worker task whose results it ignores once
 closed or superseded. Its focused query intercepts row navigation locally.
 Acceptance reuses file loading, background resumption, or place opening;
 cancellation restores the previous widget focus without committing a table draft
-or editing the source. Closing discards its index, query, and running scan.
+or editing the source. Closing discards its index, query, and running scan. Heading queries reuse the current Outline. Per-place pins live
+in the remembered workspace state and follow checked file moves.
 
 The folder workflow owns navigation, expanded paths, bounded scan generations,
 and operation identities. Folder discovery returns path-only snapshots from a
@@ -192,6 +193,12 @@ ordered directory and checkpoint locks, with destination and reference guards.
 Moving an active file updates its path without reinstalling its document or
 discarding history. Recovery identities rotate when that path changes. See
 [files and folders](writing-workflows.md#files-and-folders) for limits and behavior.
+
+Find in Folder searches the same workspace paths on a bounded worker. The
+worker uses bounded snapshots of the active file and unsaved background files. A selected
+result goes through the ordinary opening and save guards, and its source
+digest is checked before selecting its byte range. Query changes and dialog
+dismissal cancel the worker.
 
 Link suggestions use the current folder snapshot for file paths and a bounded
 worker read for target headings. The **Linked from** action scans saved
