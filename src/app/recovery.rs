@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+use super::session::Session;
 use super::{App, Message as AppMessage, Overlay, Pending};
 use crate::document::Document;
 use crate::document::selection::Selection;
@@ -55,7 +56,67 @@ impl Default for State {
         }
     }
 }
+/// The recovery identity of a document kept open behind the page.
+///
+/// A parked document no longer changes, so it carries only which copy is its
+/// own and which generation that copy holds.
+pub(super) struct Checkpoint {
+    id: Uuid,
+    saved: Option<u64>,
+    prior_paths: Vec<Uuid>,
+}
+impl Checkpoint {
+    pub(super) fn id(&self) -> Uuid {
+        self.id
+    }
+    pub(super) fn needs_write(&self, generation: u64) -> bool {
+        self.saved != Some(generation)
+    }
+    /// Records a completed write and returns the superseded copies to remove.
+    fn written(&mut self, generation: u64) -> Vec<Uuid> {
+        self.saved = Some(generation);
+        std::mem::take(&mut self.prior_paths)
+    }
+}
 impl State {
+    /// Detaches the current document's identity so its recovery copy outlives
+    /// its time on the page, and starts a fresh identity for the next document.
+    pub(super) fn park(&mut self) -> Checkpoint {
+        let checkpoint = Checkpoint {
+            id: std::mem::replace(&mut self.id, Uuid::new_v4()),
+            saved: self.saved.take(),
+            prior_paths: std::mem::take(&mut self.prior_paths),
+        };
+        self.edited = Instant::now();
+        self.last_checkpoint = self.edited;
+        checkpoint
+    }
+    /// Adopts a parked identity for the document taking the page. The identity
+    /// it replaces must already have been parked or retired.
+    pub(super) fn resume(&mut self, checkpoint: Checkpoint) {
+        self.id = checkpoint.id;
+        self.saved = checkpoint.saved;
+        self.prior_paths = checkpoint.prior_paths;
+        self.edited = Instant::now();
+        self.last_checkpoint = self.edited;
+    }
+    /// Removes the copies of a parked document that was saved, released, or
+    /// explicitly discarded.
+    pub(super) fn discard(&mut self, checkpoint: Checkpoint) {
+        let mut ids = checkpoint.prior_paths;
+        ids.push(checkpoint.id);
+        self.release(ids);
+    }
+    /// Removes copies now, or after the write still in flight for one of them.
+    fn release(&mut self, ids: Vec<Uuid>) {
+        for id in ids {
+            if self.inflight == Some(id) {
+                self.retired.insert(id);
+            } else {
+                self.cleanup.push(id);
+            }
+        }
+    }
     pub(super) fn path_changed(&mut self) {
         // Keep the previous recovery copy until its replacement is published,
         // but refresh path metadata even if the source generation is unchanged.
@@ -83,13 +144,7 @@ impl State {
         self.last_checkpoint = self.edited;
         let mut retired = std::mem::take(&mut self.prior_paths);
         retired.push(id);
-        for id in retired {
-            if self.inflight == Some(id) {
-                self.retired.insert(id);
-            } else {
-                self.cleanup.push(id);
-            }
-        }
+        self.release(retired);
     }
     fn written(&mut self, id: Uuid, generation: u64, success: bool) {
         if self.inflight == Some(id) {
@@ -101,6 +156,17 @@ impl State {
             self.saved = Some(generation);
             self.cleanup.append(&mut self.prior_paths);
         }
+    }
+}
+fn snapshot(session: &Session) -> recovery::Snapshot {
+    recovery::Snapshot {
+        state: session.document.collaboration().state(),
+        path: session.path.clone(),
+        name: session.display_name.clone(),
+        baseline: session.saved_source.clone(),
+        baseline_version: session.saved_version.clone(),
+        anchor: session.selection.anchor,
+        head: session.selection.head,
     }
 }
 fn root() -> Option<std::path::PathBuf> {
@@ -171,23 +237,33 @@ impl App {
                 );
             }
             Message::Tick => {
-                let generation = self.document.collaboration().generation();
-                if self.dirty
-                    && !self.loading
-                    && self.recovery.checkpoint_due(generation, Instant::now())
-                {
-                    let snapshot = recovery::Snapshot {
-                        state: self.document.collaboration().state(),
-                        path: self.path.clone(),
-                        name: self.display_name.clone(),
-                        baseline: self.saved_source.clone(),
-                        baseline_version: self.saved_version.clone(),
-                        anchor: self.selection.anchor,
-                        head: self.selection.head,
-                    };
-                    let id = self.recovery.id;
+                // One write runs at a time. A document that just left the page
+                // goes first: it has no later tick of its own to rely on.
+                let parked = self
+                    .recovery
+                    .inflight
+                    .is_none()
+                    .then(|| self.background.needing_checkpoint())
+                    .flatten()
+                    .map(|parked| {
+                        (
+                            parked.checkpoint.id(),
+                            parked.session.document.collaboration().generation(),
+                            snapshot(&parked.session),
+                        )
+                    });
+                let write = parked.or_else(|| {
+                    let generation = self.session.document.collaboration().generation();
+                    let due = self.session.dirty
+                        && !self.loading
+                        && self.recovery.checkpoint_due(generation, Instant::now());
+                    due.then(|| {
+                        self.recovery.last_checkpoint = Instant::now();
+                        (self.recovery.id, generation, snapshot(&self.session))
+                    })
+                });
+                if let Some((id, generation, snapshot)) = write {
                     self.recovery.inflight = Some(id);
-                    self.recovery.last_checkpoint = Instant::now();
                     return Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
@@ -212,6 +288,12 @@ impl App {
                 result,
             } => {
                 self.recovery.written(id, generation, result.is_ok());
+                if result.is_ok()
+                    && let Some(checkpoint) = self.background.checkpoint_mut(id)
+                {
+                    let superseded = checkpoint.written(generation);
+                    self.recovery.cleanup.extend(superseded);
+                }
                 if let Err(error) = result {
                     self.notification = Some(format!("Recovery copy could not be saved: {error}"));
                 }
@@ -276,14 +358,14 @@ impl App {
         match Document::from_state(&snapshot.state) {
             Ok(document) => {
                 self.install_document(document, snapshot.path, snapshot.name);
-                self.saved_source = snapshot.baseline;
-                self.saved_version = snapshot.baseline_version;
-                self.selection = Selection {
+                self.session.saved_source = snapshot.baseline;
+                self.session.saved_version = snapshot.baseline_version;
+                self.session.selection = Selection {
                     anchor: snapshot.anchor,
                     head: snapshot.head,
                 }
-                .clamp(self.document.source());
-                self.dirty = true;
+                .clamp(self.session.document.source());
+                self.session.dirty = true;
                 self.sync_editor();
                 self.notification = Some("Recovery copy opened. Save checks the last disk version; Save As keeps both. The original recovery copy is retained.".into());
             }
@@ -414,6 +496,36 @@ mod tests {
             "continuous typing must still be checkpointed"
         );
     }
+    #[test]
+    fn a_parked_identity_keeps_its_copy_until_resumed_or_discarded() {
+        let mut state = State::default();
+        let parked_id = state.id;
+        state.saved = Some(3);
+        let mut checkpoint = state.park();
+        assert_ne!(state.id, parked_id);
+        assert_eq!(state.saved, None);
+        assert!(state.cleanup.is_empty(), "parking removes nothing");
+        assert_eq!(checkpoint.id(), parked_id);
+        assert!(!checkpoint.needs_write(3));
+        assert!(checkpoint.needs_write(4));
+        assert!(checkpoint.written(4).is_empty());
+        assert!(!checkpoint.needs_write(4));
+
+        state.retire();
+        state.cleanup.clear();
+        state.resume(checkpoint);
+        assert_eq!(state.id, parked_id);
+        assert!(!state.needs_checkpoint(4));
+
+        // A write still in flight must finish before its copy is removed.
+        state.inflight = Some(parked_id);
+        let checkpoint = state.park();
+        state.discard(checkpoint);
+        assert!(state.cleanup.is_empty());
+        state.written(parked_id, 4, true);
+        assert_eq!(state.cleanup, vec![parked_id]);
+    }
+
     #[tokio::test]
     async fn restored_draft_keeps_its_disk_conflict_guard_and_fresh_replica_identity() {
         use crate::io::collaboration_store;
@@ -427,11 +539,11 @@ mod tests {
             Some(path.clone()),
             "note.md".into(),
         );
-        let state = app.document.collaboration().state();
-        app.saved_version = Some(collaboration_store::version(&state));
+        let state = app.session.document.collaboration().state();
+        app.session.saved_version = Some(collaboration_store::version(&state));
         collaboration_store::save_document(
             path.clone(),
-            app.document.source().into(),
+            app.session.document.source().into(),
             state,
             None,
             None,
@@ -439,10 +551,10 @@ mod tests {
         .await
         .unwrap();
         let selection = Selection {
-            anchor: app.document.source().len(),
+            anchor: app.session.document.source().len(),
             head: 2,
         };
-        app.selection = selection;
+        app.session.selection = selection;
         app.sync_editor();
         drop(
             app.update(AppMessage::Edit(Action::Edit(Edit::Paste(Arc::new(
@@ -450,35 +562,35 @@ mod tests {
             ))))),
         );
         let snapshot = recovery::Snapshot {
-            state: app.document.collaboration().state(),
-            path: app.path.clone(),
-            name: app.display_name.clone(),
-            baseline: app.saved_source.clone(),
-            baseline_version: app.saved_version.clone(),
+            state: app.session.document.collaboration().state(),
+            path: app.session.path.clone(),
+            name: app.session.display_name.clone(),
+            baseline: app.session.saved_source.clone(),
+            baseline_version: app.session.saved_version.clone(),
             anchor: 10,
             head: 2,
         };
-        let expected = app.document.source().to_owned();
-        let writer = app.document.collaboration().replica_id();
+        let expected = app.session.document.source().to_owned();
+        let writer = app.session.document.collaboration().replica_id();
         let id = Uuid::new_v4();
         recovery::write(dir.path(), id, &snapshot).unwrap();
         std::fs::write(&path, "External work must survive.").unwrap();
         app.restore_draft(recovery::read(dir.path(), id).unwrap());
-        assert_eq!(app.document.source(), expected);
+        assert_eq!(app.session.document.source(), expected);
         assert_eq!(
-            app.document.source(),
-            app.document.collaboration().materialize()
+            app.session.document.source(),
+            app.session.document.collaboration().materialize()
         );
         assert_eq!(app.editor.snapshot(), app.projection.text);
-        assert!(app.selection.anchor > app.selection.head);
-        assert_ne!(app.document.collaboration().replica_id(), writer);
-        assert!(app.dirty);
+        assert!(app.session.selection.anchor > app.session.selection.head);
+        assert_ne!(app.session.document.collaboration().replica_id(), writer);
+        assert!(app.session.dirty);
         let result = collaboration_store::save_document(
             path.clone(),
-            app.document.source().into(),
-            app.document.collaboration().state(),
-            Some(app.saved_source.clone()),
-            app.saved_version.clone(),
+            app.session.document.source().into(),
+            app.session.document.collaboration().state(),
+            Some(app.session.saved_source.clone()),
+            app.session.saved_version.clone(),
         )
         .await;
         assert!(matches!(result, Err(storage::FileError::Conflict)));

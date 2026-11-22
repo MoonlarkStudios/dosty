@@ -225,12 +225,12 @@ impl State {
 
 impl App {
     pub(super) fn sync_outline(&mut self) {
-        if self.outline.revision == Some(self.document.revision()) {
+        if self.outline.revision == Some(self.session.document.revision()) {
             return;
         }
         self.outline.cancel_drag();
-        self.outline.sections = outline::sections(&self.document);
-        self.outline.revision = Some(self.document.revision());
+        self.outline.sections = outline::sections(&self.session.document);
+        self.outline.revision = Some(self.session.document.revision());
         self.refresh_quick_open_headings();
         self.refresh_folds();
         if self.outline.sections.is_empty() {
@@ -246,7 +246,11 @@ impl App {
 
     fn folded_section(&self, anchors: &[StableSelection]) -> Option<usize> {
         anchors.iter().find_map(|anchor| {
-            let selection = self.document.collaboration().resolve_selection(anchor)?;
+            let selection = self
+                .session
+                .document
+                .collaboration()
+                .resolve_selection(anchor)?;
             if selection.is_caret() {
                 return None;
             }
@@ -276,16 +280,18 @@ impl App {
         if folded && !self.outline.folded[index] {
             let start = section.range.start;
             let end = start
-                + self.document.source()[start..]
+                + self.session.document.source()[start..]
                     .chars()
                     .next()
                     .map_or(0, char::len_utf8);
             self.outline
                 .collapsed
-                .push(vec![self.document.collaboration().selection(Selection {
-                    anchor: start,
-                    head: end,
-                })]);
+                .push(vec![self.session.document.collaboration().selection(
+                    Selection {
+                        anchor: start,
+                        head: end,
+                    },
+                )]);
         } else if !folded {
             let remove: Vec<_> = self
                 .outline
@@ -341,7 +347,7 @@ impl App {
             }
             Message::FoldCurrent(folded) => {
                 if let Some(mut index) =
-                    outline::current(&self.outline.sections, self.selection.head)
+                    outline::current(&self.outline.sections, self.session.selection.head)
                 {
                     if !folded {
                         let mut parent = self.outline.sections[index].parent;
@@ -382,14 +388,16 @@ impl App {
                     self.outline.selected = slot;
                 }
                 if self.mode == EditorMode::Read {
-                    self.selection = Selection::caret(self.document.blocks()[block].range.start);
-                    self.document.break_history_group();
+                    self.session.selection =
+                        Selection::caret(self.session.document.blocks()[block].range.start);
+                    self.session.document.break_history_group();
                     self.sync_editor();
                 }
                 return self.update_message(AppMessage::JumpTo(block));
             }
             Message::Move(direction) => {
-                if let Some(from) = outline::current(&self.outline.sections, self.selection.head)
+                if let Some(from) =
+                    outline::current(&self.outline.sections, self.session.selection.head)
                     && let Some(section) = outline::sibling(&self.outline.sections, from, direction)
                 {
                     return self.move_section(
@@ -406,13 +414,13 @@ impl App {
                     return Task::none();
                 }
                 if index < self.outline.sections.len() {
-                    self.outline.drag = Some((index, self.document.revision()));
+                    self.outline.drag = Some((index, self.session.document.revision()));
                     self.outline.hover = None;
                 }
             }
             Message::Hover(target) => {
                 self.outline.hover = self.outline.drag.and_then(|(from, revision)| {
-                    (revision == self.document.revision()
+                    (revision == self.session.document.revision()
                         && outline::destination(&self.outline.sections, from, target).is_some())
                     .then_some(target)
                 });
@@ -430,7 +438,7 @@ impl App {
                 let drag = self.outline.drag;
                 self.outline.cancel_drag();
                 if let Some((from, revision)) = drag
-                    && revision == self.document.revision()
+                    && revision == self.session.document.revision()
                 {
                     return self.move_section(from, target);
                 }
@@ -441,7 +449,7 @@ impl App {
                     return Task::none();
                 }
                 self.outline.cancel_drag();
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 self.outline.filter_open = true;
                 self.outline.search();
                 self.outline.selected = self
@@ -449,7 +457,8 @@ impl App {
                     .results
                     .iter()
                     .position(|&index| {
-                        Some(index) == outline::current(&self.outline.sections, self.selection.head)
+                        Some(index)
+                            == outline::current(&self.outline.sections, self.session.selection.head)
                     })
                     .unwrap_or(0);
                 let show = self.show_sidebar(Sidebar::Outline);
@@ -496,15 +505,19 @@ impl App {
     }
 
     fn move_section(&mut self, from: usize, target: DropTarget) -> Task<AppMessage> {
-        let movement =
-            match outline::prepare(self.document.source(), &self.outline.sections, from, target) {
-                Ok(Some(movement)) => movement,
-                Ok(None) => return Task::none(),
-                Err(error) => {
-                    self.notification = Some(error.into());
-                    return Task::none();
-                }
-            };
+        let movement = match outline::prepare(
+            self.session.document.source(),
+            &self.outline.sections,
+            from,
+            target,
+        ) {
+            Ok(Some(movement)) => movement,
+            Ok(None) => return Task::none(),
+            Err(error) => {
+                self.notification = Some(error.into());
+                return Task::none();
+            }
+        };
         let source_range = self.outline.sections[from].range.clone();
         let folds: Vec<_> = self
             .outline
@@ -519,29 +532,29 @@ impl App {
                     .then_some((slot, movement.offset(start, false)))
             })
             .collect();
-        let after = movement.selection(self.selection);
-        match self.document.transact(
+        let after = movement.selection(self.session.selection);
+        match self.session.document.transact(
             &movement.edits,
             EditOrigin::Human,
-            Some((self.selection, after)),
+            Some((self.session.selection, after)),
             true,
         ) {
             Ok(()) => {
-                self.document.break_history_group();
+                self.session.document.break_history_group();
                 for (slot, start) in folds {
                     let end = start
-                        + self.document.source()[start..]
+                        + self.session.document.source()[start..]
                             .chars()
                             .next()
                             .map_or(0, char::len_utf8);
-                    self.outline.collapsed[slot].push(self.document.collaboration().selection(
-                        Selection {
+                    self.outline.collapsed[slot].push(
+                        self.session.document.collaboration().selection(Selection {
                             anchor: start,
                             head: end,
-                        },
-                    ));
+                        }),
+                    );
                 }
-                self.selection = after;
+                self.session.selection = after;
                 if self.mode == EditorMode::Read {
                     self.mode = EditorMode::Live;
                 }
@@ -560,7 +573,7 @@ impl App {
     pub(super) fn outline_list(&self) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
         let mut list = column![];
-        let current = outline::current(&self.outline.sections, self.selection.head);
+        let current = outline::current(&self.outline.sections, self.session.selection.head);
         let visible = self.outline.visible();
         let indicator = self.outline.hover.map(|target| {
             if target.after {

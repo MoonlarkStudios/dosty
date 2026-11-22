@@ -3,10 +3,12 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use iced::futures::{StreamExt, channel::mpsc};
+use iced::futures::StreamExt;
+use iced::futures::channel::mpsc;
 use iced::{Task, window};
 use muda::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
+use super::trail::Direction;
 use super::{
     App, EditorMode, Format, Message, Overlay, Sidebar, chrome, folder, recovery, workspace,
     writing,
@@ -19,9 +21,9 @@ pub enum Command {
     New,
     Open,
     QuickOpen,
+    Step(Direction),
     OpenFolder,
-    OpenRecent(usize),
-    ClearRecent,
+    OpenPlace(usize),
     Save,
     SaveAs,
     Rename,
@@ -82,12 +84,10 @@ pub(super) struct State {
     hidden: bool,
     /// File → Open Recent is rebuilt from fixed command items whenever the
     /// remembered folders change, so menu identifiers stay stable.
-    recent: Submenu,
-    recent_items: Vec<MenuItem>,
-    recent_clear: MenuItem,
-    recent_empty: MenuItem,
-    recent_separator: PredefinedMenuItem,
-    recent_shown: Option<Vec<PathBuf>>,
+    places: Submenu,
+    place_items: Vec<MenuItem>,
+    places_empty: MenuItem,
+    places_shown: Option<Vec<PathBuf>>,
 }
 
 impl State {
@@ -133,25 +133,22 @@ impl State {
             help: Submenu::new("Help", true),
             entries: Vec::new(),
             hidden: false,
-            recent: Submenu::new("Open Recent", true),
-            recent_items: (0..crate::io::workspace_state::MAX_RECENT_WORKSPACES)
-                .map(|index| command_item(Command::OpenRecent(index), ""))
+            places: Submenu::new("Places", true),
+            place_items: (0..crate::io::workspace_state::MAX_PLACES)
+                .map(|index| command_item(Command::OpenPlace(index), ""))
                 .collect(),
-            recent_clear: command_item(Command::ClearRecent, "Clear Menu"),
-            recent_empty: MenuItem::new("No Recent Folders", false, None),
-            recent_separator: PredefinedMenuItem::separator(),
-            recent_shown: None,
+            places_empty: MenuItem::new("No Places Yet", false, None),
+            places_shown: None,
         };
-        let recent_entries: Vec<_> = state
-            .recent_items
+        let place_entries: Vec<_> = state
+            .place_items
             .iter()
             .enumerate()
-            .map(|(index, item)| (Command::OpenRecent(index), item.clone()))
-            .chain([(Command::ClearRecent, state.recent_clear.clone())])
+            .map(|(index, item)| (Command::OpenPlace(index), item.clone()))
             .collect();
         state
             .entries
-            .extend(recent_entries.into_iter().map(|(command, item)| Entry {
+            .extend(place_entries.into_iter().map(|(command, item)| Entry {
                 command,
                 item: Item::Action(item),
                 enabled: true,
@@ -196,11 +193,13 @@ impl State {
             ("New Document", Command::New, Some("Meta+n")),
             ("Open…", Command::Open, Some("Meta+o")),
             ("Quick Open…", Command::QuickOpen, Some("Meta+p")),
-            ("Open Folder…", Command::OpenFolder, Some("Meta+Shift+o")),
+            ("Back", Command::Step(Direction::Back), Some("Meta+[")),
+            ("Forward", Command::Step(Direction::Forward), Some("Meta+]")),
+            ("Add Place…", Command::OpenFolder, Some("Meta+Shift+o")),
         ] {
             state.add(&file, label, command, shortcut, false)?;
         }
-        file.append(&state.recent)?;
+        file.append(&state.places)?;
         for (label, command, shortcut) in [
             ("Save", Command::Save, Some("Meta+s")),
             ("Save As…", Command::SaveAs, Some("Meta+Shift+s")),
@@ -351,36 +350,30 @@ impl State {
         ))
     }
 
-    fn sync_recent(&mut self, recent: &[PathBuf]) {
-        if self.recent_shown.as_deref() == Some(recent) {
+    fn sync_places(&mut self, places: &[PathBuf]) {
+        if self.places_shown.as_deref() == Some(places) {
             return;
         }
-        while self.recent.remove_at(0).is_some() {}
-        let result = if recent.is_empty() {
-            self.recent.append(&self.recent_empty)
+        while self.places.remove_at(0).is_some() {}
+        let result = if places.is_empty() {
+            self.places.append(&self.places_empty)
         } else {
-            self.recent_items
+            self.place_items
                 .iter()
-                .zip(recent)
+                .zip(places)
                 .try_for_each(|(item, root)| {
-                    item.set_text(workspace::recent_label(root, recent));
-                    self.recent.append(item)
-                })
-                .and_then(|()| {
-                    self.recent.append_items(&[
-                        &self.recent_separator as &dyn IsMenuItem,
-                        &self.recent_clear,
-                    ])
+                    item.set_text(workspace::place_label(root, places));
+                    self.places.append(item)
                 })
         };
         if let Err(error) = result {
-            tracing::warn!("could not update Open Recent: {error}");
+            tracing::warn!("could not update Places: {error}");
         }
-        self.recent_shown = Some(recent.to_vec());
+        self.places_shown = Some(places.to_vec());
     }
 
     fn sync(&mut self, app: &App) {
-        self.sync_recent(app.workspace.recent());
+        self.sync_places(app.workspace.places());
         for entry in &mut self.entries {
             let (enabled, checked) = availability(app, entry.command);
             if enabled != entry.enabled {
@@ -410,19 +403,18 @@ impl State {
 fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
     match command {
-        Command::QuickOpen => (ready && app.quick_open_available(), false),
-        Command::OpenRecent(index) => (ready && index < app.workspace.recent().len(), false),
-        Command::ClearRecent => (!app.workspace.recent().is_empty(), false),
+        Command::QuickOpen => (ready, false),
+        Command::Step(direction) => (ready && app.trail.can_step(direction), false),
+        Command::OpenPlace(index) => (ready && index < app.workspace.places().len(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),
         Command::Mode(mode) => (ready, app.mode == mode),
         Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
-        Command::Rename | Command::Move | Command::Location => (ready && app.path.is_some(), false),
+        // A never-saved document can be named, but has no file to move or show.
+        Command::Rename => (ready, false),
+        Command::Move | Command::Location => (ready && app.session.path.is_some(), false),
         Command::UndoMove => (ready && app.folder.can_undo(), false),
         Command::BackToReference => (ready && app.footnotes.can_return(), false),
-        Command::Files => (
-            ready && app.folder.root().is_some(),
-            app.folder.root().is_some() && app.chrome.files.open && !app.chrome.sidebars_hidden,
-        ),
+        Command::Files => (ready, app.chrome.files.open && !app.chrome.sidebars_hidden),
         Command::Outline => (
             ready,
             app.chrome.outline.open && !app.chrome.sidebars_hidden,
@@ -499,14 +491,12 @@ impl App {
             self.chrome.menu = None;
         }
         let message = match command {
-            Command::New => self.folder.root().map_or(Message::New, |root| {
-                Message::Folder(folder::Message::NewDocument(root.to_owned()))
-            }),
+            Command::New => Message::New,
             Command::Open => Message::Open,
             Command::QuickOpen => Message::QuickOpen(super::quick_open::Message::Open),
+            Command::Step(direction) => Message::Step(direction),
             Command::OpenFolder => Message::Folder(folder::Message::Pick),
-            Command::OpenRecent(index) => Message::Workspace(workspace::Message::OpenRecent(index)),
-            Command::ClearRecent => Message::Workspace(workspace::Message::ClearRecent),
+            Command::OpenPlace(index) => Message::Workspace(workspace::Message::OpenPlace(index)),
             Command::Save => Message::Save,
             Command::SaveAs => Message::SaveAs,
             Command::Export => Message::Export,
@@ -538,8 +528,11 @@ impl App {
                 return window::latest()
                     .map(|id| id.map_or(Message::Dismiss, Message::CloseRequested));
             }
+            Command::Rename if self.session.path.is_none() => {
+                Message::Folder(folder::Message::NameDraft)
+            }
             Command::Rename | Command::Move | Command::Location => {
-                let Some(path) = self.path.clone() else {
+                let Some(path) = self.session.path.clone() else {
                     return Task::none();
                 };
                 Message::Folder(match command {
@@ -559,31 +552,32 @@ mod tests {
     use crate::document::selection::Selection;
 
     #[test]
-    fn native_new_uses_the_unsaved_guard_and_closes_only_transient_commands() {
+    fn native_new_keeps_unsaved_writing_and_closes_only_transient_commands() {
         let (mut app, initial) = App::new();
         drop(initial);
         let source = "café and 🦀";
         app.set_document(source.into(), None, "Draft.md".into());
-        app.selection = Selection {
+        app.session.selection = Selection {
             anchor: source.len(),
             head: 0,
         };
         app.sync_editor();
-        app.dirty = true;
+        app.session.dirty = true;
         app.overlay = Some(Overlay::Chrome);
         app.chrome.menu = Some(chrome::Menu::Document);
         drop(app.native_menu_command(Command::New));
-        assert_eq!(app.overlay, Some(Overlay::Unsaved));
+        assert!(app.overlay.is_none());
         assert!(app.chrome.menu.is_none());
-        assert_eq!(app.document.source(), source);
+        assert_eq!(app.session.document.source(), "");
+        let kept = app.background.dirty().next().unwrap();
+        assert_eq!(kept.document.source(), source);
         assert_eq!(
-            app.selection,
+            kept.selection,
             Selection {
                 anchor: source.len(),
                 head: 0
             }
         );
-        assert!(app.dirty);
     }
 
     #[test]
@@ -594,10 +588,13 @@ mod tests {
         app.mode = EditorMode::Read;
         assert!(!availability(&app, Command::Format(Format::Bold)).0);
         drop(app.native_menu_command(Command::Format(Format::Bold)));
-        assert_eq!(app.document.source(), "café and 🦀");
+        assert_eq!(app.session.document.source(), "café and 🦀");
         drop(app.native_menu_command(Command::Mode(EditorMode::Source)));
         assert!(availability(&app, Command::Mode(EditorMode::Source)).1);
-        assert!(!availability(&app, Command::Files).0);
+        assert!(
+            availability(&app, Command::Files).0,
+            "Files offers the library before any place is open"
+        );
         drop(app.update_folder(folder::Message::Scanned {
             generation: 0,
             result: Ok(crate::io::folder::Snapshot {

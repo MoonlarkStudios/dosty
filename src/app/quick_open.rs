@@ -1,6 +1,14 @@
-//! Keyboard navigation over workspace files and the current document’s headings.
+//! The switcher: one summoned surface for moving between documents.
+//!
+//! With an empty query it shows unsaved documents, recently active documents,
+//! the open place's folders to step through, and the other places. A query
+//! searches documents by name and path across the whole library, the open place
+//! first. Everything it holds is derived when it opens and discarded when it
+//! closes; other places are scanned on a worker only while it is open.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use iced::advanced::widget;
 use iced::keyboard::key::Named;
@@ -9,16 +17,23 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Fill, Padding, Size, Task};
 
-use super::{App, EDITOR, Message as AppMessage, Overlay, chrome, outline};
-use crate::app::icon::Icon;
-use crate::document::outline::Section;
+use super::session::SessionId;
+use super::{App, EDITOR, Message as AppMessage, Overlay, Pending, chrome, outline};
+use crate::app::icon::{self, Icon};
 use crate::editor::outline_filter::FilterInput;
+use crate::io::folder as discovery;
 use crate::theme::styles::{self, Button};
 
 pub(super) const INPUT: &str = "quick-open-query";
 const RESULTS: &str = "quick-open-results";
 const MAX_RESULTS: usize = 100;
+const MAX_RECENT: usize = 6;
+/// Documents indexed from places other than the open one, across all of them.
+const MAX_LIBRARY_DOCUMENTS: usize = 65_536;
+/// Height of a row that shows where its document is, and of one that does not.
 const RESULT_HEIGHT: f32 = 48.0;
+const PLAIN_RESULT_HEIGHT: f32 = 34.0;
+const HEADING_HEIGHT: f32 = 28.0;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -27,43 +42,100 @@ pub enum Message {
         request: u64,
         previous: Option<widget::Id>,
     },
+    /// Documents found in the other places, scanned after the switcher opened.
+    Library {
+        request: u64,
+        snapshots: Vec<discovery::Snapshot>,
+    },
     Query(String),
     Step(i32),
     Hover(usize),
     Accept,
-    Choose(PathBuf),
-    ChooseHeading {
+    /// Activate the row at this position.
+    Pick(usize),
+    PickHeading {
         index: usize,
         revision: u64,
         request: u64,
     },
+    /// Open a document of the open place.
+    Choose(PathBuf),
+    /// Step into the selected folder, or out of the one being browsed.
+    StepIn,
+    StepOut,
     Cancel,
 }
 
 struct Candidate {
     recency: usize,
-    pin: Option<usize>,
     path: PathBuf,
-    name: String,
-    relative: String,
+    title: String,
+    /// The folder that holds the document, as shown beside its title.
+    location: String,
+    /// `None` for the open place.
+    place: Option<PathBuf>,
     name_lower: String,
     path_lower: String,
+}
+
+/// A document open in the background with unsaved changes.
+struct Unsaved {
+    session: SessionId,
+    title: String,
+    location: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Target {
+    File(PathBuf),
+    Session(SessionId),
+    Folder(PathBuf),
+    Place(PathBuf),
+    Heading { index: usize, revision: u64 },
+}
+
+pub(super) struct Row {
+    pub(super) target: Target,
+    pub(super) title: String,
+    pub(super) location: String,
+    pub(super) unsaved: bool,
+    /// Set on the first row of a section.
+    pub(super) heading: Option<String>,
 }
 
 #[derive(Default)]
 pub(super) struct State {
     root: Option<PathBuf>,
+    /// The document on the page, left out of Recent.
+    active: Option<PathBuf>,
     candidates: Vec<Candidate>,
+    folders: Vec<PathBuf>,
+    unsaved: Vec<Unsaved>,
+    places: Vec<PathBuf>,
+    pins: Vec<PathBuf>,
+    /// The folder being browsed while the query is empty; `None` is the top.
+    location: Option<PathBuf>,
     query: String,
-    results: Vec<usize>,
+    rows: Vec<Row>,
     matches: usize,
     selected: usize,
     previous: Option<widget::Id>,
     request: u64,
+    /// A place was chosen here, so the open place changing is expected.
+    switching: bool,
+    cancel_scan: Option<Arc<AtomicBool>>,
+}
+
+fn portable(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 impl State {
     pub(super) fn clear(&mut self) {
+        if let Some(cancel) = &self.cancel_scan {
+            cancel.store(true, Ordering::Relaxed);
+        }
         let request = self.request.wrapping_add(1);
         *self = Self {
             request,
@@ -71,128 +143,110 @@ impl State {
         };
     }
 
-    /// Index workspace files. Documents in `recent` (most recent first) lead
-    /// the list and break ties within each match rank. Pins lead only the empty query.
-    fn index(
-        &mut self,
-        root: &Path,
-        files: impl Iterator<Item = impl AsRef<Path>>,
-        recent: &[PathBuf],
-        pins: &[PathBuf],
-    ) {
+    fn candidate(path: &Path, root: &Path, other: bool, recency: usize) -> Option<Candidate> {
+        let relative = path.strip_prefix(root).ok()?;
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        let place = super::folder::name(root);
+        let parent = relative.parent().map(portable).unwrap_or_default();
+        let relative = portable(relative);
+        Some(Candidate {
+            recency,
+            path: path.to_owned(),
+            title: super::folder::title(path),
+            location: match (other, parent.is_empty()) {
+                (_, true) => place.clone(),
+                (false, false) => parent,
+                (true, false) => format!("{place} / {parent}"),
+            },
+            name_lower: name.to_lowercase(),
+            path_lower: if other {
+                format!("{}/{}", place.to_lowercase(), relative.to_lowercase())
+            } else {
+                relative.to_lowercase()
+            },
+            place: other.then(|| root.to_owned()),
+        })
+    }
+
+    fn sort(&mut self) {
+        self.candidates.sort_by(|a, b| {
+            a.recency
+                .cmp(&b.recency)
+                .then_with(|| a.place.is_some().cmp(&b.place.is_some()))
+                .then_with(|| a.name_lower.cmp(&b.name_lower))
+                .then_with(|| a.path_lower.cmp(&b.path_lower))
+        });
+    }
+
+    /// Index the open place. Documents in `recent` (most recent first) lead
+    /// the list and break ties within each match rank. Documents already
+    /// indexed from other places are kept.
+    fn index(&mut self, root: &Path, entries: &[discovery::Entry], recent: &[PathBuf]) {
         let recency: std::collections::HashMap<&Path, usize> = recent
             .iter()
             .enumerate()
             .map(|(rank, path)| (path.as_path(), rank))
             .collect();
         let recency = |path: &Path| recency.get(path).copied().unwrap_or(usize::MAX);
-        let pins: std::collections::HashMap<&Path, usize> = pins
+        self.candidates
+            .retain(|candidate| candidate.place.is_some());
+        self.candidates.extend(
+            entries
+                .iter()
+                .filter(|entry| !entry.is_directory)
+                .filter_map(|entry| {
+                    Self::candidate(&entry.path, root, false, recency(&entry.path))
+                }),
+        );
+        self.folders = entries
             .iter()
-            .enumerate()
-            .map(|(rank, path)| (path.as_path(), rank))
+            .filter(|entry| entry.is_directory)
+            .map(|entry| entry.path.clone())
             .collect();
-        self.candidates = files
-            .filter_map(|path| {
-                let path = path.as_ref();
-                let relative = path.strip_prefix(root).ok()?;
-                let pin = pins.get(relative).copied();
-                let name = path.file_name()?.to_string_lossy().into_owned();
-                let relative = relative
-                    .to_string_lossy()
-                    .replace(std::path::MAIN_SEPARATOR, "/");
-                Some(Candidate {
-                    recency: recency(path),
-                    pin,
-                    path: path.to_owned(),
-                    name_lower: name.to_lowercase(),
-                    path_lower: relative.to_lowercase(),
-                    name,
-                    relative,
-                })
-            })
-            .collect();
-        self.candidates.sort_by(|a, b| {
-            a.recency
-                .cmp(&b.recency)
-                .then_with(|| a.name_lower.cmp(&b.name_lower))
-                .then_with(|| a.path_lower.cmp(&b.path_lower))
+        self.sort();
+        self.list();
+    }
+
+    /// Add the documents of the other places, within a shared bound.
+    fn index_library(&mut self, snapshots: &[discovery::Snapshot]) {
+        self.candidates
+            .retain(|candidate| candidate.place.is_none());
+        let documents = snapshots.iter().flat_map(|snapshot| {
+            snapshot
+                .entries
+                .iter()
+                .filter(|entry| !entry.is_directory)
+                .filter_map(|entry| Self::candidate(&entry.path, &snapshot.root, true, usize::MAX))
         });
+        self.candidates
+            .extend(documents.take(MAX_LIBRARY_DOCUMENTS));
+        self.sort();
+        self.list();
     }
 
-    fn initial_results(&self) -> Vec<usize> {
-        let mut pinned: Vec<_> = self
-            .candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(index, candidate)| candidate.pin.map(|rank| (rank, index)))
-            .collect();
-        pinned.sort_unstable();
-        pinned
-            .into_iter()
-            .map(|(_, index)| index)
-            .chain(
-                self.candidates
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, candidate)| candidate.pin.is_none())
-                    .map(|(index, _)| index),
-            )
-            .take(MAX_RESULTS)
-            .collect()
-    }
-
-    fn select_previous_file(&mut self, current: &Path) {
-        let mut available = self
-            .results
-            .iter()
-            .enumerate()
-            .filter(|&(_, index)| self.candidates[*index].path != current);
-        self.selected = available
-            .clone()
-            .filter(|&(_, index)| self.candidates[*index].recency != usize::MAX)
-            .min_by_key(|&(_, index)| self.candidates[*index].recency)
-            .or_else(|| available.next())
-            .map_or(0, |(position, _)| position);
-    }
-
-    fn search_files(&mut self) {
+    /// Rebuild the rows for the current query, or for the folder being browsed.
+    fn list(&mut self) {
+        // Outline owns heading rows. A pending library or place scan can
+        // refresh file candidates without replacing a heading query.
+        if self.heading_query().is_some() {
+            return;
+        }
         let query = self.query.trim().to_lowercase();
         let query = if cfg!(target_os = "windows") {
             query.replace('\\', "/")
         } else {
             query
         };
-        if query.is_empty() {
-            self.matches = self.candidates.len();
-            self.results = self.initial_results();
-            self.selected = self.selected.min(self.results.len().saturating_sub(1));
-            return;
-        }
-        let terms: Vec<_> = query.split_whitespace().collect();
-        let mut ranked: [Vec<usize>; 3] = Default::default();
+        self.rows.clear();
         self.matches = 0;
-        for (index, candidate) in self.candidates.iter().enumerate() {
-            if !terms.iter().all(|term| candidate.path_lower.contains(term)) {
-                continue;
-            }
-            self.matches += 1;
-            let rank = if candidate.name_lower == query {
-                0
-            } else if candidate.name_lower.starts_with(&query) {
-                1
-            } else {
-                2
-            };
-            if ranked[rank].len() < MAX_RESULTS {
-                ranked[rank].push(index);
-            }
+        if query.is_empty() {
+            self.browse();
+        } else {
+            self.search(&query);
         }
-        self.results = ranked.into_iter().flatten().take(MAX_RESULTS).collect();
-        self.selected = self.selected.min(self.results.len().saturating_sub(1));
-    }
-
-    fn headings(&self) -> bool {
-        self.root.is_none() || self.heading_query().is_some()
+        self.matches = self.matches.max(self.rows.len());
+        self.rows.truncate(MAX_RESULTS);
+        self.selected = self.selected.min(self.rows.len().saturating_sub(1));
     }
 
     fn heading_query(&self) -> Option<&str> {
@@ -204,69 +258,338 @@ impl State {
         }
     }
 
-    fn search_headings(&mut self, sections: &[Section]) {
-        let query = self.heading_query().unwrap_or(&self.query).to_lowercase();
-        let terms: Vec<_> = query.split_whitespace().collect();
-        self.results.clear();
-        self.matches = 0;
-        for index in outline::matching_headings(sections, &terms) {
-            self.matches += 1;
-            if self.results.len() < MAX_RESULTS {
-                self.results.push(index);
-            }
-        }
-        self.selected = self.selected.min(self.results.len().saturating_sub(1));
+    fn previous_document(&self) -> Option<Target> {
+        self.candidates
+            .iter()
+            .find(|candidate| {
+                candidate.recency != usize::MAX && Some(&candidate.path) != self.active.as_ref()
+            })
+            .map(|candidate| Target::File(candidate.path.clone()))
     }
 
-    fn selected_path(&self) -> Option<&Path> {
-        if self.headings() {
-            return None;
+    fn search(&mut self, query: &str) {
+        let terms: Vec<_> = query.split_whitespace().collect();
+        self.rows.extend(
+            self.unsaved
+                .iter()
+                .filter(|unsaved| {
+                    let title = unsaved.title.to_lowercase();
+                    terms.iter().all(|term| title.contains(term))
+                })
+                .map(Unsaved::row),
+        );
+        let mut ranked: [Vec<usize>; 3] = Default::default();
+        for (index, candidate) in self.candidates.iter().enumerate() {
+            if !terms.iter().all(|term| candidate.path_lower.contains(term)) {
+                continue;
+            }
+            self.matches += 1;
+            let rank = if candidate.name_lower == query {
+                0
+            } else if candidate.name_lower.starts_with(query) {
+                1
+            } else {
+                2
+            };
+            if ranked[rank].len() < MAX_RESULTS {
+                ranked[rank].push(index);
+            }
         }
-        self.results
+        self.matches += self.rows.len();
+        self.rows.extend(
+            ranked
+                .into_iter()
+                .flatten()
+                .map(|index| self.candidates[index].row()),
+        );
+    }
+
+    fn browse(&mut self) {
+        if let Some(folder) = self.location.clone() {
+            let heading = self
+                .root
+                .as_deref()
+                .and_then(|root| folder.strip_prefix(root).ok())
+                .map_or_else(|| portable(&folder), portable);
+            self.push_children(&folder, heading);
+            return;
+        }
+        let mut section = Vec::from_iter(self.unsaved.iter().map(Unsaved::row));
+        self.push_section("Unsaved", &mut section);
+        let mut section: Vec<_> = self
+            .pins
+            .iter()
+            .filter_map(|pin| {
+                self.candidates
+                    .iter()
+                    .find(|candidate| candidate.place.is_none() && &candidate.path == pin)
+            })
+            .map(Candidate::row)
+            .collect();
+        self.push_section("Pinned", &mut section);
+        let mut section: Vec<_> = self
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.recency != usize::MAX)
+            .filter(|candidate| Some(&candidate.path) != self.active.as_ref())
+            .filter(|candidate| !self.pins.contains(&candidate.path))
+            .take(MAX_RECENT)
+            .map(Candidate::row)
+            .collect();
+        self.push_section("Recent", &mut section);
+        if let Some(root) = self.root.clone() {
+            self.push_children(&root, super::folder::name(&root));
+        }
+        let mut section: Vec<_> = self
+            .places
+            .iter()
+            .map(|place| Row {
+                target: Target::Place(place.clone()),
+                title: super::workspace::place_label(place, &self.places),
+                location: String::new(),
+                unsaved: false,
+                heading: None,
+            })
+            .collect();
+        self.push_section("Places", &mut section);
+    }
+
+    fn push_section(&mut self, heading: impl Into<String>, section: &mut Vec<Row>) {
+        if let Some(first) = section.first_mut() {
+            first.heading = Some(heading.into());
+        }
+        self.rows.append(section);
+    }
+
+    /// The folders, then the documents, directly inside `parent`.
+    fn push_children(&mut self, parent: &Path, heading: String) {
+        let mut folders: Vec<_> = self
+            .folders
+            .iter()
+            .filter(|folder| folder.parent() == Some(parent))
+            .map(|folder| Row {
+                target: Target::Folder(folder.clone()),
+                title: super::folder::name(folder),
+                location: String::new(),
+                unsaved: false,
+                heading: None,
+            })
+            .collect();
+        folders.sort_by(|a, b| discovery::natural_cmp(&a.title, &b.title));
+        let mut documents: Vec<_> = self
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.place.is_none())
+            .filter(|candidate| candidate.path.parent() == Some(parent))
+            .map(|candidate| Row {
+                location: String::new(),
+                ..candidate.row()
+            })
+            .collect();
+        documents.sort_by(|a, b| discovery::natural_cmp(&a.title, &b.title));
+        folders.append(&mut documents);
+        self.push_section(heading, &mut folders);
+    }
+
+    fn select(&mut self, target: Option<&Target>) {
+        self.selected = target
+            .and_then(|target| self.rows.iter().position(|row| &row.target == target))
+            .unwrap_or(0);
+    }
+
+    fn selected_target(&self) -> Option<&Target> {
+        self.rows.get(self.selected).map(|row| &row.target)
+    }
+
+    /// Vertical extent of the selected row, below the rows and headings
+    /// before it.
+    fn selected_extent(&self) -> (f32, f32) {
+        let before = self.rows.iter().take(self.selected);
+        let top: f32 = before.map(|row| row.heading_height() + row.height()).sum();
+        self.rows
             .get(self.selected)
-            .map(|&index| self.candidates[index].path.as_path())
+            .map_or((top, 0.0), |row| (top + row.heading_height(), row.height()))
+    }
+}
+
+impl Row {
+    fn height(&self) -> f32 {
+        if self.location.is_empty() {
+            PLAIN_RESULT_HEIGHT
+        } else {
+            RESULT_HEIGHT
+        }
+    }
+
+    fn heading_height(&self) -> f32 {
+        if self.heading.is_some() {
+            HEADING_HEIGHT
+        } else {
+            0.0
+        }
+    }
+}
+
+impl Candidate {
+    fn row(&self) -> Row {
+        Row {
+            target: Target::File(self.path.clone()),
+            title: self.title.clone(),
+            location: self.location.clone(),
+            unsaved: false,
+            heading: None,
+        }
+    }
+}
+
+impl Unsaved {
+    fn row(&self) -> Row {
+        Row {
+            target: Target::Session(self.session),
+            title: self.title.clone(),
+            location: self.location.clone(),
+            unsaved: true,
+            heading: None,
+        }
     }
 }
 
 impl App {
-    pub(super) fn quick_open_available(&self) -> bool {
-        self.folder.root().is_some() || !self.outline.sections.is_empty()
+    /// Derive everything the switcher shows from the application as it stands.
+    fn index_quick_open(&mut self) {
+        let root = self.folder.root().map(Path::to_owned);
+        self.quick_open.active = self.session.path.clone();
+        self.quick_open.unsaved = self
+            .background
+            .dirty()
+            .map(|session| Unsaved {
+                session: session.id(),
+                title: session.path.as_deref().map_or_else(
+                    || super::folder::title(Path::new(&session.display_name)),
+                    super::folder::title,
+                ),
+                location: match (session.path.as_deref(), session.folder.as_deref()) {
+                    (Some(path), _) => path.parent().map(super::folder::name).unwrap_or_default(),
+                    (None, Some(folder)) => format!("Draft in {}", super::folder::name(folder)),
+                    (None, None) => "Not saved yet".into(),
+                },
+            })
+            .collect();
+        self.quick_open.places = self
+            .workspace
+            .places()
+            .iter()
+            .filter(|place| Some(place.as_path()) != root.as_deref())
+            .cloned()
+            .collect();
+        self.quick_open.root.clone_from(&root);
+        self.quick_open.pins = root.as_ref().map_or_else(Vec::new, |root| {
+            self.workspace
+                .pins(root)
+                .iter()
+                .map(|pin| root.join(pin))
+                .collect()
+        });
+        match root {
+            Some(root) => {
+                let recent = self.workspace.recent_documents();
+                self.quick_open.index(&root, self.folder.entries(), &recent);
+            }
+            None => self.quick_open.index(Path::new(""), &[], &[]),
+        }
+    }
+
+    /// Scan the other places on a worker, one at a time, within a shared bound.
+    fn scan_library(&mut self) -> Task<AppMessage> {
+        let places = self.quick_open.places.clone();
+        if places.is_empty() {
+            return Task::none();
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.quick_open.cancel_scan = Some(Arc::clone(&cancel));
+        let request = self.quick_open.request;
+        Task::perform(
+            async move {
+                let mut snapshots = Vec::new();
+                let mut budget = MAX_LIBRARY_DOCUMENTS;
+                for place in places {
+                    if budget == 0 || cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    // A place that cannot be read is simply absent from search.
+                    if let Ok(mut snapshot) = discovery::scan(place, Arc::clone(&cancel)).await {
+                        snapshot.entries.retain(|entry| !entry.is_directory);
+                        snapshot.entries.truncate(budget);
+                        budget -= snapshot.entries.len();
+                        snapshots.push(snapshot);
+                    }
+                }
+                snapshots
+            },
+            move |snapshots| AppMessage::QuickOpen(Message::Library { request, snapshots }),
+        )
     }
 
     pub(super) fn refresh_quick_open_headings(&mut self) {
-        if self.overlay == Some(Overlay::QuickOpen) && self.quick_open.headings() {
-            self.quick_open.search_headings(&self.outline.sections);
+        if self.overlay != Some(Overlay::QuickOpen) {
+            return;
         }
+        let Some(query) = self.quick_open.heading_query() else {
+            return;
+        };
+        let query = query.to_lowercase();
+        let terms: Vec<_> = query.split_whitespace().collect();
+        let sections = &self.outline.sections;
+        let revision = self.session.document.revision();
+        self.quick_open.rows.clear();
+        self.quick_open.matches = 0;
+        for index in outline::matching_headings(sections, &terms) {
+            self.quick_open.matches += 1;
+            if self.quick_open.rows.len() == MAX_RESULTS {
+                continue;
+            }
+            let mut parents: Vec<_> = outline::heading_parents(sections, index)
+                .map(outline::heading_label)
+                .collect();
+            parents.reverse();
+            self.quick_open.rows.push(Row {
+                target: Target::Heading { index, revision },
+                title: outline::heading_label(&sections[index]).to_owned(),
+                location: parents.join(" › "),
+                unsaved: false,
+                heading: None,
+            });
+        }
+        self.quick_open.selected = self
+            .quick_open
+            .selected
+            .min(self.quick_open.rows.len().saturating_sub(1));
     }
 
     pub(super) fn refresh_quick_open(&mut self) -> Task<AppMessage> {
         if self.overlay != Some(Overlay::QuickOpen) {
             return Task::none();
         }
-        if self.folder.root() != self.quick_open.root.as_deref() {
+        let moved = self.folder.root() != self.quick_open.root.as_deref();
+        if moved && !std::mem::take(&mut self.quick_open.switching) {
             return self.cancel_quick_open();
         }
-        let selected = self.quick_open.selected_path().map(Path::to_owned);
-        if let Some(root) = self.folder.root() {
-            let recent = self.workspace.recent_documents();
-            self.quick_open.index(
-                root,
-                self.folder.files(),
-                &recent,
-                self.workspace.pins(root),
-            );
+        let selected = self.quick_open.selected_target().cloned();
+        if moved {
+            // Arrived at the place chosen here: browse it from the top.
+            self.quick_open.location = None;
+            self.quick_open
+                .candidates
+                .retain(|candidate| candidate.place.is_none());
         }
-        if self.quick_open.headings() {
-            return Task::none();
-        }
-        self.quick_open.search_files();
-        self.quick_open.selected = self
-            .quick_open
-            .results
-            .iter()
-            .position(|&index| Some(&self.quick_open.candidates[index].path) == selected.as_ref())
-            .unwrap_or(0);
-        self.reveal_quick_open_choice()
+        self.index_quick_open();
+        self.quick_open.select(selected.as_ref());
+        let scan = if moved {
+            self.scan_library()
+        } else {
+            Task::none()
+        };
+        Task::batch([scan, self.reveal_quick_open_choice()])
     }
 
     pub(super) fn cancel_quick_open(&mut self) -> Task<AppMessage> {
@@ -280,7 +603,8 @@ impl App {
             .unwrap_or_else(|| widget::Id::from(EDITOR));
         self.quick_open.clear();
         self.overlay = None;
-        self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
         operation::focus(previous)
     }
 
@@ -292,30 +616,15 @@ impl App {
             if self.busy || self.loading || !matches!(self.overlay, None | Some(Overlay::Chrome)) {
                 return Task::none();
             }
-            if !self.quick_open_available() {
-                return Task::none();
-            }
             self.quick_open.clear();
-            if let Some(root) = self.folder.root() {
-                self.quick_open.root = Some(root.to_owned());
-                let recent = self.workspace.recent_documents();
-                self.quick_open.index(
-                    root,
-                    self.folder.files(),
-                    &recent,
-                    self.workspace.pins(root),
-                );
-                self.quick_open.search_files();
-                // Pins change visual order. Keep Enter pointed at the previous file.
-                if let Some(current) = self.path.as_deref().filter(|path| path.starts_with(root)) {
-                    self.quick_open.select_previous_file(current);
-                }
-            } else {
-                self.quick_open.search_headings(&self.outline.sections);
-            }
+            self.index_quick_open();
+            // Enter still switches back when the previous document is pinned.
+            let previous = self.quick_open.previous_document();
+            self.quick_open.select(previous.as_ref());
             self.chrome.menu = None;
             self.overlay = Some(Overlay::QuickOpen);
-            self.preserve_viewport_generation = Some(self.document.collaboration().generation());
+            self.preserve_viewport_generation =
+                Some(self.session.document.collaboration().generation());
             let request = self.quick_open.request;
             struct Focused(Option<widget::Id>);
             impl widget::Operation<Option<widget::Id>> for Focused {
@@ -339,13 +648,14 @@ impl App {
                     widget::operation::Outcome::Some(self.0.clone())
                 }
             }
-            return widget::operate(Focused(None))
+            let focus = widget::operate(Focused(None))
                 .map(move |previous| AppMessage::QuickOpen(Message::Focus { request, previous }));
+            return Task::batch([focus, self.scan_library()]);
         }
         if self.overlay != Some(Overlay::QuickOpen) {
             return Task::none();
         }
-        if self.quick_open.root.as_deref() != self.folder.root() {
+        if self.quick_open.root.as_deref() != self.folder.root() && !self.quick_open.switching {
             return self.cancel_quick_open();
         }
         match message {
@@ -353,16 +663,23 @@ impl App {
             Message::Focus { request, previous } => {
                 if request == self.quick_open.request {
                     self.quick_open.previous = previous;
-                    return Task::batch([operation::focus(INPUT), self.reveal_quick_open_choice()]);
+                    return operation::focus(INPUT);
+                }
+            }
+            Message::Library { request, snapshots } => {
+                if request == self.quick_open.request {
+                    let selected = self.quick_open.selected_target().cloned();
+                    self.quick_open.index_library(&snapshots);
+                    self.quick_open.select(selected.as_ref());
                 }
             }
             Message::Query(query) => {
                 self.quick_open.query = query.chars().take(1024).collect();
                 self.quick_open.selected = 0;
-                if self.quick_open.headings() {
-                    self.quick_open.search_headings(&self.outline.sections);
+                if self.quick_open.heading_query().is_some() {
+                    self.refresh_quick_open_headings();
                 } else {
-                    self.quick_open.search_files();
+                    self.quick_open.list();
                 }
                 return operation::snap_to(RESULTS, scrollable::RelativeOffset::START);
             }
@@ -371,44 +688,56 @@ impl App {
                     .quick_open
                     .selected
                     .saturating_add_signed(direction as isize)
-                    .min(self.quick_open.results.len().saturating_sub(1));
+                    .min(self.quick_open.rows.len().saturating_sub(1));
                 return self.reveal_quick_open_choice();
             }
             Message::Hover(index) => {
-                self.quick_open.selected =
-                    index.min(self.quick_open.results.len().saturating_sub(1))
+                self.quick_open.selected = index.min(self.quick_open.rows.len().saturating_sub(1))
             }
             Message::Accept => {
-                if self.quick_open.headings()
-                    && let Some(&index) = self.quick_open.results.get(self.quick_open.selected)
-                {
-                    return self.update_quick_open(Message::ChooseHeading {
-                        index,
-                        revision: self.document.revision(),
-                        request: self.quick_open.request,
-                    });
-                }
-                if let Some(path) = self.quick_open.selected_path().map(Path::to_owned) {
-                    return self.update_quick_open(Message::Choose(path));
-                }
+                return self.update_quick_open(Message::Pick(self.quick_open.selected));
             }
-            Message::ChooseHeading {
+            Message::Pick(index) => {
+                let Some(target) = self
+                    .quick_open
+                    .rows
+                    .get(index)
+                    .map(|row| row.target.clone())
+                else {
+                    return Task::none();
+                };
+                return self.pick_quick_open(target);
+            }
+            Message::PickHeading {
                 index,
                 revision,
                 request,
-            } if !self.busy
-                && !self.loading
-                && self.quick_open.headings()
-                && request == self.quick_open.request
-                && revision == self.document.revision()
-                && self.quick_open.results.contains(&index) =>
-            {
-                self.quick_open.clear();
-                self.overlay = None;
-                self.preserve_viewport_generation = None;
-                return self.update_message(AppMessage::Outline(outline::Message::Jump(index)));
+            } => {
+                if self.quick_open.request == request {
+                    return self.pick_quick_open(Target::Heading { index, revision });
+                }
             }
-            Message::Choose(path) if !self.busy && !self.loading && !self.quick_open.headings() => {
+            Message::StepIn => {
+                if let Some(Target::Folder(folder)) = self.quick_open.selected_target().cloned() {
+                    return self.pick_quick_open(Target::Folder(folder));
+                }
+            }
+            Message::StepOut => {
+                if !self.quick_open.query.is_empty() {
+                    return Task::none();
+                }
+                let Some(folder) = self.quick_open.location.take() else {
+                    return Task::none();
+                };
+                self.quick_open.location = folder
+                    .parent()
+                    .filter(|parent| Some(*parent) != self.quick_open.root.as_deref())
+                    .map(Path::to_owned);
+                self.quick_open.list();
+                self.quick_open.select(Some(&Target::Folder(folder)));
+                return self.reveal_quick_open_choice();
+            }
+            Message::Choose(path) if !self.busy && !self.loading => {
                 if !self.folder.files().any(|file| file == path)
                     || !self
                         .quick_open
@@ -419,28 +748,87 @@ impl App {
                     return Task::none();
                 }
                 let focus = self.cancel_quick_open();
-                if self.path.as_ref() == Some(&path) {
+                if self.session.path.as_ref() == Some(&path) {
                     return focus;
                 }
-                // This is a known file choice. Reuse Files' guarded loader;
+                // This is a known file choice. Reuse Files' loader;
                 // reclassifying a stale path could turn a renamed directory
-                // into an unintended workspace switch.
+                // into an unintended switch of place.
                 let open = self.update_folder(super::folder::Message::Tree(
                     crate::editor::file_tree::Action::Open(path),
                 ));
                 return Task::batch([focus, open]);
             }
-            Message::Choose(_) | Message::ChooseHeading { .. } => {}
+            Message::Choose(_) => {}
             Message::Cancel => return self.cancel_quick_open(),
         }
         Task::none()
     }
 
+    fn pick_quick_open(&mut self, target: Target) -> Task<AppMessage> {
+        match target {
+            Target::Heading { index, revision }
+                if !self.busy
+                    && !self.loading
+                    && self.quick_open.heading_query().is_some()
+                    && revision == self.session.document.revision()
+                    && self.quick_open.rows.iter().any(|row| row.target == target) =>
+            {
+                self.quick_open.clear();
+                self.overlay = None;
+                self.preserve_viewport_generation = None;
+                self.update_message(AppMessage::Outline(outline::Message::Jump(index)))
+            }
+            Target::Folder(folder) => {
+                self.quick_open.query.clear();
+                self.quick_open.location = Some(folder);
+                self.quick_open.selected = 0;
+                self.quick_open.list();
+                operation::snap_to(RESULTS, scrollable::RelativeOffset::START)
+            }
+            Target::Place(place) if !self.busy => {
+                self.quick_open.switching = true;
+                self.open_workspace(place)
+            }
+            Target::File(path) if crate::io::assets::is_image(&path) => {
+                let focus = self.cancel_quick_open();
+                let show = self.update_image_preview(super::image_preview::Message::Show(path));
+                Task::batch([focus, show])
+            }
+            Target::File(path) if self.folder.files().any(|file| file == path) => {
+                self.update_quick_open(Message::Choose(path))
+            }
+            Target::File(path) if !self.busy && !self.loading => {
+                // A document in another place. Its place opens once it is on
+                // the page.
+                let focus = self.cancel_quick_open();
+                if !self.commit_cell() {
+                    return focus;
+                }
+                Task::batch([focus, self.request(Pending::Open(Some(path)))])
+            }
+            Target::Session(session) if !self.busy && !self.loading => {
+                let focus = self.cancel_quick_open();
+                if !self.commit_cell() {
+                    return focus;
+                }
+                match self.background.take_unsaved(session) {
+                    Some(parked) => Task::batch([focus, self.resume(parked)]),
+                    None => focus,
+                }
+            }
+            Target::Place(_) | Target::File(_) | Target::Session(_) | Target::Heading { .. } => {
+                Task::none()
+            }
+        }
+    }
+
     fn reveal_quick_open_choice(&self) -> Task<AppMessage> {
-        // Results have one fixed row height; keep keyboard navigation visible
+        // Row heights are known without layout; keep keyboard navigation visible
         // without moving focus out of the query or changing the document caret.
         struct Reveal {
             top: f32,
+            height: f32,
         }
         impl widget::Operation<f32> for Reveal {
             fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation<f32>)) {
@@ -457,8 +845,8 @@ impl App {
                 if id == Some(&widget::Id::from(RESULTS)) {
                     self.top = if self.top < translation.y {
                         self.top
-                    } else if self.top + RESULT_HEIGHT > translation.y + bounds.height {
-                        self.top + RESULT_HEIGHT - bounds.height
+                    } else if self.top + self.height > translation.y + bounds.height {
+                        self.top + self.height - bounds.height
                     } else {
                         translation.y
                     };
@@ -468,10 +856,8 @@ impl App {
                 widget::operation::Outcome::Some(self.top.max(0.0))
             }
         }
-        widget::operate(Reveal {
-            top: self.quick_open.selected as f32 * RESULT_HEIGHT,
-        })
-        .then(|offset| {
+        let (top, height) = self.quick_open.selected_extent();
+        widget::operate(Reveal { top, height }).then(|offset| {
             operation::scroll_to(
                 RESULTS,
                 scrollable::AbsoluteOffset {
@@ -484,13 +870,11 @@ impl App {
 
     pub(super) fn quick_open_view(&self, size: Size) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let headings = self.quick_open.headings();
-        let placeholder = if headings {
-            "Find a heading…"
-        } else if self.outline.sections.is_empty() {
-            "Find a file by name or path…"
+        let headings = self.quick_open.heading_query().is_some();
+        let placeholder = if self.outline.sections.is_empty() {
+            "Search or jump to…"
         } else {
-            "Find a file, or type # then Space for headings…"
+            "Search or jump to…  # then Space for headings"
         };
         let input = text_input(placeholder, &self.quick_open.query)
             .id(INPUT)
@@ -499,113 +883,111 @@ impl App {
             .padding(10)
             .size(14)
             .style(styles::input(tokens));
-        let input = FilterInput::new(input, |key| {
-            Some(AppMessage::QuickOpen(match key {
-                Named::ArrowUp => Message::Step(-1),
-                Named::ArrowDown => Message::Step(1),
-                Named::Escape => Message::Cancel,
-                _ => return None,
-            }))
-        });
+        // Left and Right move the query caret once there is a query to move in.
+        let input = if self.quick_open.query.is_empty() {
+            FilterInput::new(input, |key| {
+                Some(AppMessage::QuickOpen(match key {
+                    Named::ArrowUp => Message::Step(-1),
+                    Named::ArrowDown => Message::Step(1),
+                    Named::ArrowRight => Message::StepIn,
+                    Named::ArrowLeft => Message::StepOut,
+                    Named::Escape => Message::Cancel,
+                    _ => return None,
+                }))
+            })
+        } else {
+            FilterInput::new(input, |key| {
+                Some(AppMessage::QuickOpen(match key {
+                    Named::ArrowUp => Message::Step(-1),
+                    Named::ArrowDown => Message::Step(1),
+                    Named::Escape => Message::Cancel,
+                    _ => return None,
+                }))
+            })
+        };
         let mut results = column![];
-        for (position, &index) in self.quick_open.results.iter().enumerate() {
-            let (title, context, hint, message, pinned) = if headings {
-                let title = outline::heading_label(&self.outline.sections[index]);
-                let mut parents: Vec<_> = outline::heading_parents(&self.outline.sections, index)
-                    .map(outline::heading_label)
-                    .collect();
-                parents.reverse();
-                let context = parents.join(" › ");
-                let hint = if context.is_empty() {
-                    title.to_owned()
-                } else {
-                    format!("{context} › {title}")
-                };
-                (
-                    title,
-                    context,
-                    hint,
-                    Message::ChooseHeading {
-                        index,
-                        revision: self.document.revision(),
-                        request: self.quick_open.request,
-                    },
-                    false,
-                )
-            } else {
-                let file = &self.quick_open.candidates[index];
-                (
-                    file.name.as_str(),
-                    file.relative.rsplit_once('/').map_or_else(
-                        || {
-                            self.folder
-                                .root()
-                                .map(super::folder::name)
-                                .unwrap_or_default()
-                        },
-                        |(parent, _)| parent.to_owned(),
-                    ),
-                    file.path.display().to_string(),
-                    Message::Choose(file.path.clone()),
-                    file.pin.is_some(),
-                )
-            };
-            let title = row![
-                container(text(title).size(13).wrapping(text::Wrapping::None))
-                    .clip(true)
-                    .width(Fill)
-            ]
-            .align_y(Alignment::Center)
-            .spacing(6);
-            let title = if pinned {
-                title.push(text("Pinned").size(11).color(tokens.muted))
-            } else {
-                title
-            };
-            let choice = button(
-                container(
-                    column![
-                        title,
-                        text(context)
+        for (position, entry) in self.quick_open.rows.iter().enumerate() {
+            if let Some(heading) = &entry.heading {
+                results = results.push(
+                    container(
+                        text(heading)
                             .size(11)
                             .color(tokens.muted)
                             .wrapping(text::Wrapping::None),
-                    ]
-                    .spacing(2),
-                )
-                .clip(true)
-                .width(Fill),
-            )
-            .padding([6, 10])
-            .height(RESULT_HEIGHT)
-            .width(Fill)
-            .on_press(AppMessage::QuickOpen(message))
-            .style(styles::button_style(
-                tokens,
-                if position == self.quick_open.selected {
-                    Button::Selected
-                } else {
-                    Button::Quiet
+                    )
+                    .clip(true)
+                    .height(HEADING_HEIGHT)
+                    .padding(Padding::new(10.0).top(10.0).bottom(0.0)),
+                );
+            }
+            let mut label =
+                column![text(&entry.title).size(13).wrapping(text::Wrapping::None)].spacing(2);
+            if !entry.location.is_empty() {
+                label = label.push(
+                    text(&entry.location)
+                        .size(11)
+                        .color(tokens.muted)
+                        .wrapping(text::Wrapping::None),
+                );
+            }
+            let mark = match &entry.target {
+                _ if entry.unsaved => Some(Icon::Modified),
+                Target::Folder(_) | Target::Place(_) => Some(Icon::Folder),
+                Target::File(path) if crate::io::assets::is_image(path) => Some(Icon::Image),
+                Target::Heading { .. } => Some(Icon::Heading),
+                Target::File(_) | Target::Session(_) => None,
+            };
+            let mut line = row![].spacing(8).align_y(Alignment::Center);
+            if let Some(mark) = mark {
+                line = line.push(icon::sized(mark, tokens.muted, 14.0));
+            }
+            line = line.push(container(label).clip(true).width(Fill));
+            let activate = match entry.target {
+                Target::Heading { index, revision } => Message::PickHeading {
+                    index,
+                    revision,
+                    request: self.quick_open.request,
                 },
-            ));
-            results = results.push(
-                iced::widget::mouse_area(tooltip(
+                _ => Message::Pick(position),
+            };
+            let choice = button(container(line).center_y(Fill))
+                .padding([6, 10])
+                .height(entry.height())
+                .width(Fill)
+                .on_press(AppMessage::QuickOpen(activate))
+                .style(styles::button_style(
+                    tokens,
+                    if position == self.quick_open.selected {
+                        Button::Selected
+                    } else {
+                        Button::Quiet
+                    },
+                ));
+            let choice: Element<'_, AppMessage> = match &entry.target {
+                Target::File(path) | Target::Folder(path) | Target::Place(path) => tooltip(
                     choice,
-                    text(hint).size(11),
+                    text(path.display().to_string()).size(11),
                     tooltip::Position::Bottom,
-                ))
-                .on_move(move |_| AppMessage::QuickOpen(Message::Hover(position))),
+                )
+                .into(),
+                Target::Session(_) | Target::Heading { .. } => choice.into(),
+            };
+            results = results.push(
+                iced::widget::mouse_area(choice)
+                    .on_move(move |_| AppMessage::QuickOpen(Message::Hover(position))),
             );
         }
-        if self.quick_open.results.is_empty() {
+        if self.quick_open.rows.is_empty() {
             results = results.push(
                 container(
                     text(if headings {
                         "No matching headings"
-                    } else if self.quick_open.candidates.is_empty() {
-                        "No Markdown files in this workspace"
+                    } else if !self.quick_open.query.trim().is_empty() {
+                        "No matching documents"
+                    } else if self.quick_open.location.is_some() {
+                        "This folder holds no documents"
                     } else {
-                        "No matching files"
+                        "Add a place to keep your writing within reach"
                     })
                     .size(13)
                     .color(tokens.muted),
@@ -628,7 +1010,7 @@ impl App {
                 .size(13),
                 container(
                     text(if headings {
-                        self.display_name.clone()
+                        self.session.display_name.clone()
                     } else {
                         self.folder
                             .root()
@@ -652,7 +1034,7 @@ impl App {
             .align_y(Alignment::Center)
             .spacing(8),
             input,
-            container(body).max_height((available - 100.0).clamp(80.0, 320.0)),
+            container(body).max_height((available - 100.0).clamp(80.0, 420.0)),
         ]
         .spacing(8);
         if self.quick_open.matches > MAX_RESULTS {

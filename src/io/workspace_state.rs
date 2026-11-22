@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::storage::{self, FileError, atomic_write};
 
-pub const MAX_RECENT_WORKSPACES: usize = 12;
+pub const MAX_PLACES: usize = 64;
 const MAX_DOCUMENTS: usize = 64;
 const MAX_PINS: usize = 32;
 const MAX_EXPANDED: usize = 1_024;
@@ -33,40 +33,49 @@ const ID_LENGTH: usize = 16;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Registry {
-    /// The workspace open when Dosty last closed, reopened on launch.
+    /// The place open when Dosty last closed, reopened on launch.
     pub last: Option<PathBuf>,
-    /// Canonical workspace roots, most recently opened first.
-    pub recent: Vec<PathBuf>,
+    /// Canonical roots of the library's places, in the order they were added.
+    /// Earlier versions stored recently opened folders here as `recent`; they
+    /// become places.
+    #[serde(alias = "recent")]
+    pub places: Vec<PathBuf>,
 }
 
 impl Registry {
-    pub fn opened(&mut self, root: &Path) {
+    /// Makes `root` the open place, adding it to the library when it is new.
+    ///
+    /// Returns whether the library holds it. A full library keeps its places
+    /// rather than dropping one to make room.
+    #[must_use]
+    pub fn opened(&mut self, root: &Path) -> bool {
         self.last = Some(root.to_owned());
-        self.recent.retain(|path| path != root);
-        self.recent.insert(0, root.to_owned());
-        self.recent.truncate(MAX_RECENT_WORKSPACES);
+        if self.places.iter().any(|path| path == root) {
+            return true;
+        }
+        if self.places.len() >= MAX_PLACES {
+            return false;
+        }
+        self.places.push(root.to_owned());
+        true
     }
 
-    /// Forget a root that no longer exists or was explicitly removed.
+    /// Remove a place that no longer exists or that the writer removed. The
+    /// folder and its files are untouched.
     pub fn forget(&mut self, root: &Path) {
-        self.recent.retain(|path| path != root);
+        self.places.retain(|path| path != root);
         if self.last.as_deref() == Some(root) {
             self.last = None;
         }
     }
 
-    /// Forget every recent workspace except the one currently open.
-    pub fn clear_recent(&mut self) {
-        self.recent.retain(|path| Some(path) == self.last.as_ref());
-    }
-
     fn sanitize(&mut self) {
         let valid = |path: &PathBuf| path.is_absolute() && path.to_str().is_some();
         self.last = self.last.take().filter(valid);
-        self.recent.retain(valid);
+        self.places.retain(valid);
         let mut seen = std::collections::HashSet::new();
-        self.recent.retain(|path| seen.insert(path.clone()));
-        self.recent.truncate(MAX_RECENT_WORKSPACES);
+        self.places.retain(|path| seen.insert(path.clone()));
+        self.places.truncate(MAX_PLACES);
     }
 }
 
@@ -291,12 +300,12 @@ fn save_in(
     Ok(())
 }
 
-/// Remove state for workspaces that are no longer remembered, so storage stays
-/// bounded and clearing recent workspaces also forgets how they were left.
+/// Remove state for folders that are no longer places, so storage stays
+/// bounded and removing a place also forgets how it was left.
 /// Only directories named like a root id are considered.
 fn prune(directory: &Path, registry: &Registry) {
     let keep: std::collections::HashSet<_> = registry
-        .recent
+        .places
         .iter()
         .chain(&registry.last)
         .map(|root| id(root))
@@ -331,9 +340,7 @@ pub async fn open(directory: Option<PathBuf>, path: PathBuf) -> Result<Workspace
     tokio::task::spawn_blocking(move || {
         let root = fs::canonicalize(&path)?;
         if !root.is_dir() {
-            return Err(FileError::Io(
-                "Choose a folder to open as a workspace.".into(),
-            ));
+            return Err(FileError::Io("Choose a folder to add as a place.".into()));
         }
         Ok(directory.map_or_else(
             || Workspace::new(root.clone()),
@@ -370,14 +377,14 @@ mod tests {
     }
 
     #[test]
-    fn workspace_state_round_trips_and_recent_order_is_most_recent_first() {
+    fn workspace_state_round_trips_and_places_keep_the_order_they_were_added() {
         let data = tempfile::tempdir().unwrap();
         let folders = tempfile::tempdir().unwrap();
         let (essays, notes) = (root(&folders, "Essays"), root(&folders, "Notes"));
         let mut registry = Registry::default();
-        registry.opened(&essays);
-        registry.opened(&notes);
-        registry.opened(&essays);
+        assert!(registry.opened(&essays));
+        assert!(registry.opened(&notes));
+        assert!(registry.opened(&essays));
         let mut workspace = Workspace::new(essays.clone());
         workspace.outline_open = true;
         workspace.expanded.push("Drafts".into());
@@ -390,7 +397,7 @@ mod tests {
 
         let loaded = load_registry_in(data.path());
         assert_eq!(loaded.last.as_ref(), Some(&essays));
-        assert_eq!(loaded.recent, [essays.clone(), notes.clone()]);
+        assert_eq!(loaded.places, [essays.clone(), notes.clone()]);
         let restored = load_workspace_in(data.path(), &essays);
         assert_eq!(restored, workspace);
         assert_eq!(restored.documents[0].path, Path::new("Drafts/One.md"));
@@ -418,7 +425,7 @@ mod tests {
         .unwrap();
         let registry = load_registry_in(data.path());
         assert_eq!(registry.last, None);
-        assert_eq!(registry.recent.len(), usize::from(cfg!(unix)));
+        assert_eq!(registry.places.len(), usize::from(cfg!(unix)));
 
         // State copied from another root is never applied.
         let folder = data.path().join(id(&essays));
@@ -501,37 +508,68 @@ mod tests {
     }
 
     #[test]
-    fn storage_stays_bounded_and_clearing_recent_forgets_state() {
+    fn the_library_is_bounded_and_removing_a_place_forgets_its_state() {
         let data = tempfile::tempdir().unwrap();
         let folders = tempfile::tempdir().unwrap();
         let mut registry = Registry::default();
-        let roots: Vec<_> = (0..MAX_RECENT_WORKSPACES + 3)
+        let roots: Vec<_> = (0..MAX_PLACES + 3)
             .map(|index| root(&folders, &format!("W{index}")))
             .collect();
-        for root in &roots {
-            registry.opened(root);
+        for (index, root) in roots.iter().enumerate() {
+            assert_eq!(
+                registry.opened(root),
+                index < MAX_PLACES,
+                "a full library keeps its places instead of dropping one"
+            );
             save_in(data.path(), &registry, &[Workspace::new(root.clone())]).unwrap();
         }
-        assert_eq!(registry.recent.len(), MAX_RECENT_WORKSPACES);
+        assert_eq!(registry.places, roots[..MAX_PLACES]);
         let stored = || {
             fs::read_dir(data.path())
                 .unwrap()
                 .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_dir())
                 .count()
         };
-        assert_eq!(stored(), MAX_RECENT_WORKSPACES);
+        assert_eq!(
+            stored(),
+            MAX_PLACES + 1,
+            "every place, and the open folder the library had no room for"
+        );
 
         let unrelated = data.path().join("not-an-id");
         fs::create_dir(&unrelated).unwrap();
-        registry.clear_recent();
-        assert_eq!(registry.recent, [roots.last().unwrap().clone()]);
+        for root in &roots[1..] {
+            registry.forget(root);
+        }
+        assert_eq!(registry.places, roots[..1]);
+        assert_eq!(registry.last, None);
         save_in(data.path(), &registry, &[]).unwrap();
-        assert_eq!(
-            stored(),
-            2,
-            "the open workspace and unrelated folders remain"
-        );
+        assert_eq!(stored(), 2, "the remaining place and unrelated folders");
         assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn recent_folders_from_earlier_versions_become_places() {
+        let data = tempfile::tempdir().unwrap();
+        let folders = tempfile::tempdir().unwrap();
+        let (essays, notes) = (root(&folders, "Essays"), root(&folders, "Notes"));
+        let stored = format!(
+            "last = {:?}\nrecent = [{:?}, {:?}]\n",
+            notes.to_str().unwrap(),
+            notes.to_str().unwrap(),
+            essays.to_str().unwrap()
+        );
+        fs::write(data.path().join(REGISTRY), stored).unwrap();
+
+        let mut registry = load_registry_in(data.path());
+        assert_eq!(registry.last.as_ref(), Some(&notes));
+        assert_eq!(registry.places, [notes, essays.clone()]);
+
+        assert!(registry.opened(&essays));
+        save_in(data.path(), &registry, &[]).unwrap();
+        let rewritten = fs::read_to_string(data.path().join(REGISTRY)).unwrap();
+        assert!(rewritten.contains("places") && !rewritten.contains("recent"));
+        assert_eq!(load_registry_in(data.path()), registry);
     }
 
     #[cfg(unix)]
@@ -543,7 +581,7 @@ mod tests {
         let essays = root(&folders, "Essays");
         let directory = data.path().join("workspaces");
         let mut registry = Registry::default();
-        registry.opened(&essays);
+        assert!(registry.opened(&essays));
         save_in(&directory, &registry, &[Workspace::new(essays.clone())]).unwrap();
         let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&directory), 0o700);
