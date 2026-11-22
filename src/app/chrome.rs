@@ -877,6 +877,14 @@ impl App {
                         ),
                     ]);
                 }
+                if self.workspace_links_available() {
+                    commands.push(Command::action(
+                        "Linked from…",
+                        Icon::Link,
+                        AppMessage::Links(super::links::Message::ShowBacklinks),
+                        ready,
+                    ));
+                }
                 if self.folder.can_undo() {
                     commands.push(Command::action(
                         "Undo file move",

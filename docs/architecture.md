@@ -167,6 +167,12 @@ Moving an active file updates its path without reinstalling its document or
 discarding history. Recovery identities rotate when that path changes. See
 [files and folders](writing-workflows.md#files-and-folders) for limits and behavior.
 
+Link suggestions use the current folder snapshot for file paths and a bounded
+worker read for target headings. The **Linked from** action scans saved
+workspace files for explicit Markdown links on a cancellable worker. Resolved
+destinations use the ordinary guarded document loader. The loaded file supplies
+the heading or validates a backlink's source offset against the scanned bytes.
+
 Markdown/checkpoint publication uses cooperative locks, checked baselines, atomic
 writes, and a recovery journal. Conflicts preserve files and surface an error.
 Each reopen uses a fresh writer identity. See [persistence and recovery](collaboration.md#persistence-and-recovery)

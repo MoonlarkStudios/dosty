@@ -1,6 +1,6 @@
 //! Single-writer commands and focused details dialogs over authoritative source.
 
-use super::{App, EDITOR, EditorMode, Message as AppMessage, Overlay, Pending};
+use super::{App, EDITOR, EditorMode, Message as AppMessage, Overlay, Pending, links};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use crate::document::collaboration::{
 };
 use crate::document::selection::Selection;
 use crate::document::writing::{self, Details, Target};
-use crate::io::{assets, storage};
+use crate::io::{assets, document_links, storage};
 use crate::theme::styles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +166,7 @@ impl App {
                     return Task::none();
                 }
                 let remove = matches!(message, Message::Remove);
+                self.links.close_picker();
                 let Some(mut form) = self.writing.form.take() else {
                     return Task::none();
                 };
@@ -428,6 +429,7 @@ impl App {
     }
 
     fn open_details(&mut self, kind: Kind) {
+        self.links.close_picker();
         let source = self.document.source();
         let quote = (kind == Kind::Quote)
             .then(|| writing::quote_at(source, self.selection.head))
@@ -589,6 +591,25 @@ impl App {
         Ok(())
     }
 
+    pub(super) fn link_form_open(&self) -> bool {
+        self.overlay == Some(Overlay::Writing)
+            && self
+                .writing
+                .form
+                .as_ref()
+                .is_some_and(|form| form.kind == Kind::Link)
+    }
+
+    pub(super) fn set_suggested_link(&mut self, destination: String, title: String) {
+        if let Some(form) = &mut self.writing.form {
+            form.details.destination = destination;
+            if form.details.label.trim().is_empty() {
+                form.details.label = title;
+            }
+            form.error = None;
+        }
+    }
+
     pub(super) fn open_destination(&mut self, destination: String) -> Task<AppMessage> {
         if let Some(offset) = destination
             .strip_prefix("dosty-footnote:")
@@ -605,45 +626,36 @@ impl App {
             self.notification = Some("This link uses an unsupported destination.".into());
             return Task::none();
         }
+        let destination = destination.trim();
         if let Some(fragment) = destination.strip_prefix('#') {
-            let fragment = percent_encoding::percent_decode_str(fragment).decode_utf8_lossy();
-            if let Some(index) = self.document.blocks().iter().position(|block| {
-                block
-                    .heading
-                    .as_ref()
-                    .is_some_and(|(_, label)| writing::heading_slug(label) == fragment)
-            }) {
-                self.overlay = None;
-                self.writing.close_details();
-                return self.activate(index, false);
+            let Some(fragment) = document_links::fragment(fragment) else {
+                self.notification = Some("This link has an invalid heading fragment.".into());
+                return Task::none();
+            };
+            if self.busy || self.loading || !self.commit_cell() {
+                return Task::none();
             }
-            self.notification = Some("No heading matches this link.".into());
-        } else if destination.starts_with("https://")
+            return self
+                .jump_to_document_link(links::Jump::Heading(fragment))
+                .unwrap_or_else(Task::none);
+        }
+        if destination.starts_with("https://")
             || destination.starts_with("http://")
             || destination.starts_with("mailto:")
         {
+            let destination = destination.to_owned();
             return Task::perform(
                 async move { open::that_detached(destination).map_err(|e| e.to_string()) },
                 AppMessage::LinkOpened,
             );
-        } else {
-            let base = self.path.as_deref().and_then(|path| path.parent());
-            match assets::local_path(&destination, base) {
-                Ok(Some(path))
-                    if path
-                        .extension()
-                        .is_some_and(|ext| ext == "md" || ext == "markdown" || ext == "txt") =>
-                {
-                    self.overlay = None;
-                    self.writing.close_details();
-                    return self.request(Pending::Open(Some(path)));
-                }
-                _ => self.notification = Some(
-                    "Only Markdown documents, web, email, and #heading links can be opened here."
-                        .into(),
-                ),
-            }
         }
+        let base = self.path.as_deref().and_then(|path| path.parent());
+        if let Some((path, fragment)) = document_links::destination(destination, base) {
+            return self.open_document_link(path, fragment.map(links::Jump::Heading));
+        }
+        self.notification = Some(
+            "Only Markdown documents, web, email, and #heading links can be opened here.".into(),
+        );
         Task::none()
     }
 
@@ -670,6 +682,16 @@ impl App {
                 .style(styles::input(tokens));
             if first {
                 input = input.id("writing-details-first");
+            } else if form.kind == Kind::Link
+                && matches!(field, Field::Destination)
+                && self.workspace_links_available()
+            {
+                input = input.id(links::DESTINATION);
+                let input = crate::editor::outline_filter::FilterInput::new(input, |key| {
+                    (key == iced::keyboard::key::Named::ArrowDown)
+                        .then_some(AppMessage::Links(links::Message::Pick))
+                });
+                return column![text(label).size(12).color(tokens.muted), input].spacing(5);
             }
             column![text(label).size(12).color(tokens.muted), input].spacing(5)
         };
@@ -726,12 +748,15 @@ impl App {
                 if form.kind == Kind::Image {
                     "Image URL or local path"
                 } else {
-                    "https://… · email · document.md · #heading"
+                    "https://… · email · document.md#heading"
                 },
                 &form.details.destination,
                 Field::Destination,
                 false,
             ));
+            if form.kind == Kind::Link && self.workspace_links_available() {
+                content = content.push(self.link_picker_view());
+            }
             if form.kind == Kind::Image {
                 content = content.push(input(
                     "Caption · optional",

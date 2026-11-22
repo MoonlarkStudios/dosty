@@ -121,10 +121,22 @@ Up/Down selects a result without moving the query caret; Enter opens it through 
   label formatting and Markdown titles. Editing a reference-style link normalizes
   it to an inline link. Pasting a web/email URL over selected text creates a link;
   cross-paragraph selections do not become one link.
+- **Find file or heading:** with a saved document inside a workspace, open the
+  link dialog and choose **Find file or heading…**, or press Down in the
+  Destination field. Filter file names or paths, choose a result, and pick the
+  whole file or one of its headings. Up/Down and Enter choose a result. Escape
+  returns to the destination. Apply inserts an ordinary relative Markdown link
+  such as `[Methods](<chapter-2.md#methods>)`.
 - **Open a link:** Cmd/Ctrl-click or use Open in its details. HTTP/HTTPS and email
-  use the OS handler. `#heading-slug` navigates locally. Relative `.md`, `.markdown`,
-  and `.txt` links use Dosty's unsaved-document guard. Unsupported schemes produce
-  a message. Cross-file fragments and hover cards are unsupported.
+  use the OS handler. `#heading-slug` navigates within the current file.
+  Links to `.md`, `.markdown`, and `.txt` files use Dosty's unsaved-document
+  guard and can jump to a named heading after loading. Heading labels become
+  lowercase slugs, or use an explicit ID from `{#id}`. Repeated IDs receive a
+  numeric suffix.
+- **Linked from:** open the filename menu to find workspace files that link to
+  the current file. Choose a result to open it through the usual save guard and
+  jump to the link. The panel reads saved Markdown and marks incomplete scans.
+  A file edited since the scan opens with its remembered position.
 - **Image:** choose a file/URL, paste one copied image file or raster image, or
   drop PNG/JPEG/GIF/WebP at the current source selection. Double-click an image,
   or use Image from its caption/credit, to edit details. Images preserve aspect

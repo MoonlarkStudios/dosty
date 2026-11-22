@@ -200,6 +200,9 @@ impl State {
             .filter(|entry| !entry.is_directory)
             .map(|entry| entry.path.as_path())
     }
+    pub(super) fn link_snapshot_complete(&self) -> bool {
+        !self.scanning && !self.limited && self.error.is_none() && self.warnings.is_empty()
+    }
     pub(super) fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
     }

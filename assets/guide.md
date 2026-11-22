@@ -70,6 +70,13 @@ fn main() {
 | Cmd/Ctrl + Z | Undo |
 | Cmd/Ctrl + Shift + Z | Redo |
 
+## Link files in a workspace
+
+Use **Find file or heading…** in the link dialog to pick a workspace file or
+one of its headings. Apply writes a relative Markdown link. Open **Linked
+from…** in the filename menu to see which workspace files link to the current
+document. Choose a result to follow it back to its source.
+
 ## Tables and images, without leaving the page
 
 Tables normally show a bold header and subtle row rules. Click a cell to reveal its grid, row numbers, column letters, and editing controls without moving the text. Type to replace its value. Double-click or press Enter to edit the existing text. Arrows move between cells. Up from the header and Down from the last row move into text or a blank paragraph outside the table. At a document edge, the arrow creates a missing paragraph and places the caret there. Creating it is one undo step; your typing is a separate step. Shift+Arrow extends a range. Inside text editing, arrows move the text caret. Enter commits and moves down, Shift+Enter moves up, and Tab or Shift+Tab commits and moves right or left. Tab remembers the entry column for the next Enter. Cmd/Ctrl+Enter adds a cell line break.

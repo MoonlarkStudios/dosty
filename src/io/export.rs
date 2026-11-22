@@ -5,7 +5,7 @@ use pulldown_cmark::{Event, Parser, Tag};
 use std::path::Path;
 
 use crate::document::block_parser::MARKDOWN_OPTIONS;
-use crate::document::writing::{heading_slug, safe_destination};
+use crate::document::writing::{HeadingIds, safe_destination};
 use crate::io::{assets, storage};
 use storage::FileError;
 
@@ -14,7 +14,7 @@ pub fn html(source: &str, base: Option<&Path>) -> Result<String, FileError> {
     let mut document_title = None;
     let mut embedded = 0;
     let mut cache = std::collections::HashMap::new();
-    let mut heading_ids = std::collections::HashMap::<String, usize>::new();
+    let mut heading_ids = HeadingIds::default();
     for (event, range) in Parser::new_ext(source, MARKDOWN_OPTIONS).into_offset_iter() {
         events.push(match event {
             Event::Start(Tag::Heading {
@@ -29,14 +29,7 @@ pub fn html(source: &str, base: Option<&Path>) -> Result<String, FileError> {
                 if document_title.is_none() {
                     document_title = Some(label.clone());
                 }
-                let slug = id.map_or_else(|| heading_slug(&label), |id| id.into_string());
-                let count = heading_ids.entry(slug.clone()).or_default();
-                let id = if *count == 0 {
-                    slug
-                } else {
-                    format!("{slug}-{count}")
-                };
-                *count += 1;
+                let id = heading_ids.assign(&label, id.as_deref());
                 Event::Start(Tag::Heading {
                     level,
                     id: Some(id.into()),

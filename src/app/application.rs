@@ -35,6 +35,8 @@ pub(super) mod chrome;
 pub(super) mod folder;
 #[path = "footnotes.rs"]
 pub(super) mod footnotes;
+#[path = "document_links.rs"]
+pub(super) mod links;
 #[cfg(target_os = "macos")]
 #[path = "native_menus.rs"]
 pub(super) mod native_menus;
@@ -127,6 +129,7 @@ pub struct App {
     notification: Option<String>,
     zoom: f32,
     writing: writing::State,
+    links: links::State,
     footnotes: footnotes::State,
     recovery: recovery::State,
     outline: outline::State,
@@ -166,6 +169,7 @@ pub enum Message {
     Footnote(footnotes::Message),
     Outline(outline::Message),
     Writing(writing::Message),
+    Links(links::Message),
     Recovery(recovery::Message),
     Edit(text_editor::Action),
     CopyCode(String),
@@ -219,6 +223,7 @@ pub enum Message {
     SaveAs,
     ChosenFile(Option<PathBuf>),
     Loaded(Result<LoadedFile, FileError>),
+    LoadedLinked(Result<LoadedFile, FileError>, Option<links::Jump>),
     Saved {
         result: Result<PathBuf, FileError>,
         source: Arc<String>,
@@ -295,6 +300,7 @@ enum Overlay {
     Collaboration,
     Unsaved,
     Writing,
+    Backlinks,
     Footnote,
     Recovery,
 }
@@ -304,6 +310,7 @@ enum Pending {
     FolderNew(PathBuf),
     New,
     Open(Option<PathBuf>),
+    OpenLinked(PathBuf, Option<links::Jump>),
     Replica,
     Guide,
     Welcome,
@@ -379,6 +386,7 @@ impl App {
             notification: None,
             zoom: 1.0,
             writing: writing::State::default(),
+            links: links::State::default(),
             footnotes: footnotes::State::default(),
             recovery: recovery::State::default(),
             outline: outline::State::default(),
@@ -467,6 +475,7 @@ impl App {
                 Some(Overlay::Chrome) => chrome::event_message,
                 Some(Overlay::Folder) => folder::event_message,
                 Some(Overlay::Table) => table::event_message,
+                Some(Overlay::Backlinks) => links::event_message,
                 _ => event_message,
             }),
             #[cfg(target_os = "macos")]
@@ -784,6 +793,7 @@ impl App {
             Message::Footnote(message) => return self.update_footnote(message),
             Message::Outline(message) => return self.update_outline(message),
             Message::Writing(message) => return self.update_writing(message),
+            Message::Links(message) => return self.update_document_links(message),
             Message::Recovery(message) => return self.update_recovery(message),
             Message::CommitComposition { target, text } => {
                 if let Some(selection) = self.document.collaboration().resolve_composition(&target)
@@ -1090,51 +1100,9 @@ impl App {
                 self.busy = false;
                 self.loading = false;
             }
-            Message::Loaded(result) => {
-                self.busy = false;
-                self.loading = false;
-                match result {
-                    Ok(file) => {
-                        let version = file
-                            .collaboration
-                            .as_ref()
-                            .map(collaboration_store::version);
-                        let document = match file.collaboration {
-                            Some(state) => match Document::from_state(&state) {
-                                Ok(document) if document.source() == file.source => document,
-                                Ok(_) => {
-                                    self.notification =
-                                        Some(FileError::MetadataConflict.to_string());
-                                    return Task::none();
-                                }
-                                Err(error) => {
-                                    self.notification = Some(error.to_string());
-                                    return Task::none();
-                                }
-                            },
-                            None => Document::new(file.source),
-                        };
-                        self.install_document(
-                            document,
-                            Some(file.path.clone()),
-                            filename(&file.path),
-                        );
-                        self.saved_version = version;
-                        let folder_task = self.folder_document_changed();
-                        let focus = if self.restore_workspace_caret() {
-                            operation::focus(EDITOR)
-                        } else {
-                            Task::none()
-                        };
-                        return Task::batch([
-                            folder_task,
-                            self.persist_workspace(),
-                            focus,
-                            operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
-                        ]);
-                    }
-                    Err(error) => self.notification = Some(error.to_string()),
-                }
+            Message::Loaded(result) => return self.complete_document_load(result, None),
+            Message::LoadedLinked(result, jump) => {
+                return self.complete_document_load(result, jump);
             }
             Message::Saved {
                 result,
@@ -1282,7 +1250,8 @@ impl App {
                 if self.overlay == Some(Overlay::Chrome) {
                     self.chrome.menu = None;
                 }
-                let chrome = self.overlay == Some(Overlay::Chrome);
+                let restore_focus =
+                    matches!(self.overlay, Some(Overlay::Chrome | Overlay::Backlinks));
                 let table = matches!(self.overlay, Some(Overlay::Table));
                 if !self.busy {
                     if self.overlay.is_none() {
@@ -1294,6 +1263,7 @@ impl App {
                     }
                     self.overlay = None;
                     self.writing.close_details();
+                    self.links.close();
                     self.footnotes.close();
                     self.table = table::State::default();
                     self.pending = None;
@@ -1301,7 +1271,7 @@ impl App {
                         self.editor_focused = true;
                         self.sync_editor();
                     }
-                    if table || chrome {
+                    if table || restore_focus {
                         self.preserve_viewport_generation =
                             Some(self.document.collaboration().generation());
                         return operation::focus(EDITOR);
@@ -2304,6 +2274,13 @@ impl App {
                     )
                 };
             }
+            Pending::OpenLinked(path, jump) => {
+                self.busy = true;
+                self.loading = true;
+                return Task::perform(crate::io::document_links::load(path), move |result| {
+                    Message::LoadedLinked(result, jump.clone())
+                });
+            }
             Pending::Replica => {
                 self.busy = true;
                 self.loading = true;
@@ -2329,6 +2306,57 @@ impl App {
         operation::snap_to(SCROLL, scrollable::RelativeOffset::START)
     }
 
+    fn complete_document_load(
+        &mut self,
+        result: Result<LoadedFile, FileError>,
+        jump: Option<links::Jump>,
+    ) -> Task<Message> {
+        self.busy = false;
+        self.loading = false;
+        let file = match result {
+            Ok(file) => file,
+            Err(error) => {
+                self.notification = Some(error.to_string());
+                return Task::none();
+            }
+        };
+        let version = file
+            .collaboration
+            .as_ref()
+            .map(collaboration_store::version);
+        let document = match file.collaboration {
+            Some(state) => match Document::from_state(&state) {
+                Ok(document) if document.source() == file.source => document,
+                Ok(_) => {
+                    self.notification = Some(FileError::MetadataConflict.to_string());
+                    return Task::none();
+                }
+                Err(error) => {
+                    self.notification = Some(error.to_string());
+                    return Task::none();
+                }
+            },
+            None => Document::new(file.source),
+        };
+        self.install_document(document, Some(file.path.clone()), filename(&file.path));
+        self.saved_version = version;
+        let folder_task = self.folder_document_changed();
+        let navigation = jump
+            .and_then(|jump| self.jump_to_document_link(jump))
+            .unwrap_or_else(|| {
+                let focus = if self.restore_workspace_caret() {
+                    operation::focus(EDITOR)
+                } else {
+                    Task::none()
+                };
+                Task::batch([
+                    focus,
+                    operation::snap_to(SCROLL, scrollable::RelativeOffset::START),
+                ])
+            });
+        Task::batch([folder_task, self.persist_workspace(), navigation])
+    }
+
     fn set_document(&mut self, source: String, path: Option<PathBuf>, name: String) {
         self.install_document(Document::new(source), path, name);
     }
@@ -2340,6 +2368,7 @@ impl App {
         self.native_menu_queue.clear();
         self.recovery.retire();
         self.writing = writing::State::default();
+        self.links.close();
         self.footnotes = footnotes::State::default();
         self.outline = outline::State::default();
         self.quick_open.clear();
@@ -2495,6 +2524,7 @@ impl App {
                     Overlay::Collaboration => self.collaboration_view(),
                     Overlay::Unsaved => self.unsaved_view(),
                     Overlay::Writing => self.writing_view(),
+                    Overlay::Backlinks => self.backlinks_view(),
                     Overlay::Footnote => self.footnote_view(),
                     Overlay::Recovery => self.recovery_view(),
                     Overlay::QuickOpen => self.quick_open_view(size),
