@@ -909,6 +909,42 @@ fn statistics_stay_centered_in_the_writing_area_when_preferences_change() {
 }
 
 #[test]
+fn statistics_shortcut_opens_details_without_losing_the_directed_selection() {
+    let source = "# Draft\n\n**café and 🦀** [after](note.md)";
+    for mode in [EditorMode::Live, EditorMode::Source] {
+        let mut harness = Harness::new(source, mode, Size::new(900.0, 620.0));
+        harness.app.preferences = Preferences::default();
+        harness.focus(EDITOR);
+        let (bounds, focused) = harness.editor();
+        assert!(focused);
+        let selection = harness.app.selection;
+        let native = harness.app.editor.selection();
+        assert!(
+            harness
+                .app
+                .writing_statistics()
+                .starts_with("3 words selected")
+        );
+
+        harness.key(
+            Key::Character("i".into()),
+            keyboard::Modifiers::COMMAND | keyboard::Modifiers::ALT,
+        );
+        assert_eq!(harness.app.overlay, Some(Overlay::Statistics));
+        harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
+        assert_eq!(harness.app.overlay, None);
+        assert_eq!(harness.editor().0, bounds);
+        assert_eq!(harness.app.selection, selection);
+        assert_eq!(harness.app.editor.selection(), native);
+        assert_eq!(harness.app.document.source(), source);
+        assert!(!harness.app.document.can_undo());
+
+        harness.app.preferences.show_word_count = false;
+        assert!(!harness.app.writing_statistics().contains("selected"));
+    }
+}
+
+#[test]
 fn both_sidebars_are_independent_and_narrow_windows_keep_a_usable_writing_column() {
     let mut harness = Harness::new(
         "# Draft\n\ncafé and 🦀\n\n## Next\n\nMore.",
