@@ -142,16 +142,16 @@ const MAX_UNIQUE_NAMES: usize = 99;
 /// `value 3`, and so on when that name is taken. Nothing is ever replaced.
 pub async fn create_unique_document(parent: PathBuf, value: String) -> Result<PathBuf, FileError> {
     tokio::task::spawn_blocking(move || {
-        let value = Path::new(&value);
-        let stem = value
-            .file_stem()
-            .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+        let value = name(&value, true)?;
+        let (stem, extension) = value
+            .rsplit_once('.')
+            .expect("validated document names have a Markdown extension");
         let mut occupied = None;
         for attempt in 1..=MAX_UNIQUE_NAMES {
             let candidate = if attempt == 1 {
-                format!("{stem}.md")
+                value.clone()
             } else {
-                format!("{stem} {attempt}.md")
+                format!("{stem} {attempt}.{extension}")
             };
             match create_document_blocking(&parent, &candidate) {
                 Ok(path) => return Ok(path),
@@ -816,6 +816,21 @@ mod tests {
         for value in ["", ".", "..", "../outside", "a/b", "a\\b", ".hidden"] {
             assert!(create_folder_blocking(directory.path(), value).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn draft_save_preserves_the_chosen_markdown_extension() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let first = create_unique_document(root.clone(), "Essay.MARKDOWN".into())
+            .await
+            .unwrap();
+        let second = create_unique_document(root, "Essay.MARKDOWN".into())
+            .await
+            .unwrap();
+
+        assert_eq!(first.file_name().unwrap(), "Essay.MARKDOWN");
+        assert_eq!(second.file_name().unwrap(), "Essay 2.MARKDOWN");
     }
 
     #[test]
