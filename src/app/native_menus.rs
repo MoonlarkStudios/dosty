@@ -410,7 +410,7 @@ impl State {
 fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
     match command {
-        Command::QuickOpen => (ready && app.folder.root().is_some(), false),
+        Command::QuickOpen => (ready && app.quick_open_available(), false),
         Command::OpenRecent(index) => (ready && index < app.workspace.recent().len(), false),
         Command::ClearRecent => (!app.workspace.recent().is_empty(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),

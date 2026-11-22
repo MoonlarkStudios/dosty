@@ -152,10 +152,12 @@ failures are logged, never shown, and every remembered path is revalidated again
 the current scan before use.
 
 Quick Open owns an ephemeral filename/path index derived from the existing bounded
-workspace snapshot. Its focused query intercepts result navigation locally.
-Acceptance reuses guarded file loading; cancellation restores the previous widget
-focus without committing a table draft or editing the source. Workspace changes
-invalidate it, refreshes update it, and closing discards its index and query.
+workspace snapshot and uses the existing Outline sections for current-document
+heading queries. Its focused query handles result navigation. File choices reuse
+guarded loading, and heading choices use the same jump path as Outline. Canceling
+restores the previous widget focus without committing a table draft or editing
+the source. Workspace changes invalidate the picker, refreshes update it, and
+closing discards its index and query.
 
 The folder workflow owns navigation, expanded paths, bounded scan generations,
 and operation identities. Folder discovery returns path-only snapshots from a

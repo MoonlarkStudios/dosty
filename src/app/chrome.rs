@@ -807,7 +807,7 @@ impl App {
                         "Quick Open…",
                         Icon::Search,
                         AppMessage::QuickOpen(super::quick_open::Message::Open),
-                        ready && self.folder.root().is_some(),
+                        ready && self.quick_open_available(),
                     ),
                     Command::action(
                         "Open folder…",

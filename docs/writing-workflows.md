@@ -114,6 +114,13 @@ Cmd/Ctrl+P, **File → Quick Open…**, or the Files search icon opens filename/
 
 Up/Down selects a result without moving the query caret; Enter opens it through the existing file-loading and Save/Discard/Cancel guards. Escape or an outside click restores the previous focused widget, source selection, and writing viewport. Opening the active file only closes the picker. A workspace change closes it; a refresh updates its results. It is unavailable while another modal or file load is active. Closing it discards the query and candidate index. With an empty query, recently active workspace documents come first and the previous document is preselected, so Cmd/Ctrl+P then Enter switches back; other results keep their rank, with recent documents breaking ties. No search history is persisted.
 
+To jump to a heading in the current document, type `#` followed by a space
+and the heading terms. Results include parent titles, so `# Chapter 2 Notes`
+can distinguish repeated headings. For a standalone document with headings,
+Quick Open starts in heading search. Use Up/Down to choose and Enter to jump,
+or Escape to return to writing. Heading jumps work with sidebars hidden and
+keep the current editing mode.
+
 ## Writing and details
 
 - **Link:** select a phrase and use Cmd/Ctrl+K or the link control. Apply edits

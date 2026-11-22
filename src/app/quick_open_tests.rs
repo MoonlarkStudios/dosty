@@ -60,21 +60,21 @@ fn filename_and_relative_path_terms_rank_exact_and_prefix_matches_first() {
         &[],
     );
     state.query = "DRAFT.md".into();
-    state.search();
+    state.search_files();
     assert_eq!(
         state.candidates[state.results[0]].relative,
         "Notes/Draft.md"
     );
     assert_eq!(state.matches, 3);
     state.query = "research RÉSUMÉ".into();
-    state.search();
+    state.search_files();
     assert_eq!(state.matches, 1);
     assert_eq!(
         state.candidates[state.results[0]].relative,
         "Research/résumé.MD"
     );
     state.query = "missing".into();
-    state.search();
+    state.search_files();
     assert!(state.selected_path().is_none());
 }
 
@@ -90,6 +90,7 @@ fn recently_active_documents_lead_and_break_ties_without_overriding_rank() {
     let recent = [PathBuf::from("/writing/Notes/C.md"), "/writing/B.md".into()];
     let mut state = State::default();
     state.index(root, files.into_iter().map(Path::new), &recent);
+    state.search_files();
     let relative = |state: &State| -> Vec<String> {
         state
             .results
@@ -103,10 +104,10 @@ fn recently_active_documents_lead_and_break_ties_without_overriding_rank() {
     );
     // An exact filename still outranks a recent partial match.
     state.query = "a.md".into();
-    state.search();
+    state.search_files();
     assert_eq!(relative(&state)[0], "A.md");
     state.query = "c".into();
-    state.search();
+    state.search_files();
     assert_eq!(relative(&state), ["Notes/C.md", "C draft.md"]);
 }
 
@@ -228,7 +229,7 @@ async fn stale_file_choices_cannot_switch_the_workspace_to_a_directory() {
 }
 
 #[test]
-fn quick_open_requires_a_workspace_and_respects_loading_and_modal_guards() {
+fn quick_open_requires_files_or_headings_and_respects_loading_and_modal_guards() {
     let (mut app, tasks) = App::new();
     drop(tasks);
     drop(app.update_quick_open(Message::Open));
@@ -243,6 +244,78 @@ fn quick_open_requires_a_workspace_and_respects_loading_and_modal_guards() {
     app.loading = true;
     drop(app.update_quick_open(Message::Open));
     assert!(app.overlay.is_none());
+}
+
+#[test]
+fn quick_open_jumps_to_a_standalone_documents_heading_in_each_mode() {
+    let source = "# Café\n\n## Notes\n\nFirst.\n\n# 🦀 Ship\n\n## Notes\n\nSecond.";
+    for mode in [EditorMode::Live, EditorMode::Source, EditorMode::Read] {
+        let (mut app, tasks) = App::new();
+        drop(tasks);
+        app.set_document(
+            source.into(),
+            Some("/writing/Standalone.md".into()),
+            "Standalone.md".into(),
+        );
+        drop(app.update_message(AppMessage::SetMode(mode)));
+        drop(app.update_message(AppMessage::HideSidebars));
+        let sidebars = app.chrome.sidebars_hidden;
+        let expected = source.rfind("## Notes").unwrap();
+        drop(app.update_quick_open(Message::Open));
+        assert!(app.quick_open.headings());
+        drop(app.update_quick_open(Message::Query("🦀 notes".into())));
+        assert_eq!(app.quick_open.results, [3]);
+        drop(app.update_quick_open(Message::Accept));
+        assert_eq!(app.overlay, None);
+        assert_eq!(app.selection, Selection::caret(expected));
+        assert_eq!(app.mode, mode);
+        assert_eq!(app.chrome.sidebars_hidden, sidebars);
+        assert_eq!(app.document.source(), source);
+        assert!(!app.document.can_undo());
+    }
+}
+
+#[test]
+fn heading_scope_uses_parent_context_and_returns_to_the_same_file_search() {
+    let root = Path::new("/writing");
+    let mut app = app(root, &[root.join("#Notes.md"), root.join("Draft.md")]);
+    let source = "# First\n\n## Notes\n\n# Second\n\n## Notes";
+    app.set_document(source.into(), None, "Test.md".into());
+    drop(app.update_quick_open(Message::Open));
+    drop(app.update_quick_open(Message::Query("#notes".into())));
+    assert_eq!(
+        app.quick_open.selected_path(),
+        Some(root.join("#Notes.md").as_path())
+    );
+    drop(app.update_quick_open(Message::Query("# notes".into())));
+    assert_eq!(app.quick_open.results, [1, 3]);
+    drop(app.update_quick_open(Message::Query("# SECOND notes".into())));
+    assert_eq!(app.quick_open.results, [3]);
+    assert_eq!(app.quick_open.selected_path(), None);
+    drop(app.update_quick_open(Message::Query("draft".into())));
+    assert_eq!(
+        app.quick_open.selected_path(),
+        Some(root.join("Draft.md").as_path())
+    );
+}
+
+#[test]
+fn stale_heading_choices_do_not_jump_in_a_new_picker() {
+    let (mut app, tasks) = App::new();
+    drop(tasks);
+    app.set_document("# First\n\n# Second".into(), None, "Test.md".into());
+    drop(app.update_quick_open(Message::Open));
+    let stale = Message::ChooseHeading {
+        index: 1,
+        revision: app.document.revision(),
+        request: app.quick_open.request,
+    };
+    drop(app.update_quick_open(Message::Cancel));
+    drop(app.update_quick_open(Message::Open));
+    let before = app.selection;
+    drop(app.update_quick_open(stale));
+    assert_eq!(app.selection, before);
+    assert_eq!(app.overlay, Some(Overlay::QuickOpen));
 }
 
 #[test]

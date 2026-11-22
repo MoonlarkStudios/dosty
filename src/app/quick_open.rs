@@ -1,4 +1,4 @@
-//! Ephemeral filename/path search over the current bounded workspace snapshot.
+//! Keyboard navigation over workspace files and the current document’s headings.
 
 use std::path::{Path, PathBuf};
 
@@ -9,8 +9,9 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Fill, Padding, Size, Task};
 
-use super::{App, EDITOR, Message as AppMessage, Overlay, chrome};
+use super::{App, EDITOR, Message as AppMessage, Overlay, chrome, outline};
 use crate::app::icon::Icon;
+use crate::document::outline::Section;
 use crate::editor::outline_filter::FilterInput;
 use crate::theme::styles::{self, Button};
 
@@ -31,6 +32,11 @@ pub enum Message {
     Hover(usize),
     Accept,
     Choose(PathBuf),
+    ChooseHeading {
+        index: usize,
+        revision: u64,
+        request: u64,
+    },
     Cancel,
 }
 
@@ -102,10 +108,9 @@ impl State {
                 .then_with(|| a.name_lower.cmp(&b.name_lower))
                 .then_with(|| a.path_lower.cmp(&b.path_lower))
         });
-        self.search();
     }
 
-    fn search(&mut self) {
+    fn search_files(&mut self) {
         let query = self.query.trim().to_lowercase();
         let query = if cfg!(target_os = "windows") {
             query.replace('\\', "/")
@@ -135,7 +140,37 @@ impl State {
         self.selected = self.selected.min(self.results.len().saturating_sub(1));
     }
 
+    fn headings(&self) -> bool {
+        self.root.is_none() || self.heading_query().is_some()
+    }
+
+    fn heading_query(&self) -> Option<&str> {
+        let query = self.query.trim_start();
+        if query == "#" {
+            Some("")
+        } else {
+            query.strip_prefix("# ")
+        }
+    }
+
+    fn search_headings(&mut self, sections: &[Section]) {
+        let query = self.heading_query().unwrap_or(&self.query).to_lowercase();
+        let terms: Vec<_> = query.split_whitespace().collect();
+        self.results.clear();
+        self.matches = 0;
+        for index in outline::matching_headings(sections, &terms) {
+            self.matches += 1;
+            if self.results.len() < MAX_RESULTS {
+                self.results.push(index);
+            }
+        }
+        self.selected = self.selected.min(self.results.len().saturating_sub(1));
+    }
+
     fn selected_path(&self) -> Option<&Path> {
+        if self.headings() {
+            return None;
+        }
         self.results
             .get(self.selected)
             .map(|&index| self.candidates[index].path.as_path())
@@ -143,6 +178,16 @@ impl State {
 }
 
 impl App {
+    pub(super) fn quick_open_available(&self) -> bool {
+        self.folder.root().is_some() || !self.outline.sections.is_empty()
+    }
+
+    pub(super) fn refresh_quick_open_headings(&mut self) {
+        if self.overlay == Some(Overlay::QuickOpen) && self.quick_open.headings() {
+            self.quick_open.search_headings(&self.outline.sections);
+        }
+    }
+
     pub(super) fn refresh_quick_open(&mut self) -> Task<AppMessage> {
         if self.overlay != Some(Overlay::QuickOpen) {
             return Task::none();
@@ -155,6 +200,10 @@ impl App {
             let recent = self.workspace.recent_documents();
             self.quick_open.index(root, self.folder.files(), &recent);
         }
+        if self.quick_open.headings() {
+            return Task::none();
+        }
+        self.quick_open.search_files();
         self.quick_open.selected = self
             .quick_open
             .results
@@ -187,19 +236,23 @@ impl App {
             if self.busy || self.loading || !matches!(self.overlay, None | Some(Overlay::Chrome)) {
                 return Task::none();
             }
-            let Some(root) = self.folder.root() else {
+            if !self.quick_open_available() {
                 return Task::none();
-            };
+            }
             self.quick_open.clear();
-            self.quick_open.root = Some(root.to_owned());
-            let recent = self.workspace.recent_documents();
-            self.quick_open.index(root, self.folder.files(), &recent);
-            // The active document leads the recent list; preselect the one
-            // before it so Quick Open then Enter switches back.
-            if self.quick_open.selected_path() == self.path.as_deref()
-                && self.quick_open.results.len() > 1
-            {
-                self.quick_open.selected = 1;
+            if let Some(root) = self.folder.root() {
+                self.quick_open.root = Some(root.to_owned());
+                let recent = self.workspace.recent_documents();
+                self.quick_open.index(root, self.folder.files(), &recent);
+                self.quick_open.search_files();
+                // Preselect the previous document when the active one ranks first.
+                if self.quick_open.selected_path() == self.path.as_deref()
+                    && self.quick_open.results.len() > 1
+                {
+                    self.quick_open.selected = 1;
+                }
+            } else {
+                self.quick_open.search_headings(&self.outline.sections);
             }
             self.chrome.menu = None;
             self.overlay = Some(Overlay::QuickOpen);
@@ -247,7 +300,11 @@ impl App {
             Message::Query(query) => {
                 self.quick_open.query = query.chars().take(1024).collect();
                 self.quick_open.selected = 0;
-                self.quick_open.search();
+                if self.quick_open.headings() {
+                    self.quick_open.search_headings(&self.outline.sections);
+                } else {
+                    self.quick_open.search_files();
+                }
                 return operation::snap_to(RESULTS, scrollable::RelativeOffset::START);
             }
             Message::Step(direction) => {
@@ -263,11 +320,36 @@ impl App {
                     index.min(self.quick_open.results.len().saturating_sub(1))
             }
             Message::Accept => {
+                if self.quick_open.headings()
+                    && let Some(&index) = self.quick_open.results.get(self.quick_open.selected)
+                {
+                    return self.update_quick_open(Message::ChooseHeading {
+                        index,
+                        revision: self.document.revision(),
+                        request: self.quick_open.request,
+                    });
+                }
                 if let Some(path) = self.quick_open.selected_path().map(Path::to_owned) {
                     return self.update_quick_open(Message::Choose(path));
                 }
             }
-            Message::Choose(path) if !self.busy && !self.loading => {
+            Message::ChooseHeading {
+                index,
+                revision,
+                request,
+            } if !self.busy
+                && !self.loading
+                && self.quick_open.headings()
+                && request == self.quick_open.request
+                && revision == self.document.revision()
+                && self.quick_open.results.contains(&index) =>
+            {
+                self.quick_open.clear();
+                self.overlay = None;
+                self.preserve_viewport_generation = None;
+                return self.update_message(AppMessage::Outline(outline::Message::Jump(index)));
+            }
+            Message::Choose(path) if !self.busy && !self.loading && !self.quick_open.headings() => {
                 if !self.folder.files().any(|file| file == path)
                     || !self
                         .quick_open
@@ -289,7 +371,7 @@ impl App {
                 ));
                 return Task::batch([focus, open]);
             }
-            Message::Choose(_) => {}
+            Message::Choose(_) | Message::ChooseHeading { .. } => {}
             Message::Cancel => return self.cancel_quick_open(),
         }
         Task::none()
@@ -343,7 +425,15 @@ impl App {
 
     pub(super) fn quick_open_view(&self, size: Size) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let input = text_input("Find a file by name or path…", &self.quick_open.query)
+        let headings = self.quick_open.headings();
+        let placeholder = if headings {
+            "Find a heading…"
+        } else if self.outline.sections.is_empty() {
+            "Find a file by name or path…"
+        } else {
+            "Find a file, or type # then Space for headings…"
+        };
+        let input = text_input(placeholder, &self.quick_open.query)
             .id(INPUT)
             .on_input(|query| AppMessage::QuickOpen(Message::Query(query)))
             .on_submit(AppMessage::QuickOpen(Message::Accept))
@@ -360,23 +450,53 @@ impl App {
         });
         let mut results = column![];
         for (position, &index) in self.quick_open.results.iter().enumerate() {
-            let file = &self.quick_open.candidates[index];
+            let (title, context, hint, message) = if headings {
+                let section = &self.outline.sections[index];
+                let mut parents: Vec<_> = outline::heading_parents(&self.outline.sections, index)
+                    .map(|parent| parent.title.as_str())
+                    .collect();
+                parents.reverse();
+                let context = parents.join(" › ");
+                let hint = if context.is_empty() {
+                    section.title.clone()
+                } else {
+                    format!("{context} › {}", section.title)
+                };
+                (
+                    section.title.as_str(),
+                    context,
+                    hint,
+                    Message::ChooseHeading {
+                        index,
+                        revision: self.document.revision(),
+                        request: self.quick_open.request,
+                    },
+                )
+            } else {
+                let file = &self.quick_open.candidates[index];
+                (
+                    file.name.as_str(),
+                    file.relative.rsplit_once('/').map_or_else(
+                        || {
+                            self.folder
+                                .root()
+                                .map(super::folder::name)
+                                .unwrap_or_default()
+                        },
+                        |(parent, _)| parent.to_owned(),
+                    ),
+                    file.path.display().to_string(),
+                    Message::Choose(file.path.clone()),
+                )
+            };
             let choice = button(
                 container(
                     column![
-                        text(&file.name).size(13).wrapping(text::Wrapping::None),
-                        text(file.relative.rsplit_once('/').map_or_else(
-                            || {
-                                self.folder
-                                    .root()
-                                    .map(super::folder::name)
-                                    .unwrap_or_default()
-                            },
-                            |(parent, _)| parent.to_owned(),
-                        ))
-                        .size(11)
-                        .color(tokens.muted)
-                        .wrapping(text::Wrapping::None),
+                        text(title).size(13).wrapping(text::Wrapping::None),
+                        text(context)
+                            .size(11)
+                            .color(tokens.muted)
+                            .wrapping(text::Wrapping::None),
                     ]
                     .spacing(2),
                 )
@@ -386,7 +506,7 @@ impl App {
             .padding([6, 10])
             .height(RESULT_HEIGHT)
             .width(Fill)
-            .on_press(AppMessage::QuickOpen(Message::Choose(file.path.clone())))
+            .on_press(AppMessage::QuickOpen(message))
             .style(styles::button_style(
                 tokens,
                 if position == self.quick_open.selected {
@@ -398,7 +518,7 @@ impl App {
             results = results.push(
                 iced::widget::mouse_area(tooltip(
                     choice,
-                    text(file.path.display().to_string()).size(11),
+                    text(hint).size(11),
                     tooltip::Position::Bottom,
                 ))
                 .on_move(move |_| AppMessage::QuickOpen(Message::Hover(position))),
@@ -407,7 +527,9 @@ impl App {
         if self.quick_open.results.is_empty() {
             results = results.push(
                 container(
-                    text(if self.quick_open.candidates.is_empty() {
+                    text(if headings {
+                        "No matching headings"
+                    } else if self.quick_open.candidates.is_empty() {
                         "No Markdown files in this workspace"
                     } else {
                         "No matching files"
@@ -425,14 +547,21 @@ impl App {
             .style(styles::scrollbar(tokens));
         let mut content = column![
             row![
-                text("Quick Open").size(13),
+                text(if headings {
+                    "Jump to Heading"
+                } else {
+                    "Quick Open"
+                })
+                .size(13),
                 container(
-                    text(
+                    text(if headings {
+                        self.display_name.clone()
+                    } else {
                         self.folder
                             .root()
                             .map(super::folder::name)
                             .unwrap_or_default()
-                    )
+                    })
                     .size(12)
                     .color(tokens.muted)
                     .wrapping(text::Wrapping::None)
