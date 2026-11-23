@@ -30,6 +30,7 @@ pub(super) const STATISTICS_HEIGHT: f32 = 28.0;
 pub(super) const FILES_WIDTH: f32 = 260.0;
 pub(super) const OUTLINE_WIDTH: f32 = 240.0;
 const MIN_WRITING_WIDTH: f32 = 480.0;
+pub(super) const INITIAL_WINDOW_WIDTH: f32 = 1180.0;
 
 const MENU_SCROLL: &str = "titlebar-context-menu-scroll";
 
@@ -133,6 +134,9 @@ pub enum Message {
     Run(Box<AppMessage>),
     DragWindow,
     MaximizeWindow,
+    WindowOpened(window::Id, f32),
+    WindowWidth(f32),
+    WindowScale(f32),
     Preference(Preference, bool),
     Statistics,
     Step(i32),
@@ -147,6 +151,9 @@ pub(super) struct State {
     pub files: Panel,
     pub outline: Panel,
     pub sidebars_hidden: bool,
+    pub(super) window_width: f32,
+    pub(super) window_scale: f32,
+    last_sidebar: Sidebar,
     pub saving: bool,
     pub save_error: Option<String>,
     selected: usize,
@@ -158,12 +165,6 @@ pub(super) struct Panel {
 }
 
 impl State {
-    pub(super) fn panel(&self, side: Sidebar) -> Panel {
-        match side {
-            Sidebar::Files => self.files,
-            Sidebar::Outline => self.outline,
-        }
-    }
     pub(super) fn panel_mut(&mut self, side: Sidebar) -> &mut Panel {
         match side {
             Sidebar::Files => &mut self.files,
@@ -179,6 +180,9 @@ impl Default for State {
             files: Panel { open: false },
             outline: Panel { open: false },
             sidebars_hidden: false,
+            window_width: INITIAL_WINDOW_WIDTH,
+            window_scale: 1.0,
+            last_sidebar: Sidebar::Files,
             saving: false,
             save_error: None,
             selected: 0,
@@ -197,6 +201,7 @@ enum SaveState {
 
 struct Command {
     label: Cow<'static, str>,
+    group: Option<&'static str>,
     icon: Icon,
     action: Message,
     enabled: bool,
@@ -211,6 +216,7 @@ impl Command {
     ) -> Self {
         Self {
             label: label.into(),
+            group: None,
             icon,
             action: Message::Run(Box::new(action)),
             enabled,
@@ -219,10 +225,70 @@ impl Command {
     fn menu(label: &'static str, icon: Icon, menu: Menu) -> Self {
         Self {
             label: label.into(),
+            group: None,
             icon,
             action: Message::Menu(menu),
             enabled: true,
         }
+    }
+
+    fn shortcut(&self) -> Option<&'static str> {
+        let Message::Run(action) = &self.action else {
+            return None;
+        };
+        let mac = cfg!(target_os = "macos");
+        Some(match action.as_ref() {
+            AppMessage::Format(Format::Bold) => {
+                if mac {
+                    "⌘B"
+                } else {
+                    "Ctrl+B"
+                }
+            }
+            AppMessage::Format(Format::Italic) => {
+                if mac {
+                    "⌘I"
+                } else {
+                    "Ctrl+I"
+                }
+            }
+            AppMessage::Format(Format::Strikethrough) => {
+                if mac {
+                    "⇧⌘X"
+                } else {
+                    "Ctrl+Shift+X"
+                }
+            }
+            AppMessage::Format(Format::Link) => {
+                if mac {
+                    "⌘K"
+                } else {
+                    "Ctrl+K"
+                }
+            }
+            AppMessage::Save => {
+                if mac {
+                    "⌘S"
+                } else {
+                    "Ctrl+S"
+                }
+            }
+            AppMessage::SaveAs => {
+                if mac {
+                    "⇧⌘S"
+                } else {
+                    "Ctrl+Shift+S"
+                }
+            }
+            AppMessage::QuickOpen(super::quick_open::Message::Open) => {
+                if mac {
+                    "⌘P"
+                } else {
+                    "Ctrl+P"
+                }
+            }
+            _ => return None,
+        })
     }
 }
 
@@ -275,6 +341,7 @@ impl App {
     pub(super) fn show_sidebar(&mut self, side: Sidebar) -> Task<AppMessage> {
         self.chrome.sidebars_hidden = false;
         self.chrome.panel_mut(side).open = true;
+        self.chrome.last_sidebar = side;
         self.preserve_viewport_generation =
             Some(self.session.document.collaboration().generation());
         // Without an open place the sidebar has no tree to take the keyboard.
@@ -290,7 +357,12 @@ impl App {
         if self.overlay.is_some() {
             return Task::none();
         }
-        if self.chrome.sidebars_hidden || !self.chrome.panel(side).open {
+        let (files, outline) = self.docked_sidebars(self.chrome.window_width);
+        let visible = match side {
+            Sidebar::Files => files,
+            Sidebar::Outline => outline,
+        };
+        if !visible {
             return self.show_sidebar(side);
         }
         self.chrome.panel_mut(side).open = false;
@@ -304,8 +376,13 @@ impl App {
             return (false, false);
         }
         let files = self.chrome.files.open && width >= FILES_WIDTH + MIN_WRITING_WIDTH;
-        let remaining = width - if files { FILES_WIDTH } else { 0.0 };
-        let outline = self.chrome.outline.open && remaining >= OUTLINE_WIDTH + MIN_WRITING_WIDTH;
+        let outline = self.chrome.outline.open && width >= OUTLINE_WIDTH + MIN_WRITING_WIDTH;
+        if files && outline && width < FILES_WIDTH + OUTLINE_WIDTH + MIN_WRITING_WIDTH {
+            return match self.chrome.last_sidebar {
+                Sidebar::Files => (true, false),
+                Sidebar::Outline => (false, true),
+            };
+        }
         (files, outline)
     }
 
@@ -331,35 +408,38 @@ impl App {
             },
         ]
         .height(Fill);
-        let mut layers = iced::widget::stack![writing];
-        let files_floating =
-            self.chrome.files.open && !files_docked && !self.chrome.sidebars_hidden;
-        let outline_floating =
-            self.chrome.outline.open && !outline_docked && !self.chrome.sidebars_hidden;
-        if files_floating || outline_floating {
-            for (side, visible) in [
-                (Sidebar::Files, files_floating),
-                (Sidebar::Outline, outline_floating),
-            ] {
-                if !visible {
-                    continue;
-                }
-                let panel = container(self.sidebar_view(side)).height(Fill);
-                let panel = container(panel).align_top(Fill);
-                let panel = match side {
-                    Sidebar::Files => panel.align_left(Fill),
-                    Sidebar::Outline => panel.align_right(Fill),
-                };
-                layers = layers.push(panel);
-            }
-        }
-        column![self.titlebar_view(), layers].height(Fill).into()
+        column![self.titlebar_view(), writing].height(Fill).into()
     }
 
     pub(super) fn update_chrome(&mut self, message: Message) -> Task<AppMessage> {
         match message {
             Message::DragWindow => return window::latest().and_then(window::drag),
             Message::MaximizeWindow => return window::latest().and_then(window::toggle_maximize),
+            Message::WindowOpened(id, width) => {
+                return Task::batch([
+                    self.update_chrome(Message::WindowWidth(width)),
+                    window::scale_factor(id)
+                        .map(|scale| AppMessage::Chrome(Message::WindowScale(scale))),
+                ]);
+            }
+            Message::WindowScale(scale) => self.chrome.window_scale = scale,
+            Message::WindowWidth(width) => {
+                let (was_files, was_outline) = self.docked_sidebars(self.chrome.window_width);
+                self.chrome.window_width = width;
+                let (files, outline) = self.docked_sidebars(width);
+                if (files, outline) != (was_files, was_outline) {
+                    self.preserve_viewport_generation =
+                        Some(self.session.document.collaboration().generation());
+                    if (was_files && !files || was_outline && !outline)
+                        && !self.editor_focused
+                        && self.overlay.is_none()
+                        && !self.search_open
+                        && self.mode != EditorMode::Read
+                    {
+                        return operation::focus(EDITOR);
+                    }
+                }
+            }
             Message::Preference(preference, enabled) => {
                 match preference {
                     Preference::WordCount => self.preferences.show_word_count = enabled,
@@ -583,21 +663,33 @@ impl App {
             AppMessage::CloseOverlay,
             false,
         );
+        let metric = |label: &'static str, value: String| {
+            row![
+                text(label).size(12).color(tokens.muted),
+                space::horizontal(),
+                text(value).size(13).color(tokens.text),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center)
+        };
         let details = column![
             row![
-                text("Document statistics").size(13),
+                text("Document statistics").size(14),
                 space().width(Fill),
                 close
             ]
             .align_y(Alignment::Center),
-            text(word_label(words)).size(12),
-            text(format!("{characters} Markdown characters")).size(12),
-            text(reading_time(words)).size(12),
+            metric("Words", words.to_string()),
+            metric("Markdown characters", characters.to_string()),
+            metric(
+                "Estimated reading time",
+                reading_time(words).trim_end_matches(" read").to_owned(),
+            ),
         ]
-        .spacing(5);
+        .spacing(8);
         let popup = container(details)
             .padding(12)
-            .width(230.0_f32.min((size.width - 16.0).max(1.0)))
+            .width(264.0_f32.min((size.width - 16.0).max(1.0)))
             .style(styles::context_menu(tokens));
         let (files, outline) = self.docked_sidebars(size.width);
         row![
@@ -650,6 +742,7 @@ impl App {
     pub(super) fn titlebar_view(&self) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
         iced::widget::responsive(move |size| {
+            let (files_visible, outline_visible) = self.docked_sidebars(size.width);
             let side_width = if size.width < 900.0 { 236.0 } else { 280.0 };
             // Preserve the actual macOS traffic lights, including their native hit targets.
             let native_inset = if cfg!(target_os = "macos") { 76.0 } else { 0.0 };
@@ -673,10 +766,21 @@ impl App {
                 Icon::Sidebar,
                 "Files · ⌘/Ctrl Shift B",
                 AppMessage::ToggleSidebar(Sidebar::Files),
-                self.chrome.files.open && !self.chrome.sidebars_hidden,
+                files_visible,
             ))
             .id("titlebar-files");
-            let left = row![space().width(native_inset), files, file,]
+            let quick_open = container(self.titlebar_icon(
+                Icon::Search,
+                if cfg!(target_os = "macos") {
+                    "Quick Open · ⌘P"
+                } else {
+                    "Quick Open · Ctrl+P"
+                },
+                AppMessage::QuickOpen(super::quick_open::Message::Open),
+                self.overlay == Some(Overlay::QuickOpen),
+            ))
+            .id("titlebar-quick-open");
+            let left = row![space().width(native_inset), files, quick_open, file]
                 .spacing(4)
                 .align_y(Alignment::Center)
                 .width(side_width);
@@ -778,18 +882,28 @@ impl App {
             )
             .center_x(Fill);
             let format: Element<'_, AppMessage> = {
-                button(text("Format").size(12))
-                    .padding([5, 10])
-                    .on_press(AppMessage::Chrome(Message::Menu(Menu::Format)))
-                    .style(styles::button_style(
-                        tokens,
-                        if self.chrome.menu == Some(Menu::Format) {
-                            Button::Selected
-                        } else {
-                            Button::Quiet
-                        },
-                    ))
-                    .into()
+                button(
+                    row![
+                        text("Format").size(12),
+                        icon::sized(Icon::ChevronDown, tokens.muted, 10.0)
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                )
+                .padding([5, 10])
+                .on_press_maybe(
+                    (!self.loading && self.mode != EditorMode::Read)
+                        .then_some(AppMessage::Chrome(Message::Menu(Menu::Format))),
+                )
+                .style(styles::button_style(
+                    tokens,
+                    if self.chrome.menu == Some(Menu::Format) {
+                        Button::Selected
+                    } else {
+                        Button::Quiet
+                    },
+                ))
+                .into()
             };
             let right = row![
                 space::horizontal(),
@@ -798,7 +912,7 @@ impl App {
                     Icon::Outline,
                     "Outline · ⌘/Ctrl Alt O",
                     AppMessage::ToggleSidebar(Sidebar::Outline),
-                    self.chrome.outline.open && !self.chrome.sidebars_hidden
+                    outline_visible
                 ))
                 .id("titlebar-outline"),
             ]
@@ -1143,10 +1257,7 @@ impl App {
                     .into_iter()
                     .map(|font| {
                         Command::action(
-                            match font {
-                                crate::theme::WritingFont::SansSerif => "Sans-serif",
-                                crate::theme::WritingFont::Serif => "Serif",
-                            },
+                            font.label(),
                             if self.preferences.writing_font == font {
                                 Icon::Check
                             } else {
@@ -1203,12 +1314,18 @@ impl App {
                     } else {
                         AppMessage::Format(format)
                     };
-                    commands.push(Command::action(
+                    let mut command = Command::action(
                         label,
                         icon,
                         action,
                         !self.loading && self.mode != EditorMode::Read,
-                    ));
+                    );
+                    command.group = match format {
+                        Format::Heading => Some("Text"),
+                        Format::Quote => Some("Blocks"),
+                        _ => None,
+                    };
+                    commands.push(command);
                 }
                 commands.push(Command::action(
                     "Image…",
@@ -1219,12 +1336,7 @@ impl App {
                 commands
             }
             Menu::Help => vec![
-                Command::action(
-                    "Appearance & shortcuts…",
-                    Icon::Settings,
-                    AppMessage::ShowSettings,
-                    true,
-                ),
+                Command::action("Settings…", Icon::Settings, AppMessage::ShowSettings, true),
                 Command::action("Welcome", Icon::Book, AppMessage::Welcome, true),
                 Command::action("Markdown guide", Icon::Book, AppMessage::Guide, true),
                 Command::action(
@@ -1261,6 +1373,13 @@ impl App {
             let selected = command.enabled && enabled_index == self.chrome.selected;
             let choice_index = enabled_index;
             enabled_index += usize::from(command.enabled);
+            if let Some(group) = command.group {
+                items = items.push(
+                    container(text(group).size(11).color(tokens.muted))
+                        .padding(iced::Padding::new(10.0).top(6.0).bottom(2.0)),
+                );
+            }
+            let shortcut = command.shortcut();
             items = items.push(
                 container(
                     mouse_area(
@@ -1274,7 +1393,19 @@ impl App {
                                         tokens.disabled
                                     }
                                 ),
-                                text(command.label).size(13)
+                                text(command.label).size(13),
+                                space::horizontal(),
+                                text(shortcut.unwrap_or_default()).size(11).color(
+                                    if command.enabled {
+                                        if selected {
+                                            tokens.on_accent_soft
+                                        } else {
+                                            tokens.muted
+                                        }
+                                    } else {
+                                        tokens.disabled
+                                    },
+                                ),
                             ]
                             .spacing(10)
                             .align_y(Alignment::Center),
@@ -1284,7 +1415,7 @@ impl App {
                                 .enabled
                                 .then_some(AppMessage::Chrome(command.action)),
                         )
-                        .padding([9, 12])
+                        .padding([if menu == Menu::Format { 6 } else { 9 }, 12])
                         .width(Fill)
                         .style(styles::button_style(
                             tokens,

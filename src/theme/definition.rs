@@ -58,11 +58,21 @@ pub struct Typography {
 pub enum WritingFont {
     #[default]
     SansSerif,
+    #[serde(rename = "source-sans-3")]
+    SourceSans3,
     Serif,
 }
 
 impl WritingFont {
-    pub const ALL: [Self; 2] = [Self::SansSerif, Self::Serif];
+    pub const ALL: [Self; 3] = [Self::SansSerif, Self::SourceSans3, Self::Serif];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SansSerif => "System Sans",
+            Self::SourceSans3 => "Source Sans 3",
+            Self::Serif => "Newsreader",
+        }
+    }
 
     pub const fn font(self) -> Font {
         match self {
@@ -82,15 +92,47 @@ impl WritingFont {
                 family: iced::font::Family::Name("Newsreader"),
                 ..Font::DEFAULT
             },
+            Self::SourceSans3 => Font {
+                family: iced::font::Family::Name("Source Sans 3"),
+                ..Font::DEFAULT
+            },
         }
     }
 }
 
 impl std::fmt::Display for WritingFont {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WritingMeasure {
+    #[default]
+    Theme,
+    Narrow,
+    Wide,
+}
+
+impl WritingMeasure {
+    pub const ALL: [Self; 3] = [Self::Theme, Self::Narrow, Self::Wide];
+
+    pub fn width(self, theme_width: f32) -> f32 {
+        match self {
+            Self::Theme => theme_width,
+            Self::Narrow => 520.0,
+            Self::Wide => 720.0,
+        }
+    }
+}
+
+impl std::fmt::Display for WritingMeasure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::SansSerif => "Sans-serif",
-            Self::Serif => "Serif",
+            Self::Theme => "Theme default",
+            Self::Narrow => "Narrow",
+            Self::Wide => "Wide",
         })
     }
 }

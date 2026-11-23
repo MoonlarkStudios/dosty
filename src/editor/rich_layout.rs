@@ -21,6 +21,9 @@ use crate::io::image_store::{Asset, ImageStore};
 use crate::theme::styles;
 use crate::theme::{ResolvedTheme, Tokens, Typography, WritingFont};
 
+pub(super) const CARET_WIDTH: f32 = 1.0;
+const FALLBACK_CARET: Rectangle = Rectangle::new(Point::ORIGIN, Size::new(CARET_WIDTH, 24.0));
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParagraphKey {
     text: String,
@@ -38,6 +41,7 @@ struct ParagraphKey {
 struct CachedParagraph {
     paragraph: Paragraph,
     rows: Vec<CachedRow>,
+    centered_markers: Arc<[(Paragraph, Point)]>,
     inline_code: Vec<Rectangle>,
     strikethrough: Vec<(Rectangle, iced::Color)>,
 }
@@ -212,6 +216,7 @@ pub enum FragmentKind {
     },
     Text {
         paragraph: Paragraph,
+        centered_markers: Arc<[(Paragraph, Point)]>,
         origin: Point,
         display_start: usize,
         style: ParagraphStyle,
@@ -232,6 +237,7 @@ pub enum Decoration {
 
 pub struct VisualRow {
     pub bounds: Rectangle,
+    caret_height: f32,
     display_range: Range<usize>,
     display_stops: Arc<[(usize, f32)]>,
     display_start: usize,
@@ -259,8 +265,15 @@ impl VisualRow {
             .map_or(self.bounds.x, |(_, x)| self.origin_x + x);
         Rectangle::new(
             Point::new(x, self.bounds.y),
-            Size::new(1.5, self.bounds.height),
+            Size::new(CARET_WIDTH, self.bounds.height),
         )
+    }
+
+    fn painted_caret(&self, offset: usize) -> Rectangle {
+        let mut caret = self.display_caret(offset);
+        caret.height = self.caret_height.min(self.bounds.height);
+        caret.y += (self.bounds.height - caret.height) * 0.5;
+        caret
     }
 }
 
@@ -316,13 +329,7 @@ impl RichLayout {
                 let top = builder.y;
                 match unit.kind {
                     UnitKind::Line(heading) => {
-                        let size = styles::line_size(
-                            builder.size,
-                            heading,
-                            projection.text[unit.range.clone()]
-                                .trim_matches('\r')
-                                .is_empty(),
-                        );
+                        let size = styles::line_size(builder.size, heading);
                         builder.line(unit.range.clone(), size, heading.is_some());
                     }
                     UnitKind::TableRow { table, row } => {
@@ -419,11 +426,7 @@ impl RichLayout {
                 )
                 .filter(|heading| heading.range.start <= start && start < heading.range.end)
                 .map(|heading| heading.level);
-            let size = styles::line_size(
-                builder.size,
-                heading,
-                projection.text[start..end].trim_matches('\r').is_empty(),
-            );
+            let size = styles::line_size(builder.size, heading);
             builder.line(start..end, size, heading.is_some());
             if end == projection.text.len() {
                 break;
@@ -664,16 +667,24 @@ impl RichLayout {
         &self.rows[first..first + count]
     }
 
-    pub fn source_caret(&self, source: usize, y: Option<f32>) -> Rectangle {
+    fn source_caret_row(
+        &self,
+        source: usize,
+        y: Option<f32>,
+        upstream: Option<bool>,
+    ) -> Option<(&VisualRow, usize)> {
         let offset = self
             .mapping
             .as_ref()
             .map_or(source, |map| map.to_display(source));
         let rows = self.rows_at(offset);
-        let row = y
-            .and_then(|y| {
-                rows.iter()
-                    .min_by(|a, b| (a.bounds.y - y).abs().total_cmp(&(b.bounds.y - y).abs()))
+        let row = upstream
+            .and_then(|upstream| if upstream { rows.first() } else { rows.last() })
+            .or_else(|| {
+                y.and_then(|y| {
+                    rows.iter()
+                        .min_by(|a, b| (a.bounds.y - y).abs().total_cmp(&(b.bounds.y - y).abs()))
+                })
             })
             .or_else(|| {
                 rows.iter()
@@ -687,9 +698,17 @@ impl RichLayout {
                         .saturating_sub(1),
                 )
             });
-        row.map_or(Rectangle::new(Point::ORIGIN, Size::new(1.5, 24.0)), |row| {
-            row.display_caret(offset)
-        })
+        row.map(|row| (row, offset))
+    }
+
+    pub fn source_caret(&self, source: usize, y: Option<f32>) -> Rectangle {
+        self.source_caret_row(source, y, None)
+            .map_or(FALLBACK_CARET, |(row, offset)| row.display_caret(offset))
+    }
+
+    pub(super) fn painted_caret(&self, source: usize, upstream: Option<bool>) -> Rectangle {
+        self.source_caret_row(source, None, upstream)
+            .map_or(FALLBACK_CARET, |(row, offset)| row.painted_caret(offset))
     }
 
     pub fn visible_fragments(&self, y: Range<f32>) -> impl Iterator<Item = &Fragment> {
@@ -707,20 +726,8 @@ impl RichLayout {
 
     /// Resolves wrap affinity independently of the previous row's vertical position.
     pub fn source_caret_on_side(&self, source: usize, upstream: bool) -> Rectangle {
-        let offset = self
-            .mapping
-            .as_ref()
-            .map_or(source, |map| map.to_display(source));
-        let mut rows = self.rows_at(offset).iter();
-        let row = if upstream {
-            rows.next()
-        } else {
-            rows.next_back()
-        };
-        row.map_or_else(
-            || self.source_caret(source, None),
-            |row| row.display_caret(offset),
-        )
+        self.source_caret_row(source, None, Some(upstream))
+            .map_or(FALLBACK_CARET, |(row, offset)| row.display_caret(offset))
     }
 
     pub fn upstream_affinity(&self, source: usize, y: f32) -> bool {
@@ -1138,6 +1145,7 @@ impl Builder<'_> {
             self.layout.rows.push(VisualRow {
                 display_range: image.range.clone(),
                 bounds: Rectangle::new(Point::new(position.x, bounds.y), Size::new(width, height)),
+                caret_height: size,
                 display_stops: Arc::from([
                     (0, bounds.x),
                     (image.range.len(), bounds.x + bounds.width),
@@ -1202,17 +1210,6 @@ impl Builder<'_> {
                 Some((start - range.start..end - range.start, *style))
             })
             .collect::<Vec<_>>();
-        let size = if !range.is_empty()
-            && marks.first().is_some_and(|(mark, _)| mark.start == 0)
-            && marks
-                .last()
-                .is_some_and(|(mark, _)| mark.end == range.len())
-            && marks.iter().all(|(_, style)| style.contains(Style::SYNTAX))
-        {
-            self.size * 0.8
-        } else {
-            size
-        };
         let code = self.projection.rich.code_line(&range);
         let syntax = if let Some((index, block)) = code
             && block.body.start <= range.start
@@ -1240,11 +1237,15 @@ impl Builder<'_> {
             Vec::new()
         };
         let code = code.is_some();
-        let line_height = if code {
+        let line_height = if bold {
+            1.3
+        } else if code {
             styles::CODE_LINE_HEIGHT
         } else {
             self.line_height
         };
+        let row_height = size * line_height;
+        let paragraph_line_height = text::LineHeight::Absolute(row_height.into());
         let key = ParagraphKey {
             text: self.projection.text[range.clone()].to_owned(),
             marks,
@@ -1265,6 +1266,7 @@ impl Builder<'_> {
             .or_else(|| self.previous.remove(&key))
             .unwrap_or_else(|| {
                 let mut spans = Vec::<text::Span<'_>>::new();
+                let mut marker_spans = Vec::new();
                 let mut inline_spans = Vec::new();
                 let mut strike_spans = HashMap::new();
                 let mut start = 0;
@@ -1293,20 +1295,37 @@ impl Builder<'_> {
                         strike_spans.insert(spans.len(), format.color.unwrap_or(self.tokens.text));
                     }
                     let span = text::Span::new(&key.text[mark.clone()]);
+                    let center_marker = bold
+                        && style.contains(Style::SYNTAX)
+                        && key.text[mark.clone()].bytes().all(|byte| {
+                            matches!(
+                                byte,
+                                b' ' | b'\t' | b'#' | b'*' | b'_' | b'~' | b'`' | b'=' | b'-'
+                            )
+                        });
                     // A strike changes drawing only. Preserve the paragraph's
                     // default shaping attributes for otherwise unstyled text.
-                    spans.push(if style.0 == Style::STRIKETHROUGH {
+                    spans.push(if center_marker {
+                        // Shape the actual punctuation so selection, wrapping, and
+                        // hit testing still use its glyph advances.
+                        marker_spans.push(spans.len());
+                        span.font(Font::MONOSPACE)
+                            .color(iced::Color::TRANSPARENT)
+                            .size(self.size * 0.8)
+                            .line_height(paragraph_line_height)
+                    } else if style.0 == Style::STRIKETHROUGH {
                         span
                     } else {
-                        span.font_maybe(format.font).color_maybe(format.color).size(
-                            if style.contains(Style::SYNTAX) {
+                        span.font_maybe(format.font)
+                            .color_maybe(format.color)
+                            .size(if style.contains(Style::SYNTAX) {
                                 self.size * 0.8
                             } else if style.contains(Style::CODE) {
                                 styles::code_size(size)
                             } else {
                                 size
-                            },
-                        )
+                            })
+                            .line_height(paragraph_line_height)
                     });
                     start = mark.end;
                 }
@@ -1317,7 +1336,7 @@ impl Builder<'_> {
                     content: spans.as_slice(),
                     bounds: Size::new(width.max(1.0), f32::INFINITY),
                     size: size.into(),
-                    line_height: text::LineHeight::Relative(if bold { 1.3 } else { line_height }),
+                    line_height: paragraph_line_height,
                     font: Font {
                         weight: if bold {
                             iced::font::Weight::Bold
@@ -1340,6 +1359,7 @@ impl Builder<'_> {
                     wrapping: text::Wrapping::WordOrGlyph,
                 });
                 let mut rows = Vec::new();
+                let mut centered_markers = Vec::new();
                 let mut strike_glyphs = Vec::new();
                 // Shaped glyph offsets are local to their physical text line.
                 // A table cell can contain several such lines, including empty
@@ -1356,6 +1376,37 @@ impl Builder<'_> {
                     .collect::<Vec<_>>();
                 for run in paragraph.buffer().layout_runs() {
                     let line_start = line_starts[run.line_i];
+                    if !marker_spans.is_empty() {
+                        for glyphs in run.glyphs.chunk_by(|a, b| a.metadata == b.metadata) {
+                            let first = &glyphs[0];
+                            if marker_spans.binary_search(&first.metadata).is_err() {
+                                continue;
+                            }
+                            let start = glyphs.iter().map(|glyph| glyph.start).min().unwrap();
+                            let end = glyphs.iter().map(|glyph| glyph.end).max().unwrap();
+                            let marker = &run.text[start..end];
+                            if marker.trim().is_empty() {
+                                continue;
+                            }
+                            let shaped = Paragraph::with_text(text::Text {
+                                content: marker,
+                                bounds: Size::INFINITE,
+                                size: first.font_size.into(),
+                                line_height: text::LineHeight::Relative(self.line_height),
+                                font: Font::MONOSPACE,
+                                align_x: text::Alignment::Default,
+                                align_y: iced::alignment::Vertical::Top,
+                                shaping: text::Shaping::Advanced,
+                                wrapping: text::Wrapping::None,
+                            });
+                            let x = glyphs
+                                .iter()
+                                .map(|glyph| glyph.x)
+                                .fold(f32::INFINITY, f32::min);
+                            let y = run.line_top + (run.line_height - shaped.min_height()) / 2.0;
+                            centered_markers.push((shaped, Point::new(x, y)));
+                        }
+                    }
                     let mut stops = Vec::new();
                     for glyph in run.glyphs {
                         if let Some(&color) = strike_spans.get(&glyph.metadata)
@@ -1433,14 +1484,13 @@ impl Builder<'_> {
                 Arc::new(CachedParagraph {
                     paragraph,
                     rows,
+                    centered_markers: centered_markers.into(),
                     inline_code,
                     strikethrough,
                 })
             });
         let paragraph = &cached.paragraph;
-        let height = paragraph
-            .min_height()
-            .max(size * if bold { 1.3 } else { line_height });
+        let height = paragraph.min_height().max(row_height);
         let origin = Rectangle::new(position, Size::new(width, height)).anchor(
             paragraph.min_bounds(),
             paragraph.align_x(),
@@ -1460,6 +1510,7 @@ impl Builder<'_> {
         for row in &cached.rows {
             self.layout.rows.push(VisualRow {
                 display_range: range.start + row.range.start..range.start + row.range.end,
+                caret_height: size,
                 display_stops: Arc::clone(&row.stops),
                 display_start: range.start,
                 origin_x: origin.x,
@@ -1475,6 +1526,7 @@ impl Builder<'_> {
             bounds: Rectangle::new(position, Size::new(width, height)),
             kind: FragmentKind::Text {
                 paragraph: paragraph.clone(),
+                centered_markers: Arc::clone(&cached.centered_markers),
                 origin,
                 display_start: range.start,
                 style: ParagraphStyle {
@@ -1560,11 +1612,7 @@ mod tests {
         let mut fonts = iced::advanced::graphics::text::font_system()
             .write()
             .unwrap();
-        for font in [
-            include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
-            include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
-            include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
-        ] {
+        for font in crate::theme::BUNDLED_WRITING_FONTS {
             fonts.load_font(std::borrow::Cow::Borrowed(font));
         }
         drop(fonts);
@@ -1576,6 +1624,7 @@ mod tests {
         actual.rebuild(&projection, &theme, 1.0, 320.0, None, &images);
         let sans_end = actual.source_caret(source.len(), None);
         for font in [
+            WritingFont::SourceSans3,
             WritingFont::Serif,
             WritingFont::SansSerif,
             WritingFont::Serif,
@@ -1591,9 +1640,52 @@ mod tests {
             {
                 assert_eq!(actual.source_caret(at, None), fresh.source_caret(at, None));
             }
-            if font == WritingFont::Serif {
+            if font != WritingFont::SansSerif {
                 assert_ne!(actual.source_caret(source.len(), None), sans_end);
             }
+        }
+    }
+
+    #[test]
+    fn source_sans_shapes_the_four_bundled_faces() {
+        let font_system = iced::advanced::graphics::text::font_system();
+        let mut fonts = font_system.write().unwrap();
+        for font in crate::theme::BUNDLED_WRITING_FONTS {
+            fonts.load_font(std::borrow::Cow::Borrowed(font));
+        }
+        drop(fonts);
+
+        let projection = Projection::new("Normal **bold** *italic* ***both***");
+        let mut theme = Preset::Paper.resolve();
+        theme.typography.font = WritingFont::SourceSans3;
+        let mut rich = RichLayout::default();
+        rich.rebuild(
+            &projection,
+            &theme,
+            1.0,
+            610.0,
+            None,
+            &ImageStore::default(),
+        );
+        let FragmentKind::Text { paragraph, .. } = &rich.fragments[0].kind else {
+            panic!("expected a shaped paragraph");
+        };
+        let mut fonts = font_system.write().unwrap();
+        let database = fonts.raw().db();
+        for (word, face) in [
+            ("Normal", "SourceSans3-Regular"),
+            ("bold", "SourceSans3-Bold"),
+            ("italic", "SourceSans3-It"),
+            ("both", "SourceSans3-BoldIt"),
+        ] {
+            let offset = projection.text.find(word).unwrap();
+            let glyph = paragraph
+                .buffer()
+                .layout_runs()
+                .flat_map(|run| run.glyphs)
+                .find(|glyph| glyph.start <= offset && offset < glyph.end)
+                .unwrap();
+            assert_eq!(database.face(glyph.font_id).unwrap().post_script_name, face);
         }
     }
 
@@ -1940,6 +2032,48 @@ mod tests {
                 layout.hit(Point::new(caret.x + 0.1, caret.center_y())),
                 offset
             );
+        }
+    }
+
+    #[test]
+    fn heading_marker_stays_centered_from_the_first_hash_through_title_entry() {
+        let theme = Preset::Paper.resolve();
+        for prefix in ["#", "###"] {
+            let mut first_position = None;
+            for suffix in ["", " ", " Title", " **Title**"] {
+                let source = format!("{prefix}{suffix}");
+                let caret = source.find("Title").map_or(source.len(), |at| at + 1);
+                let projection = Projection::with_context(&source, Some(caret));
+                let mut layout = RichLayout::default();
+                layout.rebuild(
+                    &projection,
+                    &theme,
+                    1.0,
+                    610.0,
+                    None,
+                    &ImageStore::default(),
+                );
+                let FragmentKind::Text {
+                    paragraph,
+                    centered_markers,
+                    ..
+                } = &layout.fragments[0].kind
+                else {
+                    panic!("expected title row");
+                };
+                let (marker, position) = &centered_markers[0];
+                let run = paragraph.buffer().layout_runs().next().unwrap();
+                assert_eq!(
+                    position.y + marker.min_height() / 2.0,
+                    run.line_height / 2.0
+                );
+                let first = first_position.get_or_insert(*position);
+                assert_eq!(position, first, "{source}");
+                assert_eq!(
+                    centered_markers.len(),
+                    if suffix.contains('*') { 3 } else { 1 }
+                );
+            }
         }
     }
 

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use iced::advanced::widget;
 use iced::keyboard::key::Named;
 use iced::widget::{
-    button, column, container, operation, row, scrollable, text, text_input, tooltip,
+    button, column, container, operation, row, scrollable, space, text, text_input, tooltip,
 };
 use iced::{Alignment, Element, Fill, Padding, Size, Task};
 
@@ -871,12 +871,7 @@ impl App {
     pub(super) fn quick_open_view(&self, size: Size) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
         let headings = self.quick_open.heading_query().is_some();
-        let placeholder = if self.outline.sections.is_empty() {
-            "Search or jump to…"
-        } else {
-            "Search or jump to…  # then Space for headings"
-        };
-        let input = text_input(placeholder, &self.quick_open.query)
+        let input = text_input("Search or jump to…", &self.quick_open.query)
             .id(INPUT)
             .on_input(|query| AppMessage::QuickOpen(Message::Query(query)))
             .on_submit(AppMessage::QuickOpen(Message::Accept))
@@ -931,17 +926,26 @@ impl App {
                 );
             }
             let mark = match &entry.target {
-                _ if entry.unsaved => Some(Icon::Modified),
                 Target::Folder(_) | Target::Place(_) => Some(Icon::Folder),
                 Target::File(path) if crate::io::assets::is_image(path) => Some(Icon::Image),
                 Target::Heading { .. } => Some(Icon::Heading),
                 Target::File(_) | Target::Session(_) => None,
             };
-            let mut line = row![].spacing(8).align_y(Alignment::Center);
-            if let Some(mark) = mark {
-                line = line.push(icon::sized(mark, tokens.muted, 14.0));
-            }
-            line = line.push(container(label).clip(true).width(Fill));
+            let mark = mark.map_or_else(
+                || space().width(14).into(),
+                |mark| icon::sized(mark, tokens.muted, 14.0),
+            );
+            let line = row![
+                mark,
+                container(label).clip(true).width(Fill),
+                if entry.unsaved {
+                    icon::sized(Icon::Modified, tokens.accent, 12.0)
+                } else {
+                    space().width(12).into()
+                },
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
             let activate = match entry.target {
                 Target::Heading { index, revision } => Message::PickHeading {
                     index,
@@ -966,7 +970,10 @@ impl App {
             let choice: Element<'_, AppMessage> = match &entry.target {
                 Target::File(path) | Target::Folder(path) | Target::Place(path) => tooltip(
                     choice,
-                    text(path.display().to_string()).size(11),
+                    container(text(path.display().to_string()).size(11))
+                        .padding([6, 8])
+                        .max_width(420)
+                        .style(styles::context_menu(tokens)),
                     tooltip::Position::Bottom,
                 )
                 .into(),
@@ -1000,7 +1007,27 @@ impl App {
             .id(RESULTS)
             .height(iced::Shrink)
             .style(styles::scrollbar(tokens));
-        let mut content = column![
+        let scope = if headings {
+            self.session.display_name.clone()
+        } else {
+            self.quick_open
+                .location
+                .as_deref()
+                .or_else(|| self.folder.root())
+                .map(super::folder::name)
+                .unwrap_or_default()
+        };
+        let note = if self.quick_open.matches > MAX_RESULTS {
+            format!(
+                "Showing {MAX_RESULTS} of {} matches",
+                self.quick_open.matches
+            )
+        } else if self.quick_open.query.is_empty() && !self.outline.sections.is_empty() {
+            "# then Space for headings".into()
+        } else {
+            String::new()
+        };
+        let content = column![
             row![
                 text(if headings {
                     "Jump to Heading"
@@ -1009,17 +1036,10 @@ impl App {
                 })
                 .size(13),
                 container(
-                    text(if headings {
-                        self.session.display_name.clone()
-                    } else {
-                        self.folder
-                            .root()
-                            .map(super::folder::name)
-                            .unwrap_or_default()
-                    })
-                    .size(12)
-                    .color(tokens.muted)
-                    .wrapping(text::Wrapping::None)
+                    text(scope)
+                        .size(12)
+                        .color(tokens.muted)
+                        .wrapping(text::Wrapping::None)
                 )
                 .clip(true)
                 .width(Fill)
@@ -1034,19 +1054,23 @@ impl App {
             .align_y(Alignment::Center)
             .spacing(8),
             input,
-            container(body).max_height((available - 100.0).clamp(80.0, 420.0)),
+            container(body).max_height((available - 126.0).clamp(80.0, 420.0)),
+            container(
+                row![
+                    text(note).size(11).color(tokens.muted),
+                    space::horizontal(),
+                    text("↑ ↓ Move").size(11).color(tokens.muted),
+                    text(if headings { "↵ Jump" } else { "↵ Open" })
+                        .size(11)
+                        .color(tokens.muted),
+                    text("Esc Close").size(11).color(tokens.muted),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center),
+            )
+            .padding([4, 2]),
         ]
         .spacing(8);
-        if self.quick_open.matches > MAX_RESULTS {
-            content = content.push(
-                text(format!(
-                    "Showing {MAX_RESULTS} of {} matches",
-                    self.quick_open.matches
-                ))
-                .size(11)
-                .color(tokens.muted),
-            );
-        }
         container(
             container(content)
                 .padding(12)
