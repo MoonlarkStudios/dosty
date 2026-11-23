@@ -24,10 +24,25 @@ use crate::theme::{ResolvedTheme, Tokens, Typography, WritingFont};
 pub(super) const CARET_WIDTH: f32 = 1.0;
 const FALLBACK_CARET: Rectangle = Rectangle::new(Point::ORIGIN, Size::new(CARET_WIDTH, 24.0));
 
+fn marker_paragraph(content: &str, size: f32, font: Font, line_height: f32) -> Paragraph {
+    Paragraph::with_text(text::Text {
+        content,
+        bounds: Size::INFINITE,
+        size: size.into(),
+        line_height: text::LineHeight::Relative(line_height),
+        font,
+        align_x: text::Alignment::Default,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: text::Shaping::Advanced,
+        wrapping: text::Wrapping::None,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParagraphKey {
     text: String,
     marks: Vec<(Range<usize>, Style)>,
+    task_markers: Vec<(usize, String)>,
     width: u32,
     size: u32,
     line_height: u32,
@@ -1237,6 +1252,22 @@ impl Builder<'_> {
             Vec::new()
         };
         let code = code.is_some();
+        let task_markers = marks
+            .iter()
+            .filter(|(_, style)| style.contains(Style::TASK_MARKER))
+            .filter_map(|(mark, _)| {
+                let start =
+                    self.projection
+                        .to_source(range.start + mark.start, Affinity::After, None);
+                let end = self
+                    .projection
+                    .to_source(range.start + mark.end, Affinity::Before, None);
+                self.projection
+                    .source
+                    .get(start..end)
+                    .map(|raw| (mark.start, raw.to_owned()))
+            })
+            .collect();
         let line_height = if bold {
             1.3
         } else if code {
@@ -1249,6 +1280,7 @@ impl Builder<'_> {
         let key = ParagraphKey {
             text: self.projection.text[range.clone()].to_owned(),
             marks,
+            task_markers,
             width: width.to_bits(),
             size: size.to_bits(),
             line_height: line_height.to_bits(),
@@ -1267,9 +1299,22 @@ impl Builder<'_> {
             .unwrap_or_else(|| {
                 let mut spans = Vec::<text::Span<'_>>::new();
                 let mut marker_spans = Vec::new();
+                let mut task_spans = Vec::new();
                 let mut inline_spans = Vec::new();
                 let mut strike_spans = HashMap::new();
                 let mut start = 0;
+                let font = Font {
+                    weight: if bold {
+                        iced::font::Weight::Bold
+                    } else {
+                        iced::font::Weight::Normal
+                    },
+                    ..if code {
+                        Font::MONOSPACE
+                    } else {
+                        self.font.font()
+                    }
+                };
                 for run in &key.syntax {
                     let [r, g, b, a] = run.color;
                     spans.push(
@@ -1294,18 +1339,34 @@ impl Builder<'_> {
                     if style.contains(Style::STRIKETHROUGH) && !style.contains(Style::SYNTAX) {
                         strike_spans.insert(spans.len(), format.color.unwrap_or(self.tokens.text));
                     }
-                    let span = text::Span::new(&key.text[mark.clone()]);
+                    let raw = &key.text[mark.clone()];
+                    let span = text::Span::new(raw);
+                    let syntax = style.contains(Style::SYNTAX);
+                    let inline_delimiter = syntax
+                        && !code
+                        && (raw
+                            .bytes()
+                            .all(|byte| matches!(byte, b'*' | b'_' | b'~' | b'`'))
+                            || style.contains(Style::LINK)
+                                && (matches!(raw, "[" | "<" | ">") || raw.starts_with(']')));
                     let center_marker = bold
-                        && style.contains(Style::SYNTAX)
-                        && key.text[mark.clone()].bytes().all(|byte| {
-                            matches!(
-                                byte,
-                                b' ' | b'\t' | b'#' | b'*' | b'_' | b'~' | b'`' | b'=' | b'-'
-                            )
-                        });
-                    // A strike changes drawing only. Preserve the paragraph's
-                    // default shaping attributes for otherwise unstyled text.
-                    spans.push(if center_marker {
+                        && syntax
+                        && raw
+                            .bytes()
+                            .all(|byte| matches!(byte, b' ' | b'\t' | b'#' | b'=' | b'-'));
+                    let task = key.task_markers.iter().find(|(at, _)| *at == mark.start);
+                    spans.push(if let Some((_, original)) = task {
+                        let marker = marker_paragraph(raw, size, font, self.line_height);
+                        let advance =
+                            marker_paragraph(original, size, font, self.line_height).min_width();
+                        // Keep the checkbox atomic and use the advance of the
+                        // source brackets. Paint the box itself at normal size.
+                        let measure_size = size * advance / marker.min_width().max(1.0);
+                        task_spans.push((spans.len(), marker));
+                        span.color(iced::Color::TRANSPARENT)
+                            .size(measure_size)
+                            .line_height(paragraph_line_height)
+                    } else if center_marker {
                         // Shape the actual punctuation so selection, wrapping, and
                         // hit testing still use its glyph advances.
                         marker_spans.push(spans.len());
@@ -1313,18 +1374,16 @@ impl Builder<'_> {
                             .color(iced::Color::TRANSPARENT)
                             .size(self.size * 0.8)
                             .line_height(paragraph_line_height)
+                    } else if inline_delimiter {
+                        // Keep the same font and size as the unformatted punctuation.
+                        span.color(self.tokens.muted)
                     } else if style.0 == Style::STRIKETHROUGH {
+                        // The strike changes drawing only.
                         span
                     } else {
                         span.font_maybe(format.font)
                             .color_maybe(format.color)
-                            .size(if style.contains(Style::SYNTAX) {
-                                self.size * 0.8
-                            } else if style.contains(Style::CODE) {
-                                styles::code_size(size)
-                            } else {
-                                size
-                            })
+                            .size(if syntax { self.size * 0.8 } else { size })
                             .line_height(paragraph_line_height)
                     });
                     start = mark.end;
@@ -1337,18 +1396,7 @@ impl Builder<'_> {
                     bounds: Size::new(width.max(1.0), f32::INFINITY),
                     size: size.into(),
                     line_height: paragraph_line_height,
-                    font: Font {
-                        weight: if bold {
-                            iced::font::Weight::Bold
-                        } else {
-                            iced::font::Weight::Normal
-                        },
-                        ..if code {
-                            Font::MONOSPACE
-                        } else {
-                            self.font.font()
-                        }
-                    },
+                    font,
                     align_x: match alignment {
                         1 => text::Alignment::Center,
                         2 => text::Alignment::Right,
@@ -1388,17 +1436,12 @@ impl Builder<'_> {
                             if marker.trim().is_empty() {
                                 continue;
                             }
-                            let shaped = Paragraph::with_text(text::Text {
-                                content: marker,
-                                bounds: Size::INFINITE,
-                                size: first.font_size.into(),
-                                line_height: text::LineHeight::Relative(self.line_height),
-                                font: Font::MONOSPACE,
-                                align_x: text::Alignment::Default,
-                                align_y: iced::alignment::Vertical::Top,
-                                shaping: text::Shaping::Advanced,
-                                wrapping: text::Wrapping::None,
-                            });
+                            let shaped = marker_paragraph(
+                                marker,
+                                first.font_size,
+                                Font::MONOSPACE,
+                                self.line_height,
+                            );
                             let x = glyphs
                                 .iter()
                                 .map(|glyph| glyph.x)
@@ -1409,6 +1452,15 @@ impl Builder<'_> {
                     }
                     let mut stops = Vec::new();
                     for glyph in run.glyphs {
+                        if !task_spans.is_empty()
+                            && let Ok(index) =
+                                task_spans.binary_search_by_key(&glyph.metadata, |(span, _)| *span)
+                        {
+                            let marker = &task_spans[index].1;
+                            let x = glyph.x + (glyph.w - marker.min_width()) * 0.5;
+                            let y = run.line_top + (run.line_height - marker.min_height()) * 0.5;
+                            centered_markers.push((marker.clone(), Point::new(x, y)));
+                        }
                         if let Some(&color) = strike_spans.get(&glyph.metadata)
                             && glyph.w > 0.0
                         {
@@ -1944,6 +1996,82 @@ mod tests {
     }
 
     #[test]
+    fn list_and_quote_prefixes_keep_their_caret_geometry_as_content_arrives() {
+        for prefix in ["-", "+", "*", "1.", "42)", ">", "> >"] {
+            let mut marker = None;
+            for suffix in ["", " ", " T", " "] {
+                let source = format!("{prefix}{suffix}");
+                let (_, layout) = layout(&source, 610.0);
+                let edge = layout.painted_caret(prefix.len(), None);
+                assert_eq!(*marker.get_or_insert(edge), edge, "{source:?}");
+                let caret = layout.painted_caret(source.len(), None);
+                assert_eq!((edge.y, edge.height), (caret.y, caret.height), "{source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn task_checkbox_preserves_the_advance_of_the_brackets() {
+        for prefix in ["- [ ]", "- [x]", "- [X]", "> 1. [x]"] {
+            let (_, before) = layout(prefix, 610.0);
+            let edge = before.painted_caret(prefix.len(), None);
+            for suffix in [" ", " T", " "] {
+                let source = format!("{prefix}{suffix}");
+                let (projection, after) = layout(&source, 610.0);
+                assert!(projection.text.contains(['☐', '☑']), "{source:?}");
+                let settled = after.painted_caret(prefix.len(), None);
+                assert!(
+                    (settled.x - edge.x).abs() < 0.5,
+                    "{source:?}: {edge:?} vs {settled:?}"
+                );
+                assert_eq!((settled.y, settled.height), (edge.y, edge.height));
+                let caret = after.painted_caret(source.len(), None);
+                assert!(caret.x > edge.x, "{source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn closing_inline_delimiters_preserves_their_typing_geometry() {
+        let theme = Preset::Paper.resolve();
+        for (opening, closing) in [
+            ("*", "*"),
+            ("**", "**"),
+            ("~~", "~~"),
+            ("`", "`"),
+            ("[", "](page)"),
+        ] {
+            for prefix in ["Before ", "> Before ", "# Before "] {
+                let unfinished = format!("{prefix}{opening}text");
+                let complete = format!("{unfinished}{closing}");
+                let measure = |source: &str| {
+                    let projection = Projection::with_context(source, Some(source.len()));
+                    let mut layout = RichLayout::default();
+                    layout.rebuild(
+                        &projection,
+                        &theme,
+                        1.0,
+                        610.0,
+                        None,
+                        &ImageStore::default(),
+                    );
+                    layout
+                };
+                let before = measure(&unfinished);
+                let after = measure(&complete);
+                let edge = prefix.len() + opening.len();
+                let a = before.painted_caret(edge, None);
+                let b = after.painted_caret(edge, None);
+                assert!((a.x - b.x).abs() < 0.5, "{complete:?}: {a:?} vs {b:?}");
+                let a = before.painted_caret(unfinished.len(), None);
+                let b = after.painted_caret(complete.len(), None);
+                assert_eq!((a.y, a.height), (b.y, b.height), "{complete:?}");
+                assert!(b.x > a.x, "{complete:?}: {a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
     fn typed_cell_edge_spaces_advance_the_measured_caret_and_remain_selectable() {
         for (value, leading) in [("", false), ("word", false), ("word", true)] {
             let source = format!("| A | B |\n|---|---|\n| {value} | right |\n");
@@ -2069,10 +2197,7 @@ mod tests {
                 );
                 let first = first_position.get_or_insert(*position);
                 assert_eq!(position, first, "{source}");
-                assert_eq!(
-                    centered_markers.len(),
-                    if suffix.contains('*') { 3 } else { 1 }
-                );
+                assert_eq!(centered_markers.len(), 1);
             }
         }
     }

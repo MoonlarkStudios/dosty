@@ -95,7 +95,7 @@ impl Projection {
         disclosure: &Disclosure,
     ) -> Runs {
         let mut events = Vec::new();
-        let mut add = |range: &Range<usize>, style: u8| {
+        let mut add = |range: &Range<usize>, style: u16| {
             if range.start >= raw.end || range.end <= raw.start {
                 return;
             }
@@ -116,7 +116,7 @@ impl Projection {
             add(range, Style::SYNTAX);
         }
         events.sort_by_key(|event| event.0);
-        let mut counters = [0_i32; u8::BITS as usize];
+        let mut counters = [0_i32; Style::BIT_COUNT];
         let mut last = 0;
         let mut runs = Vec::new();
         for (position, kind, delta) in events {

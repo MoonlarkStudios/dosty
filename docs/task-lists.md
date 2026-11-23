@@ -4,6 +4,8 @@ Live view displays Markdown task markers as checkboxes. Click a checkbox to togg
 `[ ]` to `[x]`, or `[x]` / `[X]` to `[ ]`. The rest of the Markdown source stays
 unchanged, including marker case until a checked task is explicitly toggled off.
 Nested and quoted task items follow the parser's existing Markdown rules.
+Write mode centers each checkbox within the width of its Markdown marker, so
+recognizing a task marker keeps the typing position aligned with the brackets.
 
 Cmd/Ctrl+Enter toggles the task on the caret's physical source line in Live or
 Source view. A continuation line without its own task marker, an ordinary prose
