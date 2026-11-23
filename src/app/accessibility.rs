@@ -291,7 +291,7 @@ impl Operation<EditorLayout> for Probe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use accesskit::{Action, ActionData, NodeId, Role, TextPosition, TextSelection};
+    use accesskit::{Action, ActionData, NodeId, Role, TextPosition, TextSelection, TreeId};
     use unicode_segmentation::UnicodeSegmentation;
 
     fn app(source: &str) -> App {
@@ -319,7 +319,8 @@ mod tests {
         let target = editor(app);
         let run = NodeId(target.0 + 1);
         ActionRequest {
-            target,
+            target_tree: TreeId::ROOT,
+            target_node: target,
             action: Action::SetTextSelection,
             data: Some(ActionData::SetTextSelection(TextSelection {
                 anchor: TextPosition {
@@ -378,7 +379,8 @@ mod tests {
             let mut app = app(source);
             let stale_select = select(&app, 7, 7);
             let stale_replace = ActionRequest {
-                target: editor(&app),
+                target_tree: TreeId::ROOT,
+                target_node: editor(&app),
                 action: accesskit::Action::SetValue,
                 data: Some(ActionData::Value("replacement".into())),
             };
@@ -508,7 +510,8 @@ mod tests {
         assert_eq!(app.session.document.source(), source);
 
         let request = ActionRequest {
-            target: editor(&app),
+            target_tree: TreeId::ROOT,
+            target_node: editor(&app),
             action: Action::SetValue,
             data: Some(ActionData::Value("Replacement 日本語\n".into())),
         };
@@ -562,7 +565,8 @@ mod tests {
         let revision = app.session.document.revision();
         let generation = app.session.document.collaboration().generation();
         let request = ActionRequest {
-            target: editor(&app),
+            target_tree: TreeId::ROOT,
+            target_node: editor(&app),
             action: accesskit::Action::SetValue,
             data: Some(ActionData::Value(source.into())),
         };
@@ -586,7 +590,8 @@ mod tests {
         let _task = app.update(Message::Accessibility(request));
         let _task = app.update(Message::Edit(Action::Edit(Edit::Insert('a'))));
         let request = ActionRequest {
-            target: editor(&app),
+            target_tree: TreeId::ROOT,
+            target_node: editor(&app),
             action: accesskit::Action::SetValue,
             data: Some(ActionData::Value(app.session.document.source().into())),
         };

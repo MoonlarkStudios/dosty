@@ -131,9 +131,9 @@ One tree is shared by the prototype's single document window. No unsafe code
 is added. Two imported deprecated queue reads use equivalent `try_recv`
 handling; no lint allowances are added.
 
-The patch pins macOS-only `accesskit 0.21.1` and `accesskit_winit 0.29.2`, with
+The patch pins macOS-only `accesskit 0.25.2` and `accesskit_winit 0.34.2`, with
 the latter's default features disabled and `rwh_06` enabled. Their macOS adapter
-is `accesskit_macos 0.22.2`. The lockfile also records AccessKit's declared
+is `accesskit_macos 0.27.2`. The lockfile also records AccessKit's declared
 Windows dependencies; this does not enable Windows accessibility or add Unix
 adapter runtime dependencies. See the [prototype](../docs/accessibility.md) for
 the missing upstream hooks, semantics and native validation limits.
