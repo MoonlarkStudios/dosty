@@ -3177,6 +3177,7 @@ impl App {
                     .and_then(std::path::Path::parent),
             )
             .zoom(self.zoom)
+            .window_scale(self.chrome.window_scale)
             .selection(self.session.selection)
             .focused(self.editor_focused)
             .section_folds(&self.section_folds.targets, &self.section_folds.hidden)
@@ -3792,8 +3793,14 @@ fn editor_binding(press: text_editor::KeyPress) -> Option<text_editor::Binding<M
 
 fn event_message(event: Event, status: iced::event::Status, id: window::Id) -> Option<Message> {
     match event {
-        Event::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
+        Event::Window(window::Event::Opened { size, .. }) => Some(Message::Chrome(
+            chrome::Message::WindowOpened(id, size.width),
+        )),
+        Event::Window(window::Event::Resized(size)) => {
             Some(Message::Chrome(chrome::Message::WindowWidth(size.width)))
+        }
+        Event::Window(window::Event::Rescaled(scale)) => {
+            Some(Message::Chrome(chrome::Message::WindowScale(scale)))
         }
         Event::Window(window::Event::CloseRequested) => Some(Message::CloseRequested(id)),
         Event::Window(window::Event::FileDropped(path)) => Some(Message::Dropped(path)),

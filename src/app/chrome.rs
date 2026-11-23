@@ -134,7 +134,9 @@ pub enum Message {
     Run(Box<AppMessage>),
     DragWindow,
     MaximizeWindow,
+    WindowOpened(window::Id, f32),
     WindowWidth(f32),
+    WindowScale(f32),
     Preference(Preference, bool),
     Statistics,
     Step(i32),
@@ -150,6 +152,7 @@ pub(super) struct State {
     pub outline: Panel,
     pub sidebars_hidden: bool,
     pub(super) window_width: f32,
+    pub(super) window_scale: f32,
     last_sidebar: Sidebar,
     pub saving: bool,
     pub save_error: Option<String>,
@@ -178,6 +181,7 @@ impl Default for State {
             outline: Panel { open: false },
             sidebars_hidden: false,
             window_width: INITIAL_WINDOW_WIDTH,
+            window_scale: 1.0,
             last_sidebar: Sidebar::Files,
             saving: false,
             save_error: None,
@@ -411,6 +415,14 @@ impl App {
         match message {
             Message::DragWindow => return window::latest().and_then(window::drag),
             Message::MaximizeWindow => return window::latest().and_then(window::toggle_maximize),
+            Message::WindowOpened(id, width) => {
+                return Task::batch([
+                    self.update_chrome(Message::WindowWidth(width)),
+                    window::scale_factor(id)
+                        .map(|scale| AppMessage::Chrome(Message::WindowScale(scale))),
+                ]);
+            }
+            Message::WindowScale(scale) => self.chrome.window_scale = scale,
             Message::WindowWidth(width) => {
                 let (was_files, was_outline) = self.docked_sidebars(self.chrome.window_width);
                 self.chrome.window_width = width;

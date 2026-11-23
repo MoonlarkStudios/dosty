@@ -51,6 +51,30 @@ fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) 
 }
 
 fn render_scaled(app: &App, size: Size, name: &str, cursor: mouse::Cursor, scale: f32) {
+    let pixels = render_pixels(app, size, cursor, scale, false);
+    let (width, height) = (pixels.width(), pixels.height());
+    // Iced's software engine targets the native BGRA window surface.
+    let mut rgba = pixels.take();
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    image::save_buffer(
+        format!("target/theme-validation/{name}.png"),
+        &rgba,
+        width,
+        height,
+        image::ColorType::Rgba8,
+    )
+    .unwrap();
+}
+
+fn render_pixels(
+    app: &App,
+    size: Size,
+    cursor: mouse::Cursor,
+    scale: f32,
+    show_caret: bool,
+) -> tiny_skia::Pixmap {
     let mut renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
         styles::BODY_FONT,
         18.0.into(),
@@ -62,13 +86,18 @@ fn render_scaled(app: &App, size: Size, name: &str, cursor: mouse::Cursor, scale
         root.as_widget_mut()
             .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
     let clip = Rectangle::with_size(size);
-    if app.grid.draft.is_some() {
-        let mut focus =
-            widget::operation::focusable::focus::<()>(widget::Id::from(table_grid::CELL_EDITOR));
+    let focus = if app.grid.draft.is_some() {
+        Some(table_grid::CELL_EDITOR)
+    } else {
+        show_caret.then_some(EDITOR)
+    };
+    if let Some(id) = focus {
+        let mut focus = widget::operation::focusable::focus::<()>(widget::Id::from(id));
         root.as_widget_mut()
             .operate(&mut tree, Layout::new(&node), &renderer, &mut focus);
     }
     let mut messages = Vec::new();
+    let mut shell = iced::advanced::Shell::new(&mut messages);
     root.as_widget_mut().update(
         &mut tree,
         &Event::Window(iced::window::Event::RedrawRequested(
@@ -78,7 +107,7 @@ fn render_scaled(app: &App, size: Size, name: &str, cursor: mouse::Cursor, scale
         cursor,
         &renderer,
         &mut iced::advanced::clipboard::Null,
-        &mut iced::advanced::Shell::new(&mut messages),
+        &mut shell,
         &clip,
     );
     renderer.reset(clip);
@@ -100,6 +129,19 @@ fn render_scaled(app: &App, size: Size, name: &str, cursor: mouse::Cursor, scale
     let mut pixels = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
     let mut mask = tiny_skia::Mask::new(size.width, size.height).unwrap();
     if let Renderer::Secondary(renderer) = &mut renderer {
+        if show_caret {
+            let iced::advanced::input_method::InputMethod::Enabled { cursor, .. } =
+                shell.input_method()
+            else {
+                panic!("the focused Write editor positions the input method");
+            };
+            assert!(renderer.layers().iter().any(|layer| {
+                layer.quads.iter().any(|(quad, fill)| {
+                    quad.bounds == *cursor
+                        && *fill == iced::Background::Color(app.resolved_theme.tokens.accent)
+                })
+            }));
+        }
         renderer.draw(
             &mut pixels.as_mut(),
             &mut mask,
@@ -108,19 +150,122 @@ fn render_scaled(app: &App, size: Size, name: &str, cursor: mouse::Cursor, scale
             app.resolved_theme.tokens.canvas,
         );
     }
-    // Iced's software engine targets the native BGRA window surface.
-    let mut rgba = pixels.take();
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+    pixels
+}
+
+#[test]
+fn write_caret_keeps_the_same_pixels_when_filling_and_clearing_a_line() {
+    use iced::widget::text_editor::Edit;
+
+    fn caret(app: &App, scale: f32) -> tiny_skia::IntRect {
+        let pixels = render_pixels(
+            app,
+            Size::new(760.0, 520.0),
+            mouse::Cursor::Unavailable,
+            scale,
+            true,
+        );
+        let (mut left, mut top, mut right, mut bottom) = (pixels.width(), pixels.height(), 0, 0);
+        let width = pixels.width() as usize;
+        for (y, row) in pixels.data().chunks_exact(width * 4).enumerate() {
+            // Stay inside the writing area, away from the titlebar and statistics.
+            if y < (70.0 * scale) as usize || y >= (225.0 * scale) as usize {
+                continue;
+            }
+            for (x, pixel) in row.chunks_exact(4).enumerate() {
+                if pixel == [255, 0, 255, 255] {
+                    left = left.min(x as u32);
+                    top = top.min(y as u32);
+                    right = right.max(x as u32 + 1);
+                    bottom = bottom.max(y as u32 + 1);
+                }
+            }
+        }
+        tiny_skia::IntRect::from_ltrb(left as i32, top as i32, right as i32, bottom as i32)
+            .expect("the focused editor paints an opaque caret")
     }
-    image::save_buffer(
-        format!("target/theme-validation/{name}.png"),
-        &rgba,
-        size.width,
-        size.height,
-        image::ColorType::Rgba8,
-    )
-    .unwrap();
+
+    for scale in [1.0, 1.25, 2.0] {
+        for source in ["", "test", "test\n\nAfter"] {
+            let (mut app, _) = App::new();
+            app.resolved_theme = Preset::Paper.resolve();
+            app.resolved_theme.typography.font = WritingFont::SourceSans3;
+            app.resolved_theme.tokens.accent = iced::Color::from_rgb(1.0, 0.0, 1.0);
+            let rescaled = event_message(
+                Event::Window(window::Event::Rescaled(scale)),
+                iced::event::Status::Ignored,
+                window::Id::unique(),
+            )
+            .expect("window scaling reaches the editor");
+            drop(app.update_message(rescaled));
+            app.set_document(source.into(), None, "Untitled.md".into());
+            let head = if source.contains('\n') {
+                5
+            } else {
+                source.len()
+            };
+            drop(app.update_message(Message::SelectSource(Selection::caret(head))));
+            if source == "test" {
+                drop(app.update_message(Message::Edit(text_editor::Action::Edit(Edit::Enter))));
+            }
+            let blank = app.session.document.source().to_owned();
+            let head = app.session.selection.head;
+            let before = caret(&app, scale);
+            assert_eq!(
+                before.height(),
+                (app.resolved_theme.typography.body_size * scale).round() as u32
+            );
+            drop(app.update_message(Message::Edit(text_editor::Action::Edit(Edit::Insert('T')))));
+            assert_eq!(app.session.selection, Selection::caret(head + 1));
+            let typed = caret(&app, scale);
+            drop(app.update_message(Message::Edit(text_editor::Action::Edit(Edit::Backspace))));
+            assert_eq!(app.session.document.source(), blank);
+            assert_eq!(before, caret(&app, scale));
+            assert!(typed.left() > before.left());
+            assert_eq!(
+                (before.top(), before.height(), before.width()),
+                (typed.top(), typed.height(), typed.width()),
+                "{blank:?} at {scale}×"
+            );
+        }
+    }
+}
+
+#[test]
+fn write_placeholder_uses_the_same_position_as_typed_text() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+
+    for font in WritingFont::ALL {
+        let (mut app, _) = App::new();
+        app.resolved_theme = Preset::Paper.resolve();
+        app.resolved_theme.typography.font = font;
+        app.resolved_theme.tokens.faint = app.resolved_theme.tokens.text;
+        app.zoom = 1.15;
+        let mut render_text = |source: &str| {
+            app.set_document(source.into(), None, "Untitled.md".into());
+            render_pixels(
+                &app,
+                Size::new(760.0, 520.0),
+                mouse::Cursor::Unavailable,
+                2.0,
+                false,
+            )
+        };
+        let placeholder = render_text("");
+        let typed = render_text("Begin anywhere…");
+        let stride = placeholder.width() as usize * 4;
+        let writing_band = 172 * stride..250 * stride;
+        assert!(
+            placeholder.data()[writing_band.clone()] == typed.data()[writing_band],
+            "placeholder and typed glyphs differ for {font}"
+        );
+    }
 }
 
 #[test]

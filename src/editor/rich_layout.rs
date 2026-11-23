@@ -21,6 +21,9 @@ use crate::io::image_store::{Asset, ImageStore};
 use crate::theme::styles;
 use crate::theme::{ResolvedTheme, Tokens, Typography, WritingFont};
 
+pub(super) const CARET_WIDTH: f32 = 1.0;
+const FALLBACK_CARET: Rectangle = Rectangle::new(Point::ORIGIN, Size::new(CARET_WIDTH, 24.0));
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParagraphKey {
     text: String,
@@ -234,6 +237,7 @@ pub enum Decoration {
 
 pub struct VisualRow {
     pub bounds: Rectangle,
+    caret_height: f32,
     display_range: Range<usize>,
     display_stops: Arc<[(usize, f32)]>,
     display_start: usize,
@@ -261,8 +265,15 @@ impl VisualRow {
             .map_or(self.bounds.x, |(_, x)| self.origin_x + x);
         Rectangle::new(
             Point::new(x, self.bounds.y),
-            Size::new(1.5, self.bounds.height),
+            Size::new(CARET_WIDTH, self.bounds.height),
         )
+    }
+
+    fn painted_caret(&self, offset: usize) -> Rectangle {
+        let mut caret = self.display_caret(offset);
+        caret.height = self.caret_height.min(self.bounds.height);
+        caret.y += (self.bounds.height - caret.height) * 0.5;
+        caret
     }
 }
 
@@ -318,13 +329,7 @@ impl RichLayout {
                 let top = builder.y;
                 match unit.kind {
                     UnitKind::Line(heading) => {
-                        let size = styles::line_size(
-                            builder.size,
-                            heading,
-                            projection.text[unit.range.clone()]
-                                .trim_matches('\r')
-                                .is_empty(),
-                        );
+                        let size = styles::line_size(builder.size, heading);
                         builder.line(unit.range.clone(), size, heading.is_some());
                     }
                     UnitKind::TableRow { table, row } => {
@@ -421,11 +426,7 @@ impl RichLayout {
                 )
                 .filter(|heading| heading.range.start <= start && start < heading.range.end)
                 .map(|heading| heading.level);
-            let size = styles::line_size(
-                builder.size,
-                heading,
-                projection.text[start..end].trim_matches('\r').is_empty(),
-            );
+            let size = styles::line_size(builder.size, heading);
             builder.line(start..end, size, heading.is_some());
             if end == projection.text.len() {
                 break;
@@ -666,16 +667,24 @@ impl RichLayout {
         &self.rows[first..first + count]
     }
 
-    pub fn source_caret(&self, source: usize, y: Option<f32>) -> Rectangle {
+    fn source_caret_row(
+        &self,
+        source: usize,
+        y: Option<f32>,
+        upstream: Option<bool>,
+    ) -> Option<(&VisualRow, usize)> {
         let offset = self
             .mapping
             .as_ref()
             .map_or(source, |map| map.to_display(source));
         let rows = self.rows_at(offset);
-        let row = y
-            .and_then(|y| {
-                rows.iter()
-                    .min_by(|a, b| (a.bounds.y - y).abs().total_cmp(&(b.bounds.y - y).abs()))
+        let row = upstream
+            .and_then(|upstream| if upstream { rows.first() } else { rows.last() })
+            .or_else(|| {
+                y.and_then(|y| {
+                    rows.iter()
+                        .min_by(|a, b| (a.bounds.y - y).abs().total_cmp(&(b.bounds.y - y).abs()))
+                })
             })
             .or_else(|| {
                 rows.iter()
@@ -689,9 +698,17 @@ impl RichLayout {
                         .saturating_sub(1),
                 )
             });
-        row.map_or(Rectangle::new(Point::ORIGIN, Size::new(1.5, 24.0)), |row| {
-            row.display_caret(offset)
-        })
+        row.map(|row| (row, offset))
+    }
+
+    pub fn source_caret(&self, source: usize, y: Option<f32>) -> Rectangle {
+        self.source_caret_row(source, y, None)
+            .map_or(FALLBACK_CARET, |(row, offset)| row.display_caret(offset))
+    }
+
+    pub(super) fn painted_caret(&self, source: usize, upstream: Option<bool>) -> Rectangle {
+        self.source_caret_row(source, None, upstream)
+            .map_or(FALLBACK_CARET, |(row, offset)| row.painted_caret(offset))
     }
 
     pub fn visible_fragments(&self, y: Range<f32>) -> impl Iterator<Item = &Fragment> {
@@ -709,20 +726,8 @@ impl RichLayout {
 
     /// Resolves wrap affinity independently of the previous row's vertical position.
     pub fn source_caret_on_side(&self, source: usize, upstream: bool) -> Rectangle {
-        let offset = self
-            .mapping
-            .as_ref()
-            .map_or(source, |map| map.to_display(source));
-        let mut rows = self.rows_at(offset).iter();
-        let row = if upstream {
-            rows.next()
-        } else {
-            rows.next_back()
-        };
-        row.map_or_else(
-            || self.source_caret(source, None),
-            |row| row.display_caret(offset),
-        )
+        self.source_caret_row(source, None, Some(upstream))
+            .map_or(FALLBACK_CARET, |(row, offset)| row.display_caret(offset))
     }
 
     pub fn upstream_affinity(&self, source: usize, y: f32) -> bool {
@@ -1140,6 +1145,7 @@ impl Builder<'_> {
             self.layout.rows.push(VisualRow {
                 display_range: image.range.clone(),
                 bounds: Rectangle::new(Point::new(position.x, bounds.y), Size::new(width, height)),
+                caret_height: size,
                 display_stops: Arc::from([
                     (0, bounds.x),
                     (image.range.len(), bounds.x + bounds.width),
@@ -1204,18 +1210,6 @@ impl Builder<'_> {
                 Some((start - range.start..end - range.start, *style))
             })
             .collect::<Vec<_>>();
-        let size = if !bold
-            && !range.is_empty()
-            && marks.first().is_some_and(|(mark, _)| mark.start == 0)
-            && marks
-                .last()
-                .is_some_and(|(mark, _)| mark.end == range.len())
-            && marks.iter().all(|(_, style)| style.contains(Style::SYNTAX))
-        {
-            self.size * 0.8
-        } else {
-            size
-        };
         let code = self.projection.rich.code_line(&range);
         let syntax = if let Some((index, block)) = code
             && block.body.start <= range.start
@@ -1250,6 +1244,8 @@ impl Builder<'_> {
         } else {
             self.line_height
         };
+        let row_height = size * line_height;
+        let paragraph_line_height = text::LineHeight::Absolute(row_height.into());
         let key = ParagraphKey {
             text: self.projection.text[range.clone()].to_owned(),
             marks,
@@ -1316,19 +1312,20 @@ impl Builder<'_> {
                         span.font(Font::MONOSPACE)
                             .color(iced::Color::TRANSPARENT)
                             .size(self.size * 0.8)
-                            .line_height(text::LineHeight::Absolute((size * line_height).into()))
+                            .line_height(paragraph_line_height)
                     } else if style.0 == Style::STRIKETHROUGH {
                         span
                     } else {
-                        span.font_maybe(format.font).color_maybe(format.color).size(
-                            if style.contains(Style::SYNTAX) {
+                        span.font_maybe(format.font)
+                            .color_maybe(format.color)
+                            .size(if style.contains(Style::SYNTAX) {
                                 self.size * 0.8
                             } else if style.contains(Style::CODE) {
                                 styles::code_size(size)
                             } else {
                                 size
-                            },
-                        )
+                            })
+                            .line_height(paragraph_line_height)
                     });
                     start = mark.end;
                 }
@@ -1339,7 +1336,7 @@ impl Builder<'_> {
                     content: spans.as_slice(),
                     bounds: Size::new(width.max(1.0), f32::INFINITY),
                     size: size.into(),
-                    line_height: text::LineHeight::Relative(line_height),
+                    line_height: paragraph_line_height,
                     font: Font {
                         weight: if bold {
                             iced::font::Weight::Bold
@@ -1493,7 +1490,7 @@ impl Builder<'_> {
                 })
             });
         let paragraph = &cached.paragraph;
-        let height = paragraph.min_height().max(size * line_height);
+        let height = paragraph.min_height().max(row_height);
         let origin = Rectangle::new(position, Size::new(width, height)).anchor(
             paragraph.min_bounds(),
             paragraph.align_x(),
@@ -1513,6 +1510,7 @@ impl Builder<'_> {
         for row in &cached.rows {
             self.layout.rows.push(VisualRow {
                 display_range: range.start + row.range.start..range.start + row.range.end,
+                caret_height: size,
                 display_stops: Arc::clone(&row.stops),
                 display_start: range.start,
                 origin_x: origin.x,

@@ -97,12 +97,9 @@ pub fn heading_size(body_size: f32, level: u8) -> f32 {
         }
 }
 
-/// A blank Markdown line separates paragraphs without a full extra text row.
-/// Use the same metric for measured layout and virtual height estimates.
-pub fn line_size(body_size: f32, heading: Option<u8>, empty: bool) -> f32 {
-    heading.map_or(if empty { body_size * 0.65 } else { body_size }, |level| {
-        heading_size(body_size, level)
-    })
+/// Empty and occupied rows use the same typing size in Write mode.
+pub fn line_size(body_size: f32, heading: Option<u8>) -> f32 {
+    heading.map_or(body_size, |level| heading_size(body_size, level))
 }
 
 #[derive(Debug, Clone, Copy)]
