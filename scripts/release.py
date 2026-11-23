@@ -91,6 +91,7 @@ def copy_licenses(destination):
     for source, name in [
         (ROOT / "LICENSE", "LICENSE.txt"),
         (ROOT / "assets/fonts/OFL.txt", "Newsreader-OFL.txt"),
+        (ROOT / "assets/fonts/source-sans-3/OFL.txt", "Source-Sans-3-OFL.txt"),
         (ROOT / "branding/dosty/sources/DMSans-OFL.txt", "DM-Sans-OFL.txt"),
         (ROOT / "target/release-notices.html", "THIRD-PARTY-NOTICES.html"),
     ]:

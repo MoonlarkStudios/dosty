@@ -97,12 +97,9 @@ pub fn heading_size(body_size: f32, level: u8) -> f32 {
         }
 }
 
-/// A blank Markdown line separates paragraphs without a full extra text row.
-/// Use the same metric for measured layout and virtual height estimates.
-pub fn line_size(body_size: f32, heading: Option<u8>, empty: bool) -> f32 {
-    heading.map_or(if empty { body_size * 0.65 } else { body_size }, |level| {
-        heading_size(body_size, level)
-    })
+/// Empty and occupied rows use the same typing size in Write mode.
+pub fn line_size(body_size: f32, heading: Option<u8>) -> f32 {
+    heading.map_or(body_size, |level| heading_size(body_size, level))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -198,7 +195,7 @@ pub fn checkbox_style(tokens: Tokens) -> impl Fn(&Theme, checkbox::Status) -> ch
     }
 }
 
-pub fn typeface_picker(tokens: Tokens) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style {
+pub fn preference_picker(tokens: Tokens) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style {
     move |_, status| pick_list::Style {
         text_color: tokens.text,
         placeholder_color: tokens.muted,
@@ -216,7 +213,7 @@ pub fn typeface_picker(tokens: Tokens) -> impl Fn(&Theme, pick_list::Status) -> 
     }
 }
 
-pub fn typeface_menu(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::overlay::menu::Style {
+pub fn preference_menu(tokens: Tokens) -> impl Fn(&Theme) -> iced::widget::overlay::menu::Style {
     move |_| iced::widget::overlay::menu::Style {
         background: tokens.elevated.into(),
         text_color: tokens.text,

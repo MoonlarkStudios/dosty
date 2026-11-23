@@ -42,12 +42,8 @@ pub fn run() -> iced::Result {
     #[cfg(not(target_os = "macos"))]
     let boot = App::new;
 
-    let application = iced::application(boot, App::update, App::view)
+    let mut application = iced::application(boot, App::update, App::view)
         .default_font(crate::theme::styles::BODY_FONT)
-        .font(include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice())
-        .font(include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice())
-        .font(include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice())
-        .font(include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice())
         .title(App::title)
         .theme(App::theme)
         .style(App::appearance)
@@ -65,6 +61,9 @@ pub fn run() -> iced::Result {
             },
             ..window::Settings::default()
         });
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
+        application = application.font(font);
+    }
     #[cfg(target_os = "macos")]
     if let Some(accessibility) = accessibility {
         return iced_winit::run_with_accessibility(application, accessibility).map_err(Into::into);

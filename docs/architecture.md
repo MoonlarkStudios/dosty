@@ -38,6 +38,11 @@ and input-method positioning over that buffer. `RichLayout` supplies the same
 measured geometry to drawing, caret placement, and navigation. Drawing does not
 parse Markdown. The optional Read renderer is separate and initialized lazily.
 
+Blank and filled Write rows use the same paragraph line height. The placeholder
+shares the first row's origin and typography. The insertion bar uses the row's
+typing size, centered within the row. Drawing and input-method placement use the
+same rectangle, rounded to physical pixels at the current window scale.
+
 Source/display mappings use UTF-8 byte offsets. Hidden syntax occupies no space;
 images are atomic objects, and tables retain structural mappings. Both selection
 endpoints and their direction survive mode switches and edits across rich blocks.

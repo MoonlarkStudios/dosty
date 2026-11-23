@@ -47,6 +47,34 @@ fn render(app: &App, size: Size, name: &str) {
 }
 
 fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) {
+    render_scaled(app, size, name, cursor, 1.0);
+}
+
+fn render_scaled(app: &App, size: Size, name: &str, cursor: mouse::Cursor, scale: f32) {
+    let pixels = render_pixels(app, size, cursor, scale, false);
+    let (width, height) = (pixels.width(), pixels.height());
+    // Iced's software engine targets the native BGRA window surface.
+    let mut rgba = pixels.take();
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    image::save_buffer(
+        format!("target/theme-validation/{name}.png"),
+        &rgba,
+        width,
+        height,
+        image::ColorType::Rgba8,
+    )
+    .unwrap();
+}
+
+fn render_pixels(
+    app: &App,
+    size: Size,
+    cursor: mouse::Cursor,
+    scale: f32,
+    show_caret: bool,
+) -> tiny_skia::Pixmap {
     let mut renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(
         styles::BODY_FONT,
         18.0.into(),
@@ -58,13 +86,18 @@ fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) 
         root.as_widget_mut()
             .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
     let clip = Rectangle::with_size(size);
-    if app.grid.draft.is_some() {
-        let mut focus =
-            widget::operation::focusable::focus::<()>(widget::Id::from(table_grid::CELL_EDITOR));
+    let focus = if app.grid.draft.is_some() {
+        Some(table_grid::CELL_EDITOR)
+    } else {
+        show_caret.then_some(EDITOR)
+    };
+    if let Some(id) = focus {
+        let mut focus = widget::operation::focusable::focus::<()>(widget::Id::from(id));
         root.as_widget_mut()
             .operate(&mut tree, Layout::new(&node), &renderer, &mut focus);
     }
     let mut messages = Vec::new();
+    let mut shell = iced::advanced::Shell::new(&mut messages);
     root.as_widget_mut().update(
         &mut tree,
         &Event::Window(iced::window::Event::RedrawRequested(
@@ -74,7 +107,7 @@ fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) 
         cursor,
         &renderer,
         &mut iced::advanced::clipboard::Null,
-        &mut iced::advanced::Shell::new(&mut messages),
+        &mut shell,
         &clip,
     );
     renderer.reset(clip);
@@ -89,31 +122,150 @@ fn render_with_cursor(app: &App, size: Size, name: &str, cursor: mouse::Cursor) 
         cursor,
         &clip,
     );
-    let size = Size::new(size.width as u32, size.height as u32);
+    let size = Size::new(
+        (size.width * scale).round() as u32,
+        (size.height * scale).round() as u32,
+    );
     let mut pixels = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
     let mut mask = tiny_skia::Mask::new(size.width, size.height).unwrap();
     if let Renderer::Secondary(renderer) = &mut renderer {
+        if show_caret {
+            let iced::advanced::input_method::InputMethod::Enabled { cursor, .. } =
+                shell.input_method()
+            else {
+                panic!("the focused Write editor positions the input method");
+            };
+            assert!(renderer.layers().iter().any(|layer| {
+                layer.quads.iter().any(|(quad, fill)| {
+                    quad.bounds == *cursor
+                        && *fill == iced::Background::Color(app.resolved_theme.tokens.accent)
+                })
+            }));
+        }
         renderer.draw(
             &mut pixels.as_mut(),
             &mut mask,
-            &iced_tiny_skia::graphics::Viewport::with_physical_size(size, 1.0),
+            &iced_tiny_skia::graphics::Viewport::with_physical_size(size, scale),
             &[clip],
             app.resolved_theme.tokens.canvas,
         );
     }
-    // Iced's software engine targets the native BGRA window surface.
-    let mut rgba = pixels.take();
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+    pixels
+}
+
+#[test]
+fn write_caret_keeps_the_same_pixels_when_filling_and_clearing_a_line() {
+    use iced::widget::text_editor::Edit;
+
+    fn caret(app: &App, scale: f32) -> tiny_skia::IntRect {
+        let pixels = render_pixels(
+            app,
+            Size::new(760.0, 520.0),
+            mouse::Cursor::Unavailable,
+            scale,
+            true,
+        );
+        let (mut left, mut top, mut right, mut bottom) = (pixels.width(), pixels.height(), 0, 0);
+        let width = pixels.width() as usize;
+        for (y, row) in pixels.data().chunks_exact(width * 4).enumerate() {
+            // Stay inside the writing area, away from the titlebar and statistics.
+            if y < (70.0 * scale) as usize || y >= (225.0 * scale) as usize {
+                continue;
+            }
+            for (x, pixel) in row.chunks_exact(4).enumerate() {
+                if pixel == [255, 0, 255, 255] {
+                    left = left.min(x as u32);
+                    top = top.min(y as u32);
+                    right = right.max(x as u32 + 1);
+                    bottom = bottom.max(y as u32 + 1);
+                }
+            }
+        }
+        tiny_skia::IntRect::from_ltrb(left as i32, top as i32, right as i32, bottom as i32)
+            .expect("the focused editor paints an opaque caret")
     }
-    image::save_buffer(
-        format!("target/theme-validation/{name}.png"),
-        &rgba,
-        size.width,
-        size.height,
-        image::ColorType::Rgba8,
-    )
-    .unwrap();
+
+    for scale in [1.0, 1.25, 2.0] {
+        for source in ["", "test", "test\n\nAfter"] {
+            let (mut app, _) = App::new();
+            app.resolved_theme = Preset::Paper.resolve();
+            app.resolved_theme.typography.font = WritingFont::SourceSans3;
+            app.resolved_theme.tokens.accent = iced::Color::from_rgb(1.0, 0.0, 1.0);
+            let rescaled = event_message(
+                Event::Window(window::Event::Rescaled(scale)),
+                iced::event::Status::Ignored,
+                window::Id::unique(),
+            )
+            .expect("window scaling reaches the editor");
+            drop(app.update_message(rescaled));
+            app.set_document(source.into(), None, "Untitled.md".into());
+            let head = if source.contains('\n') {
+                5
+            } else {
+                source.len()
+            };
+            drop(app.update_message(Message::SelectSource(Selection::caret(head))));
+            if source == "test" {
+                drop(app.update_message(Message::Edit(text_editor::Action::Edit(Edit::Enter))));
+            }
+            let blank = app.session.document.source().to_owned();
+            let head = app.session.selection.head;
+            let before = caret(&app, scale);
+            assert_eq!(
+                before.height(),
+                (app.resolved_theme.typography.body_size * scale).round() as u32
+            );
+            drop(app.update_message(Message::Edit(text_editor::Action::Edit(Edit::Insert('T')))));
+            assert_eq!(app.session.selection, Selection::caret(head + 1));
+            let typed = caret(&app, scale);
+            drop(app.update_message(Message::Edit(text_editor::Action::Edit(Edit::Backspace))));
+            assert_eq!(app.session.document.source(), blank);
+            assert_eq!(before, caret(&app, scale));
+            assert!(typed.left() > before.left());
+            assert_eq!(
+                (before.top(), before.height(), before.width()),
+                (typed.top(), typed.height(), typed.width()),
+                "{blank:?} at {scale}×"
+            );
+        }
+    }
+}
+
+#[test]
+fn write_placeholder_uses_the_same_position_as_typed_text() {
+    let mut fonts = iced_tiny_skia::graphics::text::font_system()
+        .write()
+        .unwrap();
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
+        fonts.load_font(std::borrow::Cow::Borrowed(font));
+    }
+    drop(fonts);
+
+    for font in WritingFont::ALL {
+        let (mut app, _) = App::new();
+        app.resolved_theme = Preset::Paper.resolve();
+        app.resolved_theme.typography.font = font;
+        app.resolved_theme.tokens.faint = app.resolved_theme.tokens.text;
+        app.zoom = 1.15;
+        let mut render_text = |source: &str| {
+            app.set_document(source.into(), None, "Untitled.md".into());
+            render_pixels(
+                &app,
+                Size::new(760.0, 520.0),
+                mouse::Cursor::Unavailable,
+                2.0,
+                false,
+            )
+        };
+        let placeholder = render_text("");
+        let typed = render_text("Begin anywhere…");
+        let stride = placeholder.width() as usize * 4;
+        let writing_band = 172 * stride..250 * stride;
+        assert!(
+            placeholder.data()[writing_band.clone()] == typed.data()[writing_band],
+            "placeholder and typed glyphs differ for {font}"
+        );
+    }
 }
 
 #[test]
@@ -392,11 +544,7 @@ fn native_quiet_previews() {
     let mut fonts = iced_tiny_skia::graphics::text::font_system()
         .write()
         .unwrap();
-    for font in [
-        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
-    ] {
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
         fonts.load_font(std::borrow::Cow::Borrowed(font));
     }
     drop(fonts);
@@ -404,6 +552,24 @@ fn native_quiet_previews() {
     let (mut app, initial) = App::new();
     drop(initial);
     app.preferences = Preferences::default();
+    app.resolved_theme = Preset::Paper.resolve();
+    app.resolved_theme.typography.font = WritingFont::SourceSans3;
+    for (suffix, name) in [
+        ("", "heading-marker"),
+        (" A clear heading", "heading-title"),
+    ] {
+        let source = format!("A line of prose.\n\n#{suffix}");
+        let end = source.len();
+        app.set_document(source, None, "Untitled.md".into());
+        drop(app.update_message(Message::SelectSource(Selection::caret(end))));
+        render_scaled(
+            &app,
+            Size::new(760.0, 520.0),
+            name,
+            mouse::Cursor::Unavailable,
+            2.0,
+        );
+    }
     app.set_document("# The quiet hour\n\n*A small field note on making room to notice.*\n\nAt the edge of the morning, the coast is almost colourless. Water folds around the rocks. A path disappears into the grass. For a few minutes, there is nothing to answer and nowhere else to be.\n\n## Making room\n\nWe came here to write about attention. We stayed because the light kept changing.\n".into(), Some("/tmp/The quiet hour.md".into()), "The quiet hour.md".into());
     for preset in Preset::ALL {
         app.resolved_theme = preset.resolve();
@@ -451,6 +617,13 @@ fn native_quiet_previews() {
     app.chrome.files.open = true;
     render(&app, Size::new(1180.0, 820.0), "native-quiet-both-sidebars");
     render(&app, Size::new(760.0, 520.0), "native-quiet-both-narrow");
+    drop(app.show_sidebar(Sidebar::Outline));
+    render(
+        &app,
+        Size::new(760.0, 520.0),
+        "native-quiet-narrow-outline-active",
+    );
+    drop(app.show_sidebar(Sidebar::Files));
     app.workspace.remember_for_preview(&[
         "/writing/Field notes",
         "/Users/writer/Essays",
@@ -477,6 +650,13 @@ fn native_quiet_previews() {
         app.resolved_theme.typography.font = font;
         app.preferences.writing_font = font;
         render(&app, Size::new(1180.0, 820.0), &format!("typeface-{font}"));
+        render_scaled(
+            &app,
+            Size::new(1180.0, 820.0),
+            &format!("typeface-{font}-2x"),
+            mouse::Cursor::Unavailable,
+            2.0,
+        );
         app.mode = EditorMode::Read;
         render(
             &app,
@@ -485,8 +665,8 @@ fn native_quiet_previews() {
         );
         app.mode = EditorMode::Live;
     }
-    app.resolved_theme.typography.font = WritingFont::SansSerif;
-    app.preferences.writing_font = WritingFont::SansSerif;
+    app.resolved_theme.typography.font = WritingFont::SourceSans3;
+    app.preferences.writing_font = WritingFont::SourceSans3;
     app.chrome.files.open = false;
     app.chrome.outline.open = false;
     app.overlay = Some(Overlay::Settings);
@@ -496,7 +676,21 @@ fn native_quiet_previews() {
         "native-quiet-settings-narrow",
     );
     render(&app, Size::new(1180.0, 1000.0), "typeface-settings");
+    for (section, name) in [
+        (SettingsSection::Appearance, "appearance-settings"),
+        (SettingsSection::Shortcuts, "shortcut-settings"),
+    ] {
+        drop(app.update_message(Message::SettingsSection(section)));
+        render(&app, Size::new(760.0, 520.0), name);
+    }
+    app.resolved_theme = Preset::Midnight.resolve();
+    drop(app.update_message(Message::SettingsSection(SettingsSection::Writing)));
+    render(&app, Size::new(760.0, 520.0), "writing-settings-midnight");
+    app.resolved_theme = Preset::Paper.resolve();
     app.overlay = None;
+    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Format)));
+    render(&app, Size::new(760.0, 520.0), "format-narrow");
+    drop(app.update_message(Message::CloseOverlay));
     app.session.display_name =
         "A very long document name that must never push the save indicator outside the titlebar.md"
             .into();

@@ -41,6 +41,7 @@ pub struct RichEditor<'a> {
     images: &'a ImageStore,
     base: Option<&'a Path>,
     zoom: f32,
+    window_scale: f32,
     source_selection: Selection,
     app_focused: bool,
     preserve_viewport: bool,
@@ -174,6 +175,7 @@ impl<'a> RichEditor<'a> {
             images,
             base: None,
             zoom: 1.0,
+            window_scale: 1.0,
             source_selection: Selection::default(),
             app_focused: false,
             preserve_viewport: false,
@@ -188,6 +190,11 @@ impl<'a> RichEditor<'a> {
 
     pub fn preserve_viewport(mut self, preserve: bool) -> Self {
         self.preserve_viewport = preserve;
+        self
+    }
+
+    pub fn window_scale(mut self, scale: f32) -> Self {
+        self.window_scale = scale;
         self
     }
     pub(crate) fn section_folds(
@@ -965,11 +972,39 @@ impl State {
             && self.scroll_drag.is_none()
     }
     fn caret(&self, source: usize) -> Rectangle {
-        if let Some((_, upstream)) = self.visual_cursor.filter(|(head, _)| *head == source) {
+        if let Some(upstream) = self.caret_affinity(source) {
             self.rich.source_caret_on_side(source, upstream)
         } else {
             self.rich.source_caret(source, None)
         }
+    }
+    fn caret_affinity(&self, source: usize) -> Option<bool> {
+        self.visual_cursor
+            .filter(|(head, _)| *head == source)
+            .map(|(_, upstream)| upstream)
+    }
+    fn window_caret(&self, source: usize, bounds: Rectangle, scale: f32) -> Rectangle {
+        let caret = if self.rich.contains_source(source) {
+            self.rich
+                .resident()
+                .painted_caret(source, self.caret_affinity(source))
+        } else {
+            self.caret(source)
+        };
+        // Round the bar's position and size separately in physical pixels.
+        // Otherwise moving a fractional glyph advance can change its thickness.
+        let width = (caret.width * scale).round().max(1.0);
+        let height = (caret.height * scale).round().max(1.0);
+        let left = (bounds.x * scale).ceil();
+        let right = ((bounds.x + bounds.width) * scale).floor() - width;
+        let x = ((bounds.x + caret.x) * scale)
+            .round()
+            .clamp(left, right.max(left));
+        let y = ((bounds.y + caret.center_y() - self.scroll) * scale - height / 2.0).round();
+        Rectangle::new(
+            Point::new(x / scale, y / scale),
+            Size::new(width / scale, height / scale),
+        )
     }
     fn set_visual_cursor(&mut self, source: usize, y: f32) {
         self.visual_cursor = Some((source, self.rich.resident().upstream_affinity(source, y)));
@@ -2082,11 +2117,12 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     .blink_started
                     .map_or(0, |start| now.saturating_duration_since(start).as_millis());
                 shell.request_redraw_at(*now + Duration::from_millis((500 - elapsed % 500) as u64));
-                let caret = state.caret(self.source_selection.head)
-                    + (bounds.position() - Point::ORIGIN)
-                    - Vector::new(0.0, state.scroll);
                 shell.request_input_method(&input_method::InputMethod::Enabled {
-                    cursor: caret,
+                    cursor: state.window_caret(
+                        self.source_selection.head,
+                        bounds,
+                        self.window_scale,
+                    ),
                     purpose: input_method::Purpose::Normal,
                     preedit: state.preedit.as_ref().map(input_method::Preedit::as_ref),
                 });
@@ -2310,7 +2346,10 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                         }
                     }
                     FragmentKind::Text {
-                        paragraph, origin, ..
+                        paragraph,
+                        centered_markers,
+                        origin,
+                        ..
                     } => {
                         renderer.fill_paragraph(
                             paragraph,
@@ -2318,6 +2357,14 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                             tokens.text,
                             clip,
                         );
+                        for (marker, offset) in centered_markers.iter() {
+                            renderer.fill_paragraph(
+                                marker,
+                                *origin + (*offset - Point::ORIGIN) + translation,
+                                tokens.muted,
+                                clip,
+                            );
+                        }
                         if self.projection.rich.code_line(&fragment.range).is_some_and(
                             |(_, block)| {
                                 block.fenced
@@ -2422,19 +2469,22 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                 }
             }
             if self.source.is_empty() {
+                let size = self.theme.typography.body_size * self.zoom;
                 renderer.fill_text(
                     text::Text {
                         content: "Begin anywhere…".into(),
                         bounds: bounds.size(),
-                        size: (self.theme.typography.body_size * self.zoom).into(),
+                        size: size.into(),
                         font: self.theme.typography.font.font(),
-                        line_height: text::LineHeight::Relative(self.theme.typography.line_height),
+                        line_height: text::LineHeight::Absolute(
+                            (size * self.theme.typography.line_height).into(),
+                        ),
                         align_x: text::Alignment::Default,
                         align_y: iced::alignment::Vertical::Top,
                         shaping: text::Shaping::Advanced,
                         wrapping: text::Wrapping::WordOrGlyph,
                     },
-                    bounds.position() + Vector::new(0.0, 5.0),
+                    state.caret(0).position() + translation,
                     tokens.faint,
                     clip,
                 );
@@ -2442,7 +2492,12 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
             if self.grid.is_none() && self.display_selection().is_caret() && state.caret_visible() {
                 renderer.fill_quad(
                     renderer::Quad {
-                        bounds: state.caret(self.source_selection.head) + translation,
+                        bounds: state.window_caret(
+                            self.source_selection.head,
+                            bounds,
+                            self.window_scale,
+                        ),
+                        snap: true,
                         ..renderer::Quad::default()
                     },
                     tokens.accent,

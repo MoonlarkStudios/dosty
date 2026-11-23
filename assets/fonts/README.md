@@ -9,3 +9,8 @@ optical size 18, weight 400 or 700. FontTools 4.61.1 generated the instances.
 Their family names, weight flags, and italic flags are set explicitly because
 the font matching stack used in this Iced version did not reliably select bold
 faces from the original variable font. They have no runtime Python dependency.
+
+[Source Sans 3](https://github.com/adobe-fonts/source-sans/releases/tag/3.052R)
+is by Adobe. The four TrueType faces in [source-sans-3](source-sans-3) are
+unmodified files from the `3.052R` tag. See the
+[SIL Open Font License 1.1](source-sans-3/OFL.txt).

@@ -7,7 +7,7 @@ use iced::widget::{button, column, container, row, space, text};
 use iced::{Alignment, Element, Fill};
 
 use super::trail::Direction;
-use super::{App, EditorMode, Message, folder, quick_open, workspace};
+use super::{App, EditorMode, Message, WRITING_PAGE_PADDING, folder, quick_open, workspace};
 use crate::editor::file_tree;
 use crate::theme::styles::{self, Button};
 
@@ -112,10 +112,9 @@ impl App {
         );
         // Leave the first lines of the page, and its caret, clear.
         container(
-            column![space().height(112), content]
-                .max_width(self.resolved_theme.typography.content_width + 2.0 * INSET),
+            column![space().height(112), content].max_width(self.writing_width() + 2.0 * INSET),
         )
-        .padding(iced::Padding::new(32.0).top(56.0).bottom(16.0))
+        .padding(WRITING_PAGE_PADDING)
         .center_x(Fill)
         .into()
     }
