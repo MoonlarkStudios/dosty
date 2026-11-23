@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use accesskit::{
-    Action, ActionData, ActionRequest, Node, NodeId, Rect, Role, TextPosition, TextSelection, Tree,
-    TreeUpdate,
+    Action, ActionData, ActionRequest, Node, NodeId, Rect, Role, TextPosition, TextSelection,
+    TreeId, TreeInfo, TreeUpdate,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -87,7 +87,8 @@ impl Snapshot {
         if !self.enabled {
             return TreeUpdate {
                 nodes: vec![(ROOT, root)],
-                tree: Some(Tree::new(ROOT)),
+                tree: Some(TreeInfo::new(ROOT)),
+                tree_id: TreeId::ROOT,
                 focus: ROOT,
             };
         }
@@ -136,13 +137,17 @@ impl Snapshot {
         }
         TreeUpdate {
             nodes,
-            tree: Some(Tree::new(ROOT)),
+            tree: Some(TreeInfo::new(ROOT)),
+            tree_id: TreeId::ROOT,
             focus: if self.focused { self.editor_id() } else { ROOT },
         }
     }
 
     pub(super) fn action(&self, request: &ActionRequest) -> Option<Intent> {
-        if !self.enabled || request.target != self.editor_id() {
+        if !self.enabled
+            || request.target_tree != TreeId::ROOT
+            || request.target_node != self.editor_id()
+        {
             return None;
         }
         match (&request.action, &request.data) {
@@ -285,7 +290,8 @@ mod tests {
     fn select(snapshot: &Snapshot, anchor: usize, head: usize) -> ActionRequest {
         ActionRequest {
             action: Action::SetTextSelection,
-            target: snapshot.editor_id(),
+            target_tree: TreeId::ROOT,
+            target_node: snapshot.editor_id(),
             data: Some(ActionData::SetTextSelection(TextSelection {
                 anchor: snapshot.position(anchor).unwrap(),
                 focus: snapshot.position(head).unwrap(),
@@ -430,7 +436,8 @@ mod tests {
         assert_eq!(
             snapshot.action(&ActionRequest {
                 action: Action::SetTextSelection,
-                target: snapshot.editor_id(),
+                target_tree: TreeId::ROOT,
+                target_node: snapshot.editor_id(),
                 data: Some(ActionData::SetTextSelection(TextSelection {
                     anchor: invalid,
                     focus: invalid
@@ -441,7 +448,8 @@ mod tests {
         assert_eq!(
             snapshot.action(&ActionRequest {
                 action: Action::SetValue,
-                target: snapshot.editor_id(),
+                target_tree: TreeId::ROOT,
+                target_node: snapshot.editor_id(),
                 data: Some(ActionData::Value("ordinary replacement".into())),
             }),
             Some(Intent::Replace("ordinary replacement".into()))
@@ -453,12 +461,19 @@ mod tests {
         let snapshot = model("日本\n🦀", Selection::caret(0), 4);
         let request = select(&snapshot, 0, snapshot.source.len());
         assert!(snapshot.action(&request).is_some());
+        assert_eq!(
+            snapshot.action(&ActionRequest {
+                target_tree: TreeId(uuid::Uuid::from_u128(1)),
+                ..request.clone()
+            }),
+            None
+        );
         let other = model("日本\n🦀", Selection::caret(0), 5);
         assert_eq!(other.action(&request), None);
         for target in [ROOT, snapshot.run_id(0), NodeId(1)] {
             assert_eq!(
                 snapshot.action(&ActionRequest {
-                    target,
+                    target_node: target,
                     ..request.clone()
                 }),
                 None
@@ -485,7 +500,8 @@ mod tests {
             assert_eq!(
                 snapshot.action(&ActionRequest {
                     action: Action::SetTextSelection,
-                    target: snapshot.editor_id(),
+                    target_tree: TreeId::ROOT,
+                    target_node: snapshot.editor_id(),
                     data: Some(ActionData::SetTextSelection(TextSelection {
                         anchor: position,
                         focus: snapshot.position(0).unwrap()
@@ -507,7 +523,8 @@ mod tests {
             assert_eq!(
                 snapshot.action(&ActionRequest {
                     action,
-                    target: snapshot.editor_id(),
+                    target_tree: TreeId::ROOT,
+                    target_node: snapshot.editor_id(),
                     data
                 }),
                 None
@@ -522,12 +539,14 @@ mod tests {
         let mut snapshot = model("before", Selection::caret(0), 2);
         let focus = ActionRequest {
             action: Action::Focus,
-            target: snapshot.editor_id(),
+            target_tree: TreeId::ROOT,
+            target_node: snapshot.editor_id(),
             data: None,
         };
         let replace = ActionRequest {
             action: Action::SetValue,
-            target: snapshot.editor_id(),
+            target_tree: TreeId::ROOT,
+            target_node: snapshot.editor_id(),
             data: Some(ActionData::Value("日本語 🦀".into())),
         };
         assert_eq!(snapshot.action(&focus), Some(Intent::Focus));

@@ -2,11 +2,11 @@
 //!
 //! This is deliberately separate from Iced's widget tree: the application owns
 //! the semantics and handles actions using its ordinary update path. Every
-//! published update must contain a complete tree, including its [`Tree`].
+//! published update must contain a complete tree, including its [`TreeInfo`].
 //! Node geometry uses logical window-client coordinates. The bridge scales the
 //! root transform to native physical pixels, including on display changes.
 //!
-//! [`Tree`]: accesskit::Tree
+//! [`TreeInfo`]: accesskit::TreeInfo
 
 use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
 use std::sync::{Arc, Mutex};
@@ -187,7 +187,7 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use accesskit::{Affine, Node, NodeId, Point, Role, Tree};
+    use accesskit::{Affine, Node, NodeId, Point, Role, TreeId, TreeInfo};
 
     fn tree(label: &str) -> TreeUpdate {
         let mut root = Node::new(Role::Window);
@@ -195,7 +195,8 @@ mod tests {
         root.set_transform(Affine::translate((3.0, 4.0)));
         TreeUpdate {
             nodes: vec![(NodeId(0), root)],
-            tree: Some(Tree::new(NodeId(0))),
+            tree: Some(TreeInfo::new(NodeId(0))),
+            tree_id: TreeId::ROOT,
             focus: NodeId(0),
         }
     }
