@@ -4033,14 +4033,14 @@ mod tests {
     }
 
     #[test]
-    fn completed_markup_conceals_immediately_and_discloses_only_the_edited_span() {
+    fn completed_markup_stays_visible_through_its_closer_until_the_caret_leaves() {
         let mut app = app("");
         type_text(&mut app, "**bold** and *soft* and `code`");
         assert_eq!(
             app.session.document.source(),
             "**bold** and *soft* and `code`"
         );
-        assert_eq!(app.editor.content().text(), "bold and soft and code");
+        assert_eq!(app.editor.content().text(), "bold and soft and `code`");
         send(&mut app, Message::SelectSource(Selection::caret(14)));
         assert_eq!(app.editor.content().text(), "bold and *soft* and code");
         send(&mut app, Message::Edit(Action::Move(Motion::DocumentEnd)));

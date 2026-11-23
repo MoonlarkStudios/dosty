@@ -48,7 +48,9 @@ images are atomic objects, and tables retain structural mappings. Both selection
 endpoints and their direction survive mode switches and edits across rich blocks.
 
 Contextual disclosure reveals the active heading prefix and innermost inline
-span. It preserves source selection, wrap affinity, preferred horizontal caret
+span, including the gap immediately after its closing delimiter. Write mode
+uses the same size and font for inline delimiters before and after recognition.
+Disclosure preserves source selection, wrap affinity, preferred horizontal caret
 position, and a source-based viewport anchor through local reflow. An offscreen
 caret does not force the viewport to jump when focus or disclosure changes.
 

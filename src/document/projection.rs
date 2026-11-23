@@ -14,18 +14,20 @@ use crate::document::rich_document::RichDocument;
 use crate::document::selection::Selection;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Style(pub u8);
+pub struct Style(pub u16);
 
 impl Style {
-    pub const BOLD: u8 = 1;
-    pub const ITALIC: u8 = 2;
-    pub const CODE: u8 = 4;
-    pub const LINK: u8 = 8;
-    pub const MUTED: u8 = 16;
-    pub const SYNTAX: u8 = 32;
-    pub const CODE_BLOCK: u8 = 64;
-    pub const STRIKETHROUGH: u8 = 128;
-    pub fn contains(self, flag: u8) -> bool {
+    pub const BOLD: u16 = 1;
+    pub const ITALIC: u16 = 2;
+    pub const CODE: u16 = 4;
+    pub const LINK: u16 = 8;
+    pub const MUTED: u16 = 16;
+    pub const SYNTAX: u16 = 32;
+    pub const CODE_BLOCK: u16 = 64;
+    pub const STRIKETHROUGH: u16 = 128;
+    pub const TASK_MARKER: u16 = 256;
+    const BIT_COUNT: usize = Self::TASK_MARKER.ilog2() as usize + 1;
+    pub fn contains(self, flag: u16) -> bool {
         self.0 & flag != 0
     }
 }
@@ -130,7 +132,7 @@ enum Concealment {
 #[derive(Debug, Clone, PartialEq)]
 struct Mark {
     range: Range<usize>,
-    style: u8,
+    style: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,6 +244,7 @@ impl Projection {
         let mut in_code_block = false;
         let mut in_table = false;
         let mut link_depth = 0_usize;
+        let mut quote_depth = 0;
         let mut safe_text = Vec::new();
         let mut block_prefixes = Vec::new();
         let mut rich = RichDocument::default();
@@ -425,25 +428,39 @@ impl Projection {
                         .get(indent)
                         .is_some_and(|byte| matches!(byte, b'-' | b'+' | b'*'))
                     {
+                        let range = range.start + indent..range.start + indent + 1;
+                        marks.push(Mark {
+                            range: range.clone(),
+                            style: Style::MUTED,
+                        });
                         decorations.push(Decoration {
-                            range: range.start + indent..range.start + indent + 1,
+                            range,
                             text: "•".into(),
                             kind: Concealment::Syntax,
                         });
                     }
                 }
-                Event::TaskListMarker(done) => decorations.push(Decoration {
-                    range,
-                    text: if done { "☑" } else { "☐" }.into(),
-                    kind: Concealment::Task,
-                }),
+                Event::TaskListMarker(done) => {
+                    marks.push(Mark {
+                        range: range.clone(),
+                        style: Style::TASK_MARKER,
+                    });
+                    decorations.push(Decoration {
+                        range,
+                        text: if done { "☑" } else { "☐" }.into(),
+                        kind: Concealment::Task,
+                    });
+                }
                 Event::Start(Tag::BlockQuote(_)) => {
+                    quote_depth += 1;
                     let mut offset = range.start;
-                    for line in raw.split_inclusive(['\r', '\n']) {
-                        let indent = line.bytes().take_while(|&byte| byte == b' ').count();
-                        if line.as_bytes().get(indent) == Some(&b'>') {
+                    for (index, line) in raw.split_inclusive(['\r', '\n']).enumerate() {
+                        // The parser starts the range at this quote's own marker.
+                        // Later lines also contain their ancestor quotes' margins.
+                        let level = if index == 0 { 1 } else { quote_depth };
+                        if let Some(marker) = quote_marker(line, level) {
                             decorations.push(Decoration {
-                                range: offset + indent..offset + indent + 1,
+                                range: offset + marker..offset + marker + 1,
                                 text: "│".into(),
                                 kind: Concealment::Syntax,
                             });
@@ -455,6 +472,7 @@ impl Projection {
                         style: Style::MUTED,
                     });
                 }
+                Event::End(pulldown_cmark::TagEnd::BlockQuote(_)) => quote_depth -= 1,
                 Event::Start(Tag::CodeBlock(_)) => {
                     in_code_block = true;
                     marks.push(Mark {
@@ -608,8 +626,8 @@ impl Projection {
             .any(|decoration| decoration.kind == Concealment::Syntax && decoration.text == "│")
     }
 
-    /// Resolves the active heading and just the innermost paired inline span.
-    /// The end of a completed span belongs to the surrounding prose.
+    /// Resolves the active heading and the innermost paired inline span. A caret
+    /// immediately after the closer can still edit it without changing layout.
     pub fn disclosure_at(&self, caret: Option<usize>) -> Disclosure {
         self.disclosure_with_editing_cell(caret, self.disclosure.1.clone())
     }
@@ -691,8 +709,8 @@ impl Projection {
             && let Some(pair) = parsed
                 .pairs
                 .iter()
-                .filter(|pair| pair.open.start <= caret && caret < pair.close.end)
-                .min_by_key(|pair| pair.close.end - pair.open.start)
+                .filter(|pair| pair.open.start <= caret && caret <= pair.close.end)
+                .min_by_key(|pair| (pair.open.start != caret, pair.close.end - pair.open.start))
         {
             ranges.extend([pair.open.clone(), pair.close.clone()]);
         }
@@ -1478,7 +1496,7 @@ fn highlight_lines(text: &str, mapping: &OffsetMap, marks: Vec<Mark>) -> Highlig
     }
     events.sort_by_key(|event| event.0);
     let mut runs = Vec::new();
-    let mut counters = [0_i32; u8::BITS as usize];
+    let mut counters = [0_i32; Style::BIT_COUNT];
     let mut last = 0;
     for (position, kind, delta) in events {
         let style = Style(counters.iter().enumerate().fold(0, |flags, (i, &count)| {
@@ -1511,6 +1529,14 @@ fn highlight_lines(text: &str, mapping: &OffsetMap, marks: Vec<Mark>) -> Highlig
         offset = end + 1;
     }
     lines
+}
+
+fn quote_marker(line: &str, level: usize) -> Option<usize> {
+    let mut rest = line;
+    for _ in 0..level {
+        rest = rest.trim_start_matches([' ', '\t']).strip_prefix('>')?;
+    }
+    Some(line.len() - rest.len() - 1)
 }
 
 fn closing_bracket(text: &str) -> Option<usize> {
@@ -1663,16 +1689,16 @@ mod tests {
     }
 
     #[test]
-    fn completed_span_conceals_at_its_end_and_autolinks_disclose() {
+    fn completed_spans_disclose_through_their_closing_boundary() {
         let source = "**x** <https://example.com>";
-        for head in 0..5 {
+        for head in 0..=5 {
             assert_eq!(
                 Projection::with_context(source, Some(head)).text,
                 "**x** https://example.com"
             );
         }
         assert_eq!(
-            Projection::with_context(source, Some(5)).text,
+            Projection::with_context(source, None).text,
             "x https://example.com"
         );
         assert_eq!(
@@ -1681,8 +1707,29 @@ mod tests {
         );
         assert_eq!(
             Projection::with_context(source, Some(source.len())).text,
-            "x https://example.com"
+            "x <https://example.com>"
         );
+    }
+
+    #[test]
+    fn nested_quotes_project_markers_on_continuation_lines() {
+        for source in [
+            "> > First\n> > Second",
+            "> > First\n>>Second",
+            "> > > First\r\n>  >> Second\r\n> > Lazy continuation",
+            "> - > First\n>   > Second\n\n> Third",
+        ] {
+            let projection = Projection::with_context(source, Some(source.len()));
+            for (offset, _) in source.match_indices('>') {
+                assert!(projection.is_quote_marker(offset), "{source:?} at {offset}");
+                assert!(projection.text[projection.to_display(offset)..].starts_with('│'));
+            }
+        }
+        let source = "> > ```\n> > > literal\n> > ```";
+        let literal = source.find("> literal").unwrap();
+        let projection = Projection::new(source);
+        assert!(!projection.is_quote_marker(literal));
+        assert!(projection.text[projection.to_display(literal)..].starts_with('>'));
     }
 
     #[test]
