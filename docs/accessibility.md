@@ -23,14 +23,14 @@ history. Logical editor bounds come from the widget operation and are scaled
 at the bridge root for native physical coordinates. Platform-specific native
 integration stays inside upstream AccessKit, using safe Rust APIs from Dosty.
 
-The bridge uses AccessKit 0.21.1, accesskit_winit 0.29.2 and accesskit_macos
-0.22.2 with the existing pinned Iced/Winit stack. Upstream contracts for
-[tree updates](https://docs.rs/accesskit/0.21.1/accesskit/struct.TreeUpdate.html),
-[text positions](https://docs.rs/accesskit/0.21.1/accesskit/struct.TextPosition.html),
+The bridge uses AccessKit 0.25.2, accesskit_winit 0.34.2 and accesskit_macos
+0.27.2 with the existing pinned Iced/Winit stack. Upstream contracts for
+[tree updates](https://docs.rs/accesskit/0.25.2/accesskit/struct.TreeUpdate.html),
+[text positions](https://docs.rs/accesskit/0.25.2/accesskit/struct.TextPosition.html),
 and the
-[Winit adapter lifecycle](https://github.com/AccessKit/accesskit/blob/5801c4a49ff9b2c9ec3f77b3c31272d0da4c5cd3/platforms/winit/src/lib.rs)
-explain the cross-module boundary. Cargo manifests and the lockfile define the
-selected dependency versions.
+[Winit adapter lifecycle](https://docs.rs/accesskit_winit/0.34.2/accesskit_winit/struct.Adapter.html)
+explain the cross-module boundary. Dosty publishes one tree with `TreeId::ROOT`
+and accepts actions addressed to that tree and the current editor node.
 
 ## Run an isolated prototype
 
