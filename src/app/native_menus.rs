@@ -438,11 +438,8 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
         Command::Move | Command::Location => (ready && app.session.path.is_some(), false),
         Command::UndoMove => (ready && app.folder.can_undo(), false),
         Command::BackToReference => (ready && app.footnotes.can_return(), false),
-        Command::Files => (ready, app.chrome.files.open && !app.chrome.sidebars_hidden),
-        Command::Outline => (
-            ready,
-            app.chrome.outline.open && !app.chrome.sidebars_hidden,
-        ),
+        Command::Files => (ready, app.docked_sidebars(app.chrome.window_width).0),
+        Command::Outline => (ready, app.docked_sidebars(app.chrome.window_width).1),
         Command::FilterOutline => (ready && !app.outline.sections.is_empty(), false),
         Command::ToggleSectionFold => (
             ready && app.mode == EditorMode::Live && app.current_section_fold().is_some(),

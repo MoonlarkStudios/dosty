@@ -585,12 +585,7 @@ fn load_profile_fonts() {
     let mut fonts = iced_tiny_skia::graphics::text::font_system()
         .write()
         .unwrap();
-    for font in [
-        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
-    ] {
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
         fonts.load_font(Cow::Borrowed(font));
     }
     drop(fonts);
@@ -819,6 +814,14 @@ fn performance_code_editor() {
 #[ignore = "run with mise run profile; large documents and software rasterization"]
 fn large_document_interactions() {
     load_profile_fonts();
+    use crate::theme::WritingFont;
+    let font = match std::env::var("DOSTY_PROFILE_FONT").as_deref() {
+        Ok("source-sans-3") => WritingFont::SourceSans3,
+        Ok("newsreader") => WritingFont::Serif,
+        Ok("system-sans") | Err(_) => WritingFont::SansSerif,
+        Ok(other) => panic!("unknown DOSTY_PROFILE_FONT: {other}"),
+    };
+    println!("typeface: {font}");
     let counts = std::env::var("DOSTY_PROFILE_BLOCKS")
         .or_else(|_| std::env::var("KOAN_PROFILE_BLOCKS"))
         .or_else(|_| std::env::var("DAYTRIP_PROFILE_BLOCKS"))
@@ -835,6 +838,7 @@ fn large_document_interactions() {
         let bytes = source.len();
         let start = Instant::now();
         let mut harness = Harness::new(source);
+        harness.app.resolved_theme.typography.font = font;
         let load = start.elapsed();
         assert_eq!(harness.app.session.document.blocks().len(), blocks);
         report_memory("source-load");
