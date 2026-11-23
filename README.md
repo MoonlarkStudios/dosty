@@ -60,5 +60,6 @@ Report bugs and suggest features through [GitHub issues](https://github.com/Moon
 Report vulnerabilities [privately](SECURITY.md).
 
 Copyright © 2026 Dosty contributors. Licensed under [GPLv3 or later](LICENSE).
-Document fonts use the [SIL Open Font License](assets/fonts/OFL.txt). The
+Document fonts use the SIL Open Font License, with notices for
+[Newsreader](assets/fonts/OFL.txt) and [Source Sans 3](assets/fonts/source-sans-3/OFL.txt). The
 [DM Sans brand source](branding/dosty/sources/DMSans-OFL.txt) has its own OFL notice.

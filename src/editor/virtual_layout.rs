@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use iced::{Point, Rectangle, Size};
 
-use super::rich_layout::{LayoutInput, LayoutUnit, RichLayout, UnitKind, layout_units};
+use super::rich_layout::{
+    CARET_WIDTH, LayoutInput, LayoutUnit, RichLayout, UnitKind, layout_units,
+};
 use crate::app::SectionFoldTarget;
 use crate::document::projection::{HighlightLines, OffsetMap};
 use crate::theme::{Tokens, Typography, styles};
@@ -341,7 +343,10 @@ impl VirtualLayout {
             let height = self.metrics.as_ref().map_or(24.0, |m| {
                 m.typography.body_size * m.zoom * m.typography.line_height
             });
-            Rectangle::new(Point::new(0.0, self.top(unit)), Size::new(1.5, height))
+            Rectangle::new(
+                Point::new(0.0, self.top(unit)),
+                Size::new(CARET_WIDTH, height),
+            )
         }
     }
     pub fn contains_source(&self, source: usize) -> bool {
@@ -506,13 +511,7 @@ fn estimate(unit: &LayoutUnit, input: LayoutInput<'_>) -> f32 {
     match unit.kind {
         UnitKind::Line(level) => flow(
             unit.range.clone(),
-            styles::line_size(
-                body,
-                level,
-                input.projection.text[unit.range.clone()]
-                    .trim_matches('\r')
-                    .is_empty(),
-            ),
+            styles::line_size(body, level),
             input.width,
             level.is_some(),
         ),

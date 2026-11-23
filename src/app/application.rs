@@ -7,7 +7,7 @@ use std::sync::Arc;
 use iced::keyboard::{self, Key, key};
 use iced::widget::{
     button, checkbox, column, container, markdown, mouse_area, operation, pick_list, responsive,
-    row, scrollable, space, stack, text, text_editor, text_input, tooltip,
+    rich_text, row, scrollable, space, span, stack, text, text_editor, text_input, tooltip,
 };
 use iced::window;
 use iced::{Alignment, Element, Event, Fill, Font, Shrink, Subscription, Task, Theme};
@@ -27,7 +27,7 @@ use crate::io::collaboration_store;
 use crate::io::image_store::{ImageStore, LoadedImage};
 use crate::io::storage::{self, FileError, LoadedFile, Preferences};
 use crate::theme::styles::{self, Button};
-use crate::theme::{Preset, ResolvedTheme, WritingFont};
+use crate::theme::{Preset, ResolvedTheme, WritingFont, WritingMeasure};
 use background::{Background, Parked};
 use session::Session;
 use trail::{Direction, Trail};
@@ -82,6 +82,13 @@ mod accessibility_tree;
 const EDITOR: &str = "document-editor";
 const SCROLL: &str = "document-scroll";
 const SEARCH: &str = "document-search";
+const SETTINGS_SCROLL: &str = "settings-scroll";
+const WRITING_PAGE_PADDING: iced::Padding = iced::Padding {
+    top: 56.0,
+    right: 32.0,
+    bottom: 16.0,
+    left: 32.0,
+};
 
 #[cfg(test)]
 #[path = "performance.rs"]
@@ -124,6 +131,7 @@ pub struct App {
     preferences: Preferences,
     preferences_writing: bool,
     preferences_pending: bool,
+    settings_section: SettingsSection,
     chrome: chrome::State,
     menu_input: Vec<crate::editor::menu_input::Request>,
     menu_input_sequence: u64,
@@ -266,9 +274,11 @@ pub enum Message {
     ShowSidebar(Sidebar),
     HideSidebars,
     ShowSettings,
+    SettingsSection(SettingsSection),
     CloseOverlay,
     Theme(Preset),
     WritingFont(WritingFont),
+    WritingMeasure(WritingMeasure),
     LoadTheme,
     ThemeLoaded(Result<Option<(PathBuf, String)>, FileError>),
     PreferencesSaved(Result<(), FileError>),
@@ -315,6 +325,14 @@ pub enum EditorMode {
 pub enum Sidebar {
     Files,
     Outline,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsSection {
+    #[default]
+    Writing,
+    Appearance,
+    Shortcuts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,6 +416,7 @@ impl App {
             preferences,
             preferences_writing: false,
             preferences_pending: false,
+            settings_section: SettingsSection::default(),
             chrome: chrome::State::default(),
             menu_input: Vec::new(),
             menu_input_sequence: 0,
@@ -1351,6 +1370,18 @@ impl App {
                 self.session.document.break_history_group();
                 self.overlay = Some(Overlay::Settings);
             }
+            Message::SettingsSection(section) => {
+                if self.overlay == Some(Overlay::Settings) && self.settings_section != section {
+                    self.settings_section = section;
+                    return operation::scroll_to(
+                        SETTINGS_SCROLL,
+                        scrollable::AbsoluteOffset {
+                            x: None,
+                            y: Some(0.0),
+                        },
+                    );
+                }
+            }
             Message::CloseOverlay => {
                 if self.overlay == Some(Overlay::Statistics) {
                     self.overlay = None;
@@ -1418,6 +1449,12 @@ impl App {
             Message::WritingFont(font) => {
                 self.preferences.writing_font = font;
                 self.resolved_theme.typography.font = font;
+                self.preserve_viewport_generation =
+                    Some(self.session.document.collaboration().generation());
+                return self.persist_preferences();
+            }
+            Message::WritingMeasure(measure) => {
+                self.preferences.writing_measure = measure;
                 self.preserve_viewport_generation =
                     Some(self.session.document.collaboration().generation());
                 return self.persist_preferences();
@@ -2882,7 +2919,7 @@ impl App {
                     Overlay::Chrome => self.chrome_menu_view(size),
                     Overlay::Statistics => self.statistics_popover(size),
                     Overlay::Folder => self.folder_overlay_view((size.height - 48.0).max(80.0)),
-                    Overlay::Settings => self.settings_view((size.height - 48.0).min(760.0)),
+                    Overlay::Settings => self.settings_view((size.height - 48.0).min(600.0)),
                     Overlay::Collaboration => self.collaboration_view(),
                     Overlay::Unsaved => self.unsaved_view(),
                     Overlay::Writing => self.writing_view(),
@@ -2997,14 +3034,16 @@ impl App {
             title,
             if side == Sidebar::Outline {
                 self.outline_tools()
-            } else {
+            } else if self.folder.root().is_some() {
                 container(tool(
                     Icon::Search,
-                    "Quick Open · ⌘/Ctrl P",
-                    Message::QuickOpen(quick_open::Message::Open),
+                    "Find in folder",
+                    Message::FolderSearch(folder_search::Message::Open),
                 ))
-                .id("workspace-quick-open")
+                .id("workspace-find")
                 .into()
+            } else {
+                space().width(0).into()
             },
             tool(Icon::Close, "Close sidebar", Message::ToggleSidebar(side),),
         ]
@@ -3030,9 +3069,15 @@ impl App {
             .into()
     }
 
+    fn writing_width(&self) -> f32 {
+        self.preferences
+            .writing_measure
+            .width(self.resolved_theme.typography.content_width)
+    }
+
     fn writing_surface(&self) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
-        let width = self.resolved_theme.typography.content_width;
+        let width = self.writing_width();
         if self.mode != EditorMode::Read {
             let page = container(
                 column![self.editor_view(self.mode == EditorMode::Source)]
@@ -3040,14 +3085,15 @@ impl App {
                     .max_width(width)
                     .height(Fill),
             )
-            .padding(iced::Padding::new(32.0).top(56.0).bottom(16.0))
+            .padding(WRITING_PAGE_PADDING)
             .center_x(Fill)
             .height(Fill);
-            return if self.is_home() {
-                stack![page, self.home_view()].into()
-            } else {
-                page.into()
-            };
+            // Keep the editor's widget state when typing dismisses Home.
+            let mut layers = stack![page];
+            if self.is_home() {
+                layers = layers.push(self.home_view());
+            }
+            return layers.into();
         }
         let mut blocks = column![].spacing(12);
         let mut settings = styles::markdown_settings(&self.resolved_theme);
@@ -3090,7 +3136,7 @@ impl App {
             };
             blocks = blocks.push(
                 container(
-                    mouse_area(container(rendered).padding([5, 12]).width(Fill))
+                    mouse_area(container(rendered).padding([5, 0]).width(Fill))
                         .on_press(Message::Activate(index))
                         .interaction(iced::mouse::Interaction::Text),
                 )
@@ -3100,7 +3146,7 @@ impl App {
         blocks = blocks
             .push(mouse_area(container(space()).height(160).width(Fill)).on_press(Message::Append));
         let page = container(blocks.max_width(width))
-            .padding(32)
+            .padding(WRITING_PAGE_PADDING)
             .center_x(Fill);
         scrollable(page)
             .style(styles::scrollbar(tokens))
@@ -3131,6 +3177,7 @@ impl App {
                     .and_then(std::path::Path::parent),
             )
             .zoom(self.zoom)
+            .window_scale(self.chrome.window_scale)
             .selection(self.session.selection)
             .focused(self.editor_focused)
             .section_folds(&self.section_folds.targets, &self.section_folds.hidden)
@@ -3240,24 +3287,62 @@ impl App {
     fn settings_view(&self, height: f32) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
         let heading = row![
-            column![
-                text("Make yourself at home.")
-                    .font(styles::BODY_FONT)
-                    .size(28),
-                text("Choose the light you write in.")
-                    .size(13)
-                    .color(tokens.muted)
-            ]
-            .spacing(6),
+            text("Settings").size(24),
             space::horizontal(),
-            self.icon_button(
-                Icon::Close,
-                "Close appearance",
-                Message::CloseOverlay,
-                false
-            )
+            self.icon_button(Icon::Close, "Close settings", Message::CloseOverlay, false),
         ]
         .align_y(Alignment::Center);
+        let mut tabs = row![].spacing(4);
+        for (section, label) in [
+            (SettingsSection::Writing, "Writing"),
+            (SettingsSection::Appearance, "Appearance"),
+            (SettingsSection::Shortcuts, "Shortcuts"),
+        ] {
+            tabs = tabs.push(
+                button(text(label).size(13))
+                    .on_press(Message::SettingsSection(section))
+                    .padding([7, 12])
+                    .style(styles::button_style(
+                        tokens,
+                        if self.settings_section == section {
+                            Button::Selected
+                        } else {
+                            Button::Quiet
+                        },
+                    )),
+            );
+        }
+        let body = match self.settings_section {
+            SettingsSection::Writing => self.writing_settings(),
+            SettingsSection::Appearance => self.appearance_settings(),
+            SettingsSection::Shortcuts => self.keyboard_settings(),
+        };
+        container(
+            column![
+                heading,
+                tabs,
+                scrollable(body.padding(iced::Padding::new(2.0).right(16.0)))
+                    .id(SETTINGS_SCROLL)
+                    .height(Fill)
+                    .style(styles::scrollbar(tokens)),
+                row![
+                    self.small_button("Collaboration…", Message::ShowCollaboration, false),
+                    space::horizontal(),
+                    self.small_button("Done", Message::CloseOverlay, true)
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .spacing(16),
+        )
+        .padding(24)
+        .width(560)
+        .height(height)
+        .style(styles::card(tokens))
+        .into()
+    }
+
+    fn appearance_settings(&self) -> iced::widget::Column<'_, Message> {
+        let tokens = self.resolved_theme.tokens;
         let mut themes = column![].spacing(8);
         for (preset, preview) in Preset::ALL.into_iter().zip(&self.preset_themes) {
             let selected = self.preferences.custom_theme.is_none()
@@ -3288,7 +3373,11 @@ impl App {
                         ]
                         .spacing(4),
                         space::horizontal(),
-                        text(if selected { "Selected" } else { "" }).size(11)
+                        if selected {
+                            icon::sized(Icon::Check, tokens.on_accent_soft, 16.0)
+                        } else {
+                            space().width(16).into()
+                        }
                     ]
                     .spacing(14)
                     .align_y(Alignment::Center),
@@ -3306,60 +3395,40 @@ impl App {
                 .on_press(Message::Theme(preset)),
             );
         }
-        let mut shortcuts = column![].spacing(10);
-        for (label, keys) in [
-            ("New / Open / Save", "⌘/Ctrl N / O / S"),
-            ("Quick Open", "⌘/Ctrl P"),
-            ("Save as", "⌘/Ctrl Shift S"),
-            ("Find & replace", "⌘/Ctrl F"),
-            ("Bold / Italic", "⌘/Ctrl B / I"),
-            ("Strikethrough", "⌘/Ctrl Shift X"),
-            ("Create / edit link", "⌘/Ctrl K"),
-            ("Toggle current task", "⌘/Ctrl Enter"),
-            ("Create / edit footnote", "⌘/Ctrl Shift N"),
-            ("Table row / column controls", "⌘/Ctrl Shift T"),
-            ("Live preview / source", "⌘/Ctrl Shift M"),
-            ("Hide / show sidebars", "⌘/Ctrl Shift F"),
-            ("Previous / next block", "Alt ↑ / ↓"),
-            ("Filter outline", "⌘/Ctrl Shift J"),
-            ("Move section up / down", "⌘/Ctrl Alt ↑ / ↓"),
-            ("Collapse / expand section", "⌘/Ctrl Alt ← / →"),
-            ("Close find or dialog", "Escape"),
-            ("Undo / Redo", "⌘/Ctrl Z / Shift Z"),
-            ("Text size", "⌘/Ctrl + / −"),
-        ] {
-            shortcuts = shortcuts.push(
-                row![
-                    text(label.to_owned()).size(12).color(tokens.muted),
-                    space::horizontal(),
-                    text(keys).size(11).color(tokens.faint)
-                ]
-                .spacing(20),
-            );
-        }
         let custom = if self.preferences.custom_theme.is_some() {
             format!("Custom theme · {}", self.resolved_theme.name)
         } else {
             "Load a custom theme (.toml)".to_owned()
         };
-        let body = column![
-            text("APPEARANCE").size(10).color(tokens.faint),
+        column![
             themes,
             self.action_row(Icon::Folder, &custom, Message::LoadTheme),
-            space().height(4),
-            row![
-                text("Text size").size(13),
-                space::horizontal(),
-                self.small_button("−", Message::Zoom(-0.1), false),
-                text(format!("{}%", (self.zoom * 100.0).round() as u32))
-                    .size(12)
-                    .color(tokens.muted),
-                self.small_button("+", Message::Zoom(0.1), false)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            space().height(8),
-            text("WRITING").size(10).color(tokens.faint),
+        ]
+        .spacing(12)
+    }
+
+    fn writing_settings(&self) -> iced::widget::Column<'_, Message> {
+        let tokens = self.resolved_theme.tokens;
+        let typography = self.resolved_theme.typography;
+        let writing_font = typography.font.font();
+        let typeface_preview: iced::widget::text::Rich<'_, (), Message> = rich_text![
+            span("The "),
+            span("evening light").font(Font {
+                weight: iced::font::Weight::Bold,
+                ..writing_font
+            }),
+            span(" softened").font(Font {
+                style: iced::font::Style::Italic,
+                ..writing_font
+            }),
+            span(" across the page."),
+        ]
+        .font(writing_font)
+        .size(typography.body_size * self.zoom)
+        .line_height(iced::widget::text::LineHeight::Relative(
+            typography.line_height,
+        ));
+        column![
             row![
                 text("Typeface").size(13),
                 space::horizontal(),
@@ -3368,12 +3437,46 @@ impl App {
                     Some(self.preferences.writing_font),
                     Message::WritingFont,
                 )
+                .width(150)
                 .text_size(13)
-                .style(styles::typeface_picker(tokens))
-                .menu_style(styles::typeface_menu(tokens)),
+                .style(styles::preference_picker(tokens))
+                .menu_style(styles::preference_menu(tokens)),
             ]
             .spacing(12)
             .align_y(Alignment::Center),
+            row![
+                text("Text size").size(13),
+                space::horizontal(),
+                self.small_button("−", Message::Zoom(-0.1), false),
+                container(
+                    text(format!("{}%", (self.zoom * 100.0).round() as u32))
+                        .size(12)
+                        .color(tokens.muted),
+                )
+                .center_x(44),
+                self.small_button("+", Message::Zoom(0.1), false),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            row![
+                text("Line width").size(13),
+                space::horizontal(),
+                pick_list(
+                    WritingMeasure::ALL,
+                    Some(self.preferences.writing_measure),
+                    Message::WritingMeasure,
+                )
+                .width(150)
+                .text_size(13)
+                .style(styles::preference_picker(tokens))
+                .menu_style(styles::preference_menu(tokens)),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+            container(typeface_preview)
+                .padding([12, 14])
+                .width(Fill)
+                .style(styles::inset(tokens)),
             checkbox(self.preferences.show_word_count)
                 .label("Show word count")
                 .on_toggle(|value| Message::Chrome(chrome::Message::Preference(
@@ -3392,35 +3495,53 @@ impl App {
                 .size(16)
                 .text_size(13)
                 .style(styles::checkbox_style(tokens)),
-            text("Reading time assumes about 200 words per minute.")
-                .size(11)
-                .color(tokens.muted),
-            space().height(8),
-            text("KEYBOARD SHORTCUTS").size(10).color(tokens.faint),
-            shortcuts
         ]
         .spacing(12)
-        .padding(iced::Padding::new(2.0).right(16.0));
-        container(
-            column![
-                heading,
-                scrollable(body)
-                    .height(Fill)
-                    .style(styles::scrollbar(tokens)),
+    }
+
+    fn keyboard_settings(&self) -> iced::widget::Column<'_, Message> {
+        let tokens = self.resolved_theme.tokens;
+        let mut shortcuts = column![].spacing(10);
+        for (label, keys) in [
+            ("New / Open / Save", "⌘/Ctrl N / O / S"),
+            ("Quick Open", "⌘/Ctrl P"),
+            ("Save as", "⌘/Ctrl Shift S"),
+            ("Find & replace", "⌘/Ctrl F"),
+            ("Bold / Italic", "⌘/Ctrl B / I"),
+            ("Strikethrough", "⌘/Ctrl Shift X"),
+            ("Create / edit link", "⌘/Ctrl K"),
+            ("Toggle current task", "⌘/Ctrl Enter"),
+            ("Create / edit footnote", "⌘/Ctrl Shift N"),
+            ("Table row / column controls", "⌘/Ctrl Shift T"),
+            ("Write / Source", "⌘/Ctrl Shift M"),
+            ("Hide / show sidebars", "⌘/Ctrl Shift F"),
+            ("Previous / next block", "Alt ↑ / ↓"),
+            ("Filter outline", "⌘/Ctrl Shift J"),
+            ("Move section up / down", "⌘/Ctrl Alt ↑ / ↓"),
+            ("Collapse / expand section", "⌘/Ctrl Alt ← / →"),
+            ("Close find or dialog", "Escape"),
+            ("Undo / Redo", "⌘/Ctrl Z / Shift Z"),
+            ("Text size", "⌘/Ctrl + / −"),
+        ] {
+            shortcuts = shortcuts.push(
                 row![
-                    self.small_button("Collaboration…", Message::ShowCollaboration, false),
+                    text(label.to_owned()).size(12).color(tokens.muted),
                     space::horizontal(),
-                    self.small_button("Done", Message::CloseOverlay, true)
+                    text(keys.replace(
+                        "⌘/Ctrl ",
+                        if cfg!(target_os = "macos") {
+                            "⌘ "
+                        } else {
+                            "Ctrl "
+                        }
+                    ))
+                    .size(11)
+                    .color(tokens.muted)
                 ]
-                .align_y(Alignment::Center)
-            ]
-            .spacing(22),
-        )
-        .padding(28)
-        .width(560)
-        .height(height)
-        .style(styles::card(tokens))
-        .into()
+                .spacing(20),
+            );
+        }
+        shortcuts
     }
 
     fn unsaved_view(&self) -> Element<'_, Message> {
@@ -3672,6 +3793,15 @@ fn editor_binding(press: text_editor::KeyPress) -> Option<text_editor::Binding<M
 
 fn event_message(event: Event, status: iced::event::Status, id: window::Id) -> Option<Message> {
     match event {
+        Event::Window(window::Event::Opened { size, .. }) => Some(Message::Chrome(
+            chrome::Message::WindowOpened(id, size.width),
+        )),
+        Event::Window(window::Event::Resized(size)) => {
+            Some(Message::Chrome(chrome::Message::WindowWidth(size.width)))
+        }
+        Event::Window(window::Event::Rescaled(scale)) => {
+            Some(Message::Chrome(chrome::Message::WindowScale(scale)))
+        }
         Event::Window(window::Event::CloseRequested) => Some(Message::CloseRequested(id)),
         Event::Window(window::Event::FileDropped(path)) => Some(Message::Dropped(path)),
         Event::Keyboard(keyboard::Event::KeyPressed {

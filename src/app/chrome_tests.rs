@@ -101,9 +101,14 @@ fn typing_keeps_navigation_visible_with_legacy_fade_preferences() {
             operate(self);
         }
         fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
-            if ["titlebar-files", "titlebar-format", "titlebar-outline"]
-                .iter()
-                .any(|name| id == Some(&widget::Id::from(*name)))
+            if [
+                "titlebar-files",
+                "titlebar-quick-open",
+                "titlebar-format",
+                "titlebar-outline",
+            ]
+            .iter()
+            .any(|name| id == Some(&widget::Id::from(*name)))
             {
                 self.0.push(bounds);
             }
@@ -118,7 +123,7 @@ fn typing_keeps_navigation_visible_with_legacy_fade_preferences() {
         harness.app.chrome.outline.open = true;
         let mut before = Controls::default();
         harness.operate(&mut before);
-        assert_eq!(before.0.len(), 3);
+        assert_eq!(before.0.len(), 4);
         assert!(
             before
                 .0
@@ -159,6 +164,7 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
         let generation = app.session.document.collaboration().generation();
         let native_selection = app.editor.selection();
         for font in [
+            WritingFont::SourceSans3,
             WritingFont::Serif,
             WritingFont::SansSerif,
             WritingFont::Serif,
@@ -622,6 +628,10 @@ impl Harness {
         app.editor_focused = true;
         app.session.selection = reverse_selection(source);
         app.sync_editor();
+        Self::from_app(app, size)
+    }
+
+    fn from_app(app: App, size: Size) -> Self {
         let tree = widget::Tree::new(app.view().as_widget());
         Self {
             app,
@@ -795,6 +805,67 @@ impl Harness {
             messages.push(message);
         }
         messages
+    }
+}
+
+#[test]
+fn typing_keeps_focus_when_the_home_surface_disappears() {
+    let (mut app, _) = App::new();
+    app.workspace.remember_for_preview(&[]);
+    assert!(app.is_home());
+    let mut harness = Harness::from_app(app, Size::new(1180.0, 820.0));
+    harness.focus(EDITOR);
+    assert!(harness.editor().1);
+
+    for text in ["T", "h", "é"] {
+        let key = Key::Character(text.into());
+        let event = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: Some(text.into()),
+            repeat: false,
+        });
+        for message in harness.input(event, mouse::Cursor::Unavailable) {
+            harness.message(message);
+        }
+    }
+
+    assert!(!harness.app.is_home());
+    assert_eq!(harness.app.session.document.source(), "Thé");
+    assert_eq!(harness.app.session.selection, Selection::caret("Thé".len()));
+    assert!(harness.editor().1);
+}
+
+#[test]
+fn write_and_read_share_the_same_writing_column() {
+    #[derive(Default)]
+    struct FirstBlock(Option<Rectangle>);
+    impl widget::Operation for FirstBlock {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+            operate(self);
+        }
+        fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+            if id == Some(&widget::Id::from("block-0")) {
+                self.0 = Some(bounds);
+            }
+        }
+    }
+
+    let source = "# Draft\n\ncafé and 🦀";
+    for size in [Size::new(760.0, 520.0), Size::new(1180.0, 820.0)] {
+        let mut harness = Harness::new(source, EditorMode::Live, size);
+        let writing = harness.editor().0;
+        harness.message(AppMessage::SetMode(EditorMode::Read));
+        let mut first = FirstBlock::default();
+        harness.operate(&mut first);
+        let reading = first.0.expect("Read renders the first block");
+        assert_eq!(
+            (reading.x, reading.y, reading.width),
+            (writing.x, writing.y, writing.width)
+        );
     }
 }
 
@@ -986,12 +1057,25 @@ fn both_sidebars_are_independent_and_narrow_windows_keep_a_usable_writing_column
     assert!(wide.x >= FILES_WIDTH);
     assert!(wide.x + wide.width <= 1180.0 - OUTLINE_WIDTH);
     harness.size = Size::new(760.0, 520.0);
+    harness.message(AppMessage::Chrome(Message::WindowWidth(harness.size.width)));
     let narrow = harness.editor().0;
     assert!(narrow.width >= 400.0);
     harness.message(AppMessage::ToggleSidebar(Sidebar::Outline));
     assert!(harness.app.chrome.files.open);
-    assert!(!harness.app.chrome.outline.open);
-    harness.message(AppMessage::ToggleSidebar(Sidebar::Outline));
+    assert!(harness.app.chrome.outline.open);
+    assert_eq!(harness.app.docked_sidebars(760.0), (false, true));
+    let with_outline = harness.editor().0;
+    assert!(with_outline.width >= 400.0);
+    assert!(with_outline.x + with_outline.width <= 760.0 - OUTLINE_WIDTH);
+    harness.message(AppMessage::ToggleSidebar(Sidebar::Files));
+    assert_eq!(harness.app.docked_sidebars(760.0), (true, false));
+    harness.message(AppMessage::ToggleSidebar(Sidebar::Files));
+    assert_eq!(harness.app.docked_sidebars(760.0), (false, true));
+    harness.message(AppMessage::ToggleSidebar(Sidebar::Files));
+    harness.size = Size::new(1180.0, 820.0);
+    harness.message(AppMessage::Chrome(Message::WindowWidth(harness.size.width)));
+    assert_eq!(harness.app.docked_sidebars(1180.0), (true, true));
+    assert_eq!(harness.editor().0, wide);
     harness.message(AppMessage::HideSidebars);
     assert_eq!(harness.app.docked_sidebars(1180.0), (false, false));
     harness.message(AppMessage::ToggleSearch);
@@ -1004,6 +1088,63 @@ fn both_sidebars_are_independent_and_narrow_windows_keep_a_usable_writing_column
     assert!(!harness.app.session.document.can_undo());
     harness.message(AppMessage::Outline(super::super::outline::Message::Jump(1)));
     assert!(harness.app.chrome.files.open && harness.app.chrome.outline.open);
+}
+
+#[test]
+fn settings_tabs_respond_to_pointer_input() {
+    use super::super::SettingsSection;
+
+    let mut harness = Harness::new("café and 🦀", EditorMode::Live, Size::new(1180.0, 820.0));
+    harness.message(AppMessage::ShowSettings);
+    for (x, section) in [
+        (450.0, SettingsSection::Appearance),
+        (541.0, SettingsSection::Shortcuts),
+        (366.0, SettingsSection::Writing),
+    ] {
+        let point = iced::Point::new(x, 198.0);
+        for event in [
+            mouse::Event::CursorMoved { position: point },
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+        ] {
+            for message in harness.input(Event::Mouse(event), mouse::Cursor::Available(point)) {
+                harness.message(message);
+            }
+        }
+        assert_eq!(harness.app.overlay, Some(Overlay::Settings));
+        assert_eq!(harness.app.settings_section, section);
+    }
+}
+
+#[test]
+fn writing_measure_reflows_the_column_and_preserves_the_source_selection() {
+    use crate::theme::WritingMeasure;
+
+    let mut harness = Harness::new(
+        "# Draft\n\ncafé and 🦀\n\nMore words.",
+        EditorMode::Live,
+        Size::new(1180.0, 820.0),
+    );
+    let before = harness.app.session.selection;
+    let source = harness.app.session.document.source().to_owned();
+    let generation = harness.app.session.document.collaboration().generation();
+    let settings = harness.app.resolved_theme.typography.content_width;
+    for (choice, width) in [
+        (WritingMeasure::Narrow, 520.0),
+        (WritingMeasure::Wide, 720.0),
+        (WritingMeasure::Theme, settings),
+    ] {
+        send(&mut harness.app, AppMessage::WritingMeasure(choice));
+        assert_eq!(harness.editor().0.width, width);
+        assert_eq!(harness.app.session.selection, before);
+        assert_eq!(harness.app.session.document.source(), source);
+        assert_eq!(harness.app.preserve_viewport_generation, Some(generation));
+        let saved = toml::to_string(&harness.app.preferences).unwrap();
+        let restored: Preferences = toml::from_str(&saved).unwrap();
+        assert_eq!(restored.writing_measure, choice);
+    }
+    let legacy: Preferences = toml::from_str("theme = 'Paper'").unwrap();
+    assert_eq!(legacy.writing_measure, WritingMeasure::Theme);
 }
 
 #[test]

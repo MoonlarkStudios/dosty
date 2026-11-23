@@ -53,6 +53,7 @@ pub struct Preferences {
     pub show_word_count: bool,
     pub show_reading_time: bool,
     pub writing_font: crate::theme::WritingFont,
+    pub writing_measure: crate::theme::WritingMeasure,
 }
 
 impl Default for Preferences {
@@ -63,6 +64,7 @@ impl Default for Preferences {
             show_word_count: true,
             show_reading_time: true,
             writing_font: crate::theme::WritingFont::default(),
+            writing_measure: crate::theme::WritingMeasure::default(),
         }
     }
 }
