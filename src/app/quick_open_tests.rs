@@ -247,7 +247,16 @@ async fn search_reaches_every_place_and_choosing_a_place_browses_it() {
         .remember_for_preview(&[essays.to_str().unwrap(), blog.to_str().unwrap()]);
 
     let task = app.update_quick_open(Message::Open);
-    assert_eq!(rows(&app.quick_open), ["Essays>Quiet hours", "Places>Blog"]);
+    assert_eq!(
+        rows(&app.quick_open),
+        [
+            "Essays>Quiet hours".into(),
+            format!(
+                "Projects>Blog@{}",
+                super::super::workspace::project_path(&blog)
+            )
+        ]
+    );
     settle(&mut app, task).await;
     drop(app.update_quick_open(Message::Query("quiet".into())));
     assert_eq!(
@@ -267,7 +276,14 @@ async fn search_reaches_every_place_and_choosing_a_place_browses_it() {
     assert_eq!(app.folder.root(), Some(blog.as_path()));
     assert_eq!(
         rows(&app.quick_open),
-        ["Blog>posts", "About", "Places>Essays"]
+        [
+            "Blog>posts".into(),
+            "About".into(),
+            format!(
+                "Projects>Essays@{}",
+                super::super::workspace::project_path(&essays)
+            ),
+        ]
     );
 
     // A document in another place opens, and its place follows it.

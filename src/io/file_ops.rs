@@ -44,7 +44,7 @@ fn error(message: impl Into<String>) -> FileError {
     FileError::Io(message.into())
 }
 
-fn name(value: &str, document: bool) -> Result<String, FileError> {
+pub(super) fn name(value: &str, document: bool) -> Result<String, FileError> {
     let value = value.trim();
     if value.is_empty()
         || value.starts_with('.')
@@ -107,7 +107,7 @@ fn destination_clear(path: &Path, document: bool) -> Result<(), FileError> {
     Ok(())
 }
 
-fn sync_directory(path: &Path) -> Result<(), FileError> {
+pub(super) fn sync_directory(path: &Path) -> Result<(), FileError> {
     #[cfg(unix)]
     File::open(path)?.sync_all()?;
     #[cfg(not(unix))]

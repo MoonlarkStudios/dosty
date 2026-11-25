@@ -1,176 +1,400 @@
-//! The home surface: what a launch shows when there is nothing to resume.
-//!
-//! It sits on the pristine first page rather than replacing it. The editor
-//! keeps focus, so typing starts a document and the surface is gone.
+//! Welcome at startup and while a document is still open.
 
-use iced::widget::{button, column, container, row, space, text};
-use iced::{Alignment, Element, Fill};
+use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer, widget};
+use iced::widget::{button, column, container, row, scrollable, space, text, tooltip};
+use iced::{
+    Alignment, Element, Event, Fill, Length, Rectangle, Renderer, Size, Theme, Vector, event,
+    window,
+};
 
-use super::trail::Direction;
-use super::{App, EditorMode, Message, WRITING_PAGE_PADDING, folder, quick_open, workspace};
-use crate::editor::file_tree;
+use super::{App, Message, chrome, folder, projects, quick_open, workspace};
+use crate::app::{
+    brand,
+    icon::{self, Icon},
+};
 use crate::theme::styles::{self, Button};
 
-const MAX_RECENT: usize = 5;
-/// Rows extend this far past the writing column on each side, so their labels
-/// line up with the page's text while their hover surface has room around it.
-const INSET: f32 = 10.0;
+const MAX_RECENT: usize = 4;
 
-impl App {
-    /// Whether the page is still the untouched one the window opened with, and
-    /// nothing is on its way to replace it.
-    pub(super) fn is_home(&self) -> bool {
-        self.mode == EditorMode::Live
-            && self.session.path.is_none()
-            && !self.session.dirty
-            && self.session.document.source().is_empty()
-            && !self.trail.can_step(Direction::Back)
-            && !self.trail.can_step(Direction::Forward)
-            && !self.busy
-            && !self.loading
-            && self.workspace.settled()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Page {
+    Startup,
+    Document,
+    Welcome,
+}
+
+/// Keep both widget trees so returning to the document retains the editor's
+/// viewport, wrap affinity, and focus. Only the visible page participates in
+/// layout, input, and widget operations.
+pub(super) struct Pages<'a> {
+    visible: Element<'a, Message>,
+    slot: usize,
+}
+
+impl<'a> Pages<'a> {
+    pub(super) fn view(visible: Element<'a, Message>, welcome: bool) -> Element<'a, Message> {
+        Element::new(Self {
+            visible,
+            slot: usize::from(welcome),
+        })
+    }
+}
+
+impl Widget<Message, Theme, Renderer> for Pages<'_> {
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<Pages<'static>>()
     }
 
-    pub(super) fn home_view(&self) -> Element<'_, Message> {
+    fn children(&self) -> Vec<widget::Tree> {
+        let mut children = vec![widget::Tree::empty(), widget::Tree::empty()];
+        children[self.slot] = widget::Tree::new(self.visible.as_widget());
+        children
+    }
+
+    fn diff(&self, tree: &mut widget::Tree) {
+        tree.children[self.slot].diff(self.visible.as_widget());
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.visible.as_widget().size()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.visible
+            .as_widget_mut()
+            .layout(&mut tree.children[self.slot], renderer, limits)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.visible.as_widget_mut().operate(
+            &mut tree.children[self.slot],
+            layout,
+            renderer,
+            operation,
+        );
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.visible.as_widget_mut().update(
+            &mut tree.children[self.slot],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.visible.as_widget().draw(
+            &tree.children[self.slot],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.visible.as_widget().mouse_interaction(
+            &tree.children[self.slot],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        self.visible.as_widget_mut().overlay(
+            &mut tree.children[self.slot],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+/// Keep app shortcuts available on Welcome. Document shortcuts belong to the editor.
+pub(super) fn event_message(
+    event: Event,
+    status: event::Status,
+    id: window::Id,
+) -> Option<Message> {
+    let keyboard = matches!(event, Event::Keyboard(_));
+    let message = super::event_message(event, status, id)?;
+    (!keyboard
+        || matches!(
+            message,
+            Message::New
+                | Message::Open
+                | Message::CloseOverlay
+                | Message::ShowSettings
+                | Message::QuickOpen(quick_open::Message::Open)
+                | Message::Folder(folder::Message::Pick)
+                | Message::Chrome(chrome::Message::Menu(chrome::Menu::File))
+        ))
+    .then_some(message)
+}
+
+impl App {
+    pub(super) fn is_home(&self) -> bool {
+        self.page != Page::Document
+    }
+
+    pub(super) fn return_to_document(&mut self) -> bool {
+        if self.page != Page::Welcome {
+            return false;
+        }
+        self.page = Page::Document;
+        true
+    }
+
+    pub(super) fn home_view(&self, size: Size) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
-        let heading = |label: &'static str| {
-            container(text(label).size(11).color(tokens.muted)).padding([0.0, INSET])
+        let ready = !self.busy && !self.loading;
+        let shortcut = |mac, other| {
+            if cfg!(target_os = "macos") {
+                mac
+            } else {
+                other
+            }
         };
-        let choice = |title: String, location: String, message: Message| {
+        let action = |label, key, kind, message, style| {
+            let foreground = if matches!(style, Button::Primary) {
+                tokens.on_accent
+            } else {
+                tokens.muted
+            };
             button(
                 row![
-                    text(title).size(14).wrapping(text::Wrapping::None),
+                    icon::sized(kind, foreground, 17.0),
+                    text(label).size(14),
                     space::horizontal(),
-                    text(location)
-                        .size(12)
-                        .color(tokens.muted)
-                        .wrapping(text::Wrapping::None),
+                    text(key).size(12).color(foreground),
                 ]
-                .spacing(16)
+                .spacing(10)
                 .align_y(Alignment::Center),
             )
-            .padding([7.0, INSET])
+            .padding([11, 13])
             .width(Fill)
-            .on_press(message)
-            .style(styles::button_style(tokens, Button::Quiet))
+            .on_press_maybe(ready.then_some(message))
+            .style(styles::button_style(tokens, style))
         };
-        // The empty page already invites writing; this only offers the way back.
-        let mut content = column![].spacing(4).width(Fill);
-
-        let recent: Vec<_> = self
-            .workspace
-            .recent_documents()
-            .into_iter()
-            .filter(|path| self.folder.has_file(path))
-            .take(MAX_RECENT)
-            .collect();
-        if !recent.is_empty() {
-            content = content.push(heading("Recent"));
-        }
-        for path in recent {
-            let location = path.parent().map(folder::name).unwrap_or_default();
-            content = content.push(choice(
-                folder::title(&path),
-                location,
-                Message::Folder(folder::Message::Tree(file_tree::Action::Open(path))),
+        let returning = self.page == Page::Welcome;
+        let mut documents = column![text("Documents").size(17)].spacing(9).width(Fill);
+        if returning {
+            documents = documents.push(action(
+                "Return to Document",
+                "Esc",
+                Icon::Document,
+                Message::ReturnToDocument,
+                Button::Primary,
             ));
         }
+        documents = documents
+            .push(action(
+                "New Document",
+                shortcut("⌘N", "Ctrl+N"),
+                Icon::Plus,
+                Message::New,
+                if returning {
+                    Button::Quiet
+                } else {
+                    Button::Primary
+                },
+            ))
+            .push(action(
+                "Open Markdown File…",
+                shortcut("⌘O", "Ctrl+O"),
+                Icon::Document,
+                Message::Open,
+                Button::Quiet,
+            ));
 
-        let places = self.workspace.places();
-        if places.is_empty() {
-            content = content.push(
-                container(
-                    text("Add a place to keep your writing within reach.")
-                        .size(14)
-                        .color(tokens.muted),
-                )
-                .padding([0.0, INSET]),
+        let project_button = |label, message, style| {
+            button(text(label).size(13))
+                .padding([8, 11])
+                .on_press_maybe(ready.then_some(message))
+                .style(styles::button_style(tokens, style))
+        };
+        let project_actions = row![
+            project_button(
+                "Open Project…",
+                Message::Folder(folder::Message::Pick),
+                Button::Selected
+            ),
+            project_button(
+                "New Project…",
+                Message::Project(projects::Message::New),
+                Button::Quiet
+            ),
+        ]
+        .spacing(6);
+        let mut project_list = column![text("Projects").size(17)].spacing(9).width(Fill);
+        if self.workspace.places().is_empty() {
+            project_list = project_list.push(
+                text("Keep related Markdown files together in a folder.")
+                    .size(13)
+                    .color(tokens.muted),
             );
-        } else {
-            content = content.push(space().height(18)).push(heading("Places"));
         }
-        for (index, place) in places.iter().enumerate() {
-            let open = self.folder.root() == Some(place.as_path());
-            content = content.push(choice(
-                workspace::place_label(place, places),
-                if open { "Open".into() } else { String::new() },
-                Message::Workspace(workspace::Message::OpenPlace(index)),
-            ));
+        project_list = project_list.push(project_actions);
+        if !self.workspace.places().is_empty() {
+            project_list = project_list.push(text("Recent projects").size(12).color(tokens.muted));
+            for (index, project) in self.workspace.recent_projects().take(MAX_RECENT) {
+                let path = workspace::project_path(project);
+                let label = container(
+                    column![
+                        text(self.workspace.project_name(project))
+                            .size(14)
+                            .wrapping(text::Wrapping::None),
+                        text(path.clone())
+                            .size(11)
+                            .color(tokens.muted)
+                            .wrapping(text::Wrapping::None),
+                    ]
+                    .spacing(3),
+                )
+                .clip(true)
+                .width(Fill);
+                let open = button(
+                    row![
+                        icon::sized(Icon::Folder, tokens.muted, 16.0),
+                        label,
+                        icon::sized(Icon::ChevronRight, tokens.muted, 12.0),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                )
+                .padding([7, 9])
+                .width(Fill)
+                .on_press_maybe(
+                    ready.then_some(Message::Workspace(workspace::Message::OpenPlace(index))),
+                )
+                .style(styles::button_style(tokens, Button::Quiet));
+                project_list = project_list.push(tooltip(
+                    open,
+                    container(text(path).size(12))
+                        .padding(8)
+                        .style(styles::context_menu(tokens)),
+                    tooltip::Position::Bottom,
+                ));
+            }
         }
-
-        content = content.push(space().height(18)).push(
+        let projects = container(project_list)
+            .padding(18)
+            .width(Fill)
+            .style(styles::card(tokens));
+        let sections: Element<'_, Message> = if size.width >= 700.0 {
             row![
-                self.small_button("Add place…", Message::Folder(folder::Message::Pick), false),
-                self.small_button("Open file…", Message::Open, false),
-                self.small_button(
-                    "Quick Open",
-                    Message::QuickOpen(quick_open::Message::Open),
-                    false
-                ),
+                container(documents).width(iced::Length::FillPortion(5)),
+                projects.width(iced::Length::FillPortion(6)),
             ]
-            .spacing(8),
-        );
-        // Leave the first lines of the page, and its caret, clear.
-        container(
-            column![space().height(112), content].max_width(self.writing_width() + 2.0 * INSET),
-        )
-        .padding(WRITING_PAGE_PADDING)
-        .center_x(Fill)
+            .spacing(32)
+            .align_y(Alignment::Start)
+            .into()
+        } else {
+            column![documents, projects].spacing(24).into()
+        };
+        let mut contents = column![brand::view(tokens)].spacing(18);
+        if self.page == Page::Startup && (!self.workspace.settled() || self.loading) {
+            contents = contents.push(text("Opening Dosty…").size(20).color(tokens.muted));
+        } else {
+            contents = contents.push(text("Welcome").size(38)).push(sections);
+        }
+        let page = container(contents.width(Fill))
+            .max_width(922)
+            .padding(iced::Padding::new(32.0).top(if size.height >= 700.0 { 82.0 } else { 38.0 }))
+            .width(Fill);
+        column![
+            self.home_titlebar(),
+            scrollable(container(page).center_x(Fill))
+                .height(Fill)
+                .style(styles::scrollbar(tokens)),
+        ]
+        .height(Fill)
         .into()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use iced::widget::text_editor::{Action, Edit};
-
-    use super::super::{App, EditorMode, Message};
+    use super::super::{App, Message};
     use crate::io::storage::LoadedFile;
 
-    fn launched() -> App {
-        let (mut app, _task) = App::new();
-        assert!(!app.is_home(), "nothing shows until the library is read");
+    #[test]
+    fn new_document_exits_welcome_even_when_the_draft_is_empty() {
+        let (mut app, _) = App::new();
         app.workspace.remember_for_preview(&[]);
-        app
-    }
-
-    #[test]
-    fn home_is_the_untouched_launch_page_and_ends_with_the_first_keystroke() {
-        let mut app = launched();
         assert!(app.is_home());
+        assert_eq!(app.title(), "Dosty");
         drop(app.update(Message::New));
-        assert!(
-            app.is_home(),
-            "a new page over a pristine one is still home"
-        );
-        for mode in [EditorMode::Source, EditorMode::Read] {
-            app.mode = mode;
-            assert!(!app.is_home());
-        }
-        app.mode = EditorMode::Live;
-        app.loading = true;
-        assert!(!app.is_home(), "a document is on its way");
-        app.loading = false;
-
-        drop(app.update(Message::Edit(Action::Edit(Edit::Insert('a')))));
         assert!(!app.is_home());
-        drop(app.update(Message::Undo));
-        assert!(
-            !app.is_home(),
-            "writing that was undone is still a document"
-        );
+        assert!(app.session.document.source().is_empty());
+        assert!(app.title().starts_with("Untitled.md"));
     }
 
     #[test]
-    fn a_blank_page_after_visiting_a_document_is_not_home() {
-        let mut app = launched();
-        drop(app.update(Message::Loaded(Ok(LoadedFile {
+    fn opening_a_file_exits_welcome_and_new_document_stays_in_the_editor() {
+        let (mut app, _) = App::new();
+        app.workspace.remember_for_preview(&[]);
+        drop(app.update(Message::LoadedStandalone(Ok(LoadedFile {
             path: "/writing/note.md".into(),
             source: "Note".into(),
             collaboration: None,
         }))));
         assert!(!app.is_home());
         drop(app.update(Message::New));
-        assert!(!app.is_home(), "the writer asked for a page, not for home");
+        assert!(!app.is_home());
     }
 }

@@ -107,10 +107,12 @@ impl App {
             Message::Complete(result) => return self.finish_folder_search(result),
             Message::Opened(result) => {
                 return match result {
-                    Ok((file, range)) => {
-                        self.complete_document_load(Ok(file), Some(OpenPosition::Search(range)))
-                    }
-                    Err(error) => self.complete_document_load(Err(error), None),
+                    Ok((file, range)) => self.complete_document_load(
+                        Ok(file),
+                        Some(OpenPosition::Search(range)),
+                        true,
+                    ),
+                    Err(error) => self.complete_document_load(Err(error), None, true),
                 };
             }
             Message::Open => return self.show_folder_search(),
@@ -342,7 +344,7 @@ impl App {
             let Some(parked) = self.background.take_unsaved(id) else {
                 return Task::none();
             };
-            return self.resume_at(parked, Some(OpenPosition::Search(range)));
+            return self.resume_at(parked, Some(OpenPosition::Search(range)), true);
         }
         self.busy = true;
         self.loading = true;
@@ -352,6 +354,7 @@ impl App {
     }
 
     pub(super) fn jump_to_folder_match(&mut self, range: Range<usize>) -> Task<AppMessage> {
+        self.return_to_document();
         self.session.document.break_history_group();
         self.preserve_viewport_generation = None;
         self.editor_focused = true;

@@ -726,6 +726,11 @@ impl Harness {
     }
 
     fn editor(&mut self) -> (Rectangle, bool) {
+        self.editor_bounds()
+            .expect("the native editor must be in the view")
+    }
+
+    fn editor_bounds(&mut self) -> Option<(Rectangle, bool)> {
         #[derive(Default)]
         struct Probe(Option<(Rectangle, bool)>);
         impl widget::Operation for Probe {
@@ -745,7 +750,7 @@ impl Harness {
         }
         let mut probe = Probe::default();
         self.operate(&mut probe);
-        probe.0.expect("the native editor must remain in the view")
+        probe.0
     }
 
     fn key(&mut self, key: Key, modifiers: keyboard::Modifiers) {
@@ -799,6 +804,7 @@ impl Harness {
         let route = match self.app.overlay {
             Some(Overlay::Chrome) => super::event_message,
             Some(Overlay::Folder) => folder::event_message,
+            None if self.app.is_home() => super::super::home::event_message,
             _ => event_message,
         };
         if let Some(message) = route(event, status, iced::window::Id::unique()) {
@@ -809,12 +815,17 @@ impl Harness {
 }
 
 #[test]
-fn typing_keeps_focus_when_the_home_surface_disappears() {
+fn welcome_has_no_editor_and_the_new_document_shortcut_focuses_the_draft() {
     let (mut app, _) = App::new();
     app.workspace.remember_for_preview(&[]);
     assert!(app.is_home());
     let mut harness = Harness::from_app(app, Size::new(1180.0, 820.0));
-    harness.focus(EDITOR);
+    assert!(harness.editor_bounds().is_none());
+    harness.key(Key::Character("x".into()), keyboard::Modifiers::empty());
+    assert!(harness.app.is_home());
+    assert!(harness.app.session.document.source().is_empty());
+    harness.key(Key::Character("n".into()), keyboard::Modifiers::COMMAND);
+    assert!(!harness.app.is_home());
     assert!(harness.editor().1);
 
     for text in ["T", "h", "é"] {
@@ -837,6 +848,65 @@ fn typing_keeps_focus_when_the_home_surface_disappears() {
     assert_eq!(harness.app.session.document.source(), "Thé");
     assert_eq!(harness.app.session.selection, Selection::caret("Thé".len()));
     assert!(harness.editor().1);
+}
+
+#[test]
+fn returning_from_welcome_preserves_the_open_draft_and_its_viewport() {
+    use crate::editor::rich_editor::RichEditor;
+
+    fn editor_tree(tree: &widget::Tree, tag: widget::tree::Tag) -> Option<&widget::Tree> {
+        if tree.tag == tag {
+            return Some(tree);
+        }
+        tree.children
+            .iter()
+            .find_map(|child| editor_tree(child, tag))
+    }
+
+    let source = "café and 🦀\n\n".repeat(160);
+    let mut harness = Harness::new(&source, EditorMode::Live, Size::new(1180.0, 820.0));
+    harness.app.workspace.remember_for_preview(&[]);
+    harness.message(AppMessage::Format(Format::Bold));
+    assert!(harness.app.session.dirty);
+    let draft = harness.app.session.document.source().to_owned();
+    let selection = harness.app.session.selection;
+    let session = harness.app.session.id();
+    let (bounds, _) = harness.editor();
+    let event = Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Lines { x: 0.0, y: -24.0 },
+    });
+    for message in harness.input(event, mouse::Cursor::Available(bounds.center())) {
+        harness.message(message);
+    }
+    let tag = harness.app.editor_view(false).as_widget().tag();
+    let scroll = RichEditor::intent_stats(editor_tree(&harness.tree, tag).unwrap()).0;
+    assert!(scroll > 0.0);
+
+    harness.message(AppMessage::Chrome(Message::Menu(Menu::File)));
+    let welcome = harness
+        .app
+        .chrome_commands(Menu::File)
+        .into_iter()
+        .filter(|command| command.enabled)
+        .position(|command| command.label == "Welcome")
+        .unwrap();
+    harness.message(AppMessage::Chrome(Message::Step(welcome as i32)));
+    harness.message(AppMessage::Chrome(Message::Accept));
+    assert!(harness.app.is_home());
+    assert!(harness.editor_bounds().is_none());
+    harness.key(Key::Character("x".into()), keyboard::Modifiers::empty());
+    assert_eq!(harness.app.session.document.source(), draft);
+
+    harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
+    assert!(!harness.app.is_home());
+    assert!(harness.editor().1);
+    assert_eq!(harness.app.session.id(), session);
+    assert_eq!(harness.app.session.selection, selection);
+    assert!(harness.app.session.dirty);
+    let after = RichEditor::intent_stats(editor_tree(&harness.tree, tag).unwrap()).0;
+    assert!((after - scroll).abs() < 0.01);
+    harness.message(AppMessage::Undo);
+    assert_eq!(harness.app.session.document.source(), source);
 }
 
 #[test]
@@ -1513,10 +1583,10 @@ fn native_titlebar_menu_keyboard_choices_stay_visible_in_a_short_window() {
         harness.key(Key::Named(key::Named::Escape), keyboard::Modifiers::empty());
         assert!(harness.app.overlay.is_none());
 
-        harness.message(AppMessage::Chrome(Message::Menu(Menu::Document)));
+        harness.message(AppMessage::Chrome(Message::Menu(Menu::Mode)));
         let source_index = harness
             .app
-            .chrome_commands(Menu::Document)
+            .chrome_commands(Menu::Mode)
             .iter()
             .filter(|command| command.enabled)
             .position(|command| command.label == "Source")

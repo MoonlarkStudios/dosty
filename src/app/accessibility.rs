@@ -112,6 +112,7 @@ impl App {
             return Task::none();
         }
         let title = self.title();
+        let document_visible = !self.is_home();
         let Some(state) = self.accessibility.as_mut() else {
             return Task::none();
         };
@@ -124,7 +125,8 @@ impl App {
         {
             state.composition = None;
         }
-        let enabled = self.mode == EditorMode::Source
+        let enabled = document_visible
+            && self.mode == EditorMode::Source
             && !self.loading
             && self.overlay.is_none()
             && state.composition.is_none();
@@ -193,7 +195,8 @@ impl App {
     pub(super) fn accessibility_action(&mut self, request: ActionRequest) -> Task<Message> {
         // Recheck current state as well as the snapshot: native requests arrive
         // asynchronously and must obey the same modal/loading guards as input.
-        if self.mode != EditorMode::Source
+        if self.is_home()
+            || self.mode != EditorMode::Source
             || self.loading
             || self.overlay.is_some()
             || self

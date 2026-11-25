@@ -124,12 +124,12 @@ Saving captures a source/state snapshot; subsequent edits remain dirty.
 
 Application chrome owns independent Files/Outline panel states and a
 Hide Sidebars override. Files occupies the left edge whenever it is open, with
-or without a place, and shows the tree only after a scan succeeds; Outline occupies the right. Its inline heading filter retains document order, ancestor context,
+or without a project, and shows the tree once a scan succeeds. Outline occupies the right. Its inline heading filter retains document order, ancestor context,
 and fold state without creating an application overlay.
 Responsive layout docks open panels while preserving a usable writing column,
-then uses overlays when space is limited. Formatting is transient. Editing modes
-live in document actions. The fixed-height titlebar keeps navigation, document
-identity, and the snapshot-aware save indicator continuously visible.
+then prioritizes one dock when space is limited. Formatting is transient. The
+fixed-height titlebar keeps navigation, document identity, editing mode, and the
+snapshot-aware save indicator visible.
 Configurable statistics occupy a small fixed-height gutter below the writing
 column. Presentation changes retain source selection and viewport anchoring. Shared sidebar metrics
 and semantic surfaces keep the canvas file tree and widget outline consistent.
@@ -147,8 +147,8 @@ without adding a second source mutation path. Other platforms retain the
 in-window command menu. The macOS content extends into the transparent native
 titlebar while retaining system window buttons.
 
-Startup creates one blank document, then reopens the last place unless a
-document or folder argument was given. Preferences retain appearance, independent
+Startup creates one blank document and reopens the last project on a normal
+launch. Explicit file opens use the standalone load path. Preferences retain appearance, independent
 statistics visibility, and writing typeface. The typeface is applied to the stored
 resolved typography on startup, appearance changes, and preference changes;
 layout/cache metrics include it so text is reshaped on a switch.
@@ -171,15 +171,20 @@ folder state's document accessors exclude them, so opening, reopening, and
 switching never treat one as text. `app/image_preview.rs` loads a single image
 through the image store's bounded reader without entering the per-document cache,
 which is rebuilt from the projection on every update.
-Only closing the window raises the unsaved guard. `app/home.rs` derives the home
-surface from that state rather than storing a flag: it shows on an untouched,
-unsaved page with no trail in either direction, once the library has settled.
+Only closing the window raises the unsaved guard. `app/home.rs` renders Welcome
+at startup and on request from an open document. Workspace restoration settles
+before the startup actions appear. When Welcome is reopened, its view preserves
+the document's widget tree and limits layout, input, and widget operations to the
+visible page. The document keeps its session and viewport until the writer
+returns or opens another document.
 
-`app/workspace.rs` owns the library of places and the open place's remembered
-state; `io/workspace_state.rs` stores them in the data directory. Places are an
-explicit, bounded, ordered list rather than a recency list, and the open place
-follows the document on the page. A successful scan of a new root adopts it as the current
-workspace and applies state read before the scan. Replacing a document first
+`app/projects.rs` owns explicit setup. `io/project.rs` reads bounded portable
+metadata and publishes a new `.dosty/project.toml` without overwriting an existing
+manifest. `app/workspace.rs` owns the remembered projects and the active
+workspace. `io/workspace_state.rs` stores personal session state and project
+recency in the per-user data directory. Existing registries remain readable.
+A successful scan adopts the new root and applies its remembered state.
+Replacing a document first
 records the outgoing selection; loading one restores its clamped selection through
 the ordinary sync path. Writes coalesce so an older snapshot cannot land after a
 newer one, wait for the stored registry so an early write cannot erase it, and
@@ -188,12 +193,12 @@ failures are logged, never shown, and every remembered path is revalidated again
 the current scan before use.
 
 Quick Open is the switcher. It derives its rows when it opens from the open
-place's bounded snapshot, the background documents, and the library, and scans
-the other places on a cancellable worker task whose results it ignores once
+project's bounded snapshot, the background documents, and the registry, and scans
+the other projects on a cancellable worker task whose results it ignores once
 closed or superseded. Its focused query intercepts row navigation locally.
-Acceptance reuses file loading, background resumption, or place opening;
+Acceptance reuses file loading, background resumption, or project opening;
 cancellation restores the previous widget focus without committing a table draft
-or editing the source. Closing discards its index, query, and running scan. Heading queries reuse the current Outline. Per-place pins live
+or editing the source. Closing discards its index, query, and running scan. Heading queries reuse the current Outline. Project pins live
 in the remembered workspace state and follow checked file moves.
 
 The folder workflow owns navigation, expanded paths, bounded scan generations,

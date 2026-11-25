@@ -277,7 +277,7 @@ impl State {
         self.navigation
     }
 
-    fn cancel_scan(&mut self) {
+    pub(super) fn cancel_scan(&mut self) {
         if let Some(cancel) = self.cancel.take() {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -406,7 +406,7 @@ impl App {
                     Err(error) => {
                         let error = error.to_string();
                         self.folder.error = Some(error.clone());
-                        if self.folder.root.is_none() {
+                        if self.workspace_scan_failed() || self.folder.root.is_none() {
                             self.notification = Some(error);
                         }
                     }
@@ -422,7 +422,7 @@ impl App {
                     return Task::none();
                 }
                 if let Some(path) = path {
-                    return self.open_workspace(path);
+                    return self.update_projects(super::projects::Message::SetUp(path));
                 }
                 return Task::none();
             }
@@ -441,12 +441,13 @@ impl App {
                     Ok(PathKind::Directory) => return self.open_workspace(path),
                     Ok(PathKind::File) if !self.busy => {
                         if self.session.path.as_ref() == Some(&path) {
+                            self.return_to_document();
                             return Task::none();
                         }
                         if !self.commit_cell() {
                             return Task::none();
                         }
-                        return self.request(Pending::Open(Some(path)));
+                        return self.request(Pending::Standalone(path));
                     }
                     Ok(PathKind::File) => {
                         self.notification = Some(
@@ -535,6 +536,7 @@ impl App {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
+                            .set_title("Open Project")
                             .pick_folder()
                             .await
                             .map(|file| file.path().to_owned())
@@ -820,6 +822,9 @@ impl App {
     }
 
     pub(super) fn folder_refresh(&mut self) -> Task<AppMessage> {
+        if self.workspace.is_opening() {
+            return Task::none();
+        }
         self.folder
             .root
             .clone()
@@ -1207,11 +1212,11 @@ impl App {
                 .push(
                     container(
                         column![
-                            text("Add a place to see its folders and documents here.")
+                            text("Open a project to see its folders and documents here.")
                                 .size(12)
                                 .color(tokens.muted),
                             self.small_button(
-                                "Add place…",
+                                "Open Project…",
                                 AppMessage::Folder(Message::Pick),
                                 false
                             ),
@@ -1524,7 +1529,7 @@ impl App {
                 if root {
                     actions.extend([
                         ("Refresh folder", Message::Refresh),
-                        ("Remove from library", Message::Remove),
+                        ("Remove from Projects", Message::Remove),
                     ]);
                 }
                 actions

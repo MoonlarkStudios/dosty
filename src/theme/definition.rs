@@ -399,8 +399,12 @@ mod tests {
     #[test]
     fn rejects_invalid_colors_unknown_fields_and_unsafe_metrics() {
         let paper = include_str!("../../themes/paper.toml");
+        let canvas = paper
+            .lines()
+            .find(|line| line.starts_with("canvas = "))
+            .unwrap();
         for malformed in [
-            paper.replace("#F3EFE4", "red"),
+            paper.replace(canvas, "canvas = \"red\""),
             paper.replace("body_size = 17", "body_size = 900"),
             paper.replace("canvas =", "typo ="),
         ] {

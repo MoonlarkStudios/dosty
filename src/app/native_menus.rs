@@ -1,6 +1,5 @@
 //! Main-thread macOS menus. Commands return through the application's guarded paths.
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use iced::futures::StreamExt;
@@ -10,8 +9,7 @@ use muda::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuI
 
 use super::trail::Direction;
 use super::{
-    App, EditorMode, Format, Message, Overlay, Sidebar, chrome, folder, recovery, workspace,
-    writing,
+    App, EditorMode, Format, Message, Overlay, Sidebar, chrome, folder, projects, recovery, writing,
 };
 use crate::editor::menu_input;
 use crate::theme::WritingFont;
@@ -19,11 +17,13 @@ use crate::theme::WritingFont;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     New,
+    Welcome,
     Open,
     QuickOpen,
     Step(Direction),
     OpenFolder,
-    OpenPlace(usize),
+    NewProject,
+    Projects,
     Save,
     SaveAs,
     Rename,
@@ -46,7 +46,6 @@ pub enum Command {
     Preference(chrome::Preference),
     WritingFont(WritingFont),
     Settings,
-    Welcome,
     Guide,
     Sample,
     Recovery,
@@ -85,12 +84,6 @@ pub(super) struct State {
     help: Submenu,
     entries: Vec<Entry>,
     hidden: bool,
-    /// File → Open Recent is rebuilt from fixed command items whenever the
-    /// remembered folders change, so menu identifiers stay stable.
-    places: Submenu,
-    place_items: Vec<MenuItem>,
-    places_empty: MenuItem,
-    places_shown: Option<Vec<PathBuf>>,
 }
 
 impl State {
@@ -127,35 +120,13 @@ impl State {
 
     fn new() -> muda::Result<(Self, Task<Message>)> {
         let root = Menu::new();
-        let command_item = |command: Command, label: &str| {
-            MenuItem::with_id(format!("dosty.{command:?}"), label, true, None)
-        };
         let mut state = Self {
             root,
             window: Submenu::new("Window", true),
             help: Submenu::new("Help", true),
             entries: Vec::new(),
             hidden: false,
-            places: Submenu::new("Places", true),
-            place_items: (0..crate::io::workspace_state::MAX_PLACES)
-                .map(|index| command_item(Command::OpenPlace(index), ""))
-                .collect(),
-            places_empty: MenuItem::new("No Places Yet", false, None),
-            places_shown: None,
         };
-        let place_entries: Vec<_> = state
-            .place_items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| (Command::OpenPlace(index), item.clone()))
-            .collect();
-        state
-            .entries
-            .extend(place_entries.into_iter().map(|(command, item)| Entry {
-                command,
-                item: Item::Action(item),
-                enabled: true,
-            }));
         let application = Submenu::new("Dosty", true);
         application.append(&PredefinedMenuItem::about(
             Some("About Dosty"),
@@ -194,15 +165,16 @@ impl State {
         let file = Submenu::new("File", true);
         for (label, command, shortcut) in [
             ("New Document", Command::New, Some("Meta+n")),
-            ("Open…", Command::Open, Some("Meta+o")),
+            ("Open Markdown File…", Command::Open, Some("Meta+o")),
             ("Quick Open…", Command::QuickOpen, Some("Meta+p")),
             ("Back", Command::Step(Direction::Back), Some("Meta+[")),
             ("Forward", Command::Step(Direction::Forward), Some("Meta+]")),
-            ("Add Place…", Command::OpenFolder, Some("Meta+Shift+o")),
+            ("Open Project…", Command::OpenFolder, Some("Meta+Shift+o")),
+            ("New Project…", Command::NewProject, None),
+            ("Projects…", Command::Projects, None),
         ] {
             state.add(&file, label, command, shortcut, false)?;
         }
-        file.append(&state.places)?;
         for (label, command, shortcut) in [
             ("Save", Command::Save, Some("Meta+s")),
             ("Save As…", Command::SaveAs, Some("Meta+Shift+s")),
@@ -219,13 +191,6 @@ impl State {
             state.add(&document, label, command, None, false)?;
         }
         document.append(&PredefinedMenuItem::separator())?;
-        for (label, mode) in [
-            ("Write", EditorMode::Live),
-            ("Source", EditorMode::Source),
-            ("Read", EditorMode::Read),
-        ] {
-            state.add(&document, label, Command::Mode(mode), None, true)?;
-        }
         state.add(&document, "Undo File Move", Command::UndoMove, None, false)?;
         state.add(
             &document,
@@ -286,6 +251,16 @@ impl State {
         state.root.append(&format)?;
 
         let view = Submenu::new("View", true);
+        state.add(&view, "Welcome", Command::Welcome, None, false)?;
+        view.append(&PredefinedMenuItem::separator())?;
+        for (label, mode) in [
+            ("Write", EditorMode::Live),
+            ("Source", EditorMode::Source),
+            ("Read", EditorMode::Read),
+        ] {
+            state.add(&view, label, Command::Mode(mode), None, true)?;
+        }
+        view.append(&PredefinedMenuItem::separator())?;
         for (label, command, shortcut, check) in [
             ("Files", Command::Files, Some("Meta+Shift+b"), true),
             ("Outline", Command::Outline, Some("Meta+Alt+o"), true),
@@ -345,7 +320,6 @@ impl State {
         state.root.append(&window)?;
         let help = state.help.clone();
         for (label, command) in [
-            ("Welcome", Command::Welcome),
             ("Markdown Guide", Command::Guide),
             ("The Quiet Hour", Command::Sample),
             ("Recovery Copies…", Command::Recovery),
@@ -373,30 +347,7 @@ impl State {
         ))
     }
 
-    fn sync_places(&mut self, places: &[PathBuf]) {
-        if self.places_shown.as_deref() == Some(places) {
-            return;
-        }
-        while self.places.remove_at(0).is_some() {}
-        let result = if places.is_empty() {
-            self.places.append(&self.places_empty)
-        } else {
-            self.place_items
-                .iter()
-                .zip(places)
-                .try_for_each(|(item, root)| {
-                    item.set_text(workspace::place_label(root, places));
-                    self.places.append(item)
-                })
-        };
-        if let Err(error) = result {
-            tracing::warn!("could not update Places: {error}");
-        }
-        self.places_shown = Some(places.to_vec());
-    }
-
     fn sync(&mut self, app: &App) {
-        self.sync_places(app.workspace.places());
         for entry in &mut self.entries {
             let (enabled, checked) = availability(app, entry.command);
             if enabled != entry.enabled {
@@ -425,31 +376,45 @@ impl State {
 
 fn availability(app: &App, command: Command) -> (bool, bool) {
     let ready = !app.busy && !app.loading && matches!(app.overlay, None | Some(Overlay::Chrome));
+    let document_ready = ready && !app.is_home();
     match command {
         Command::QuickOpen => (ready, false),
+        Command::Welcome => (document_ready, false),
         Command::FindInFolder => (ready && app.folder.root().is_some(), false),
         Command::Step(direction) => (ready && app.trail.can_step(direction), false),
-        Command::OpenPlace(index) => (ready && index < app.workspace.places().len(), false),
         Command::Edit(action) => (app.edit_command_enabled(action), false),
-        Command::Mode(mode) => (ready, app.mode == mode),
-        Command::Format(_) | Command::Image => (ready && app.mode != EditorMode::Read, false),
+        Command::Mode(mode) => (document_ready, !app.is_home() && app.mode == mode),
+        Command::Format(_) | Command::Image => {
+            (document_ready && app.mode != EditorMode::Read, false)
+        }
         // A never-saved document can be named, but has no file to move or show.
-        Command::Rename => (ready, false),
-        Command::Move | Command::Location => (ready && app.session.path.is_some(), false),
-        Command::UndoMove => (ready && app.folder.can_undo(), false),
-        Command::BackToReference => (ready && app.footnotes.can_return(), false),
-        Command::Files => (ready, app.docked_sidebars(app.chrome.window_width).0),
-        Command::Outline => (ready, app.docked_sidebars(app.chrome.window_width).1),
-        Command::FilterOutline => (ready && !app.outline.sections.is_empty(), false),
+        Command::Rename | Command::Save | Command::SaveAs | Command::Export | Command::Find => {
+            (document_ready, false)
+        }
+        Command::Move | Command::Location => (document_ready && app.session.path.is_some(), false),
+        Command::UndoMove => (document_ready && app.folder.can_undo(), false),
+        Command::BackToReference => (document_ready && app.footnotes.can_return(), false),
+        Command::Files => (
+            document_ready,
+            document_ready && app.docked_sidebars(app.chrome.window_width).0,
+        ),
+        Command::Outline => (
+            document_ready,
+            document_ready && app.docked_sidebars(app.chrome.window_width).1,
+        ),
+        Command::FilterOutline => (document_ready && !app.outline.sections.is_empty(), false),
         Command::ToggleSectionFold => (
-            ready && app.mode == EditorMode::Live && app.current_section_fold().is_some(),
+            document_ready && app.mode == EditorMode::Live && app.current_section_fold().is_some(),
             false,
         ),
         Command::HideSidebars => (
-            ready && (app.chrome.files.open || app.chrome.outline.open),
+            document_ready && (app.chrome.files.open || app.chrome.outline.open),
             false,
         ),
-        Command::DocumentStatistics => (ready || app.overlay == Some(Overlay::Statistics), false),
+        Command::DocumentStatistics => (
+            document_ready || app.overlay == Some(Overlay::Statistics),
+            false,
+        ),
         Command::Preference(preference) => (
             true,
             match preference {
@@ -518,18 +483,19 @@ impl App {
         }
         let message = match command {
             Command::New => Message::New,
+            Command::Welcome => Message::ShowWelcome,
             Command::Open => Message::Open,
             Command::QuickOpen => Message::QuickOpen(super::quick_open::Message::Open),
             Command::Step(direction) => Message::Step(direction),
             Command::OpenFolder => Message::Folder(folder::Message::Pick),
-            Command::OpenPlace(index) => Message::Workspace(workspace::Message::OpenPlace(index)),
+            Command::NewProject => Message::Project(projects::Message::New),
+            Command::Projects => Message::Chrome(chrome::Message::Menu(chrome::Menu::Projects)),
             Command::Save => Message::Save,
             Command::SaveAs => Message::SaveAs,
             Command::Export => Message::Export,
             Command::Find => Message::ToggleSearch,
             Command::FindInFolder => Message::FolderSearch(super::folder_search::Message::Open),
             Command::Settings => Message::ShowSettings,
-            Command::Welcome => Message::Welcome,
             Command::Guide => Message::Guide,
             Command::Sample => Message::Writing(writing::Message::Sample),
             Command::Recovery => Message::Recovery(recovery::Message::Show),

@@ -1,8 +1,8 @@
 name = "Paper"
 
 [colors]
-canvas = "#F3EFE4"
-surface = "#E8E7DC"
+canvas = "#FAF7EF"
+surface = "#EDF0E7"
 elevated = "#FCF9F2"
 text = "#20231F"
 muted = "#535F55"

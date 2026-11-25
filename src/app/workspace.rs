@@ -16,7 +16,7 @@ use crate::document::selection::Selection;
 use crate::io::storage::FileError;
 use crate::io::workspace_state::{self, Registry, Workspace};
 
-const LIBRARY_FULL: &str = "The library is full. Remove a place to keep this folder in it.";
+const LIBRARY_FULL: &str = "The project list is full. Remove a project to remember this folder.";
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -45,6 +45,7 @@ pub(super) struct State {
     /// final state written.
     outgoing: Vec<Workspace>,
     opening: Option<Opening>,
+    resolving: Option<OpenPurpose>,
     request: u64,
     writing: bool,
     pending: bool,
@@ -53,8 +54,17 @@ pub(super) struct State {
 
 struct Opening {
     workspace: Workspace,
+    purpose: OpenPurpose,
     /// The workspace whose documents may be replaced by this one's.
     previous_root: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum OpenPurpose {
+    Restore,
+    #[default]
+    Switch,
+    NewDraft,
 }
 
 impl Default for State {
@@ -70,6 +80,7 @@ impl Default for State {
             current: None,
             outgoing: Vec::new(),
             opening: None,
+            resolving: None,
             request: 0,
             writing: false,
             pending: false,
@@ -86,7 +97,45 @@ impl State {
     /// Whether the library has been read and no place is still being opened,
     /// so nothing remembered is about to arrive.
     pub(super) fn settled(&self) -> bool {
-        self.loaded && self.opening.is_none()
+        self.loaded && !self.is_opening()
+    }
+
+    pub(super) fn is_opening(&self) -> bool {
+        self.resolving.is_some() || self.opening.is_some()
+    }
+
+    pub(super) fn has_project_metadata(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|workspace| workspace.project.is_some())
+    }
+
+    pub(super) fn project_name(&self, root: &Path) -> String {
+        self.current
+            .as_ref()
+            .filter(|workspace| workspace.root == root)
+            .and_then(|workspace| workspace.project.as_ref()?.name.as_ref())
+            .or_else(|| self.registry.project_names.get(root))
+            .cloned()
+            .unwrap_or_else(|| super::folder::name(root))
+    }
+
+    pub(super) fn project_label(&self, root: &Path) -> String {
+        qualified_label(root, self.places(), |path| self.project_name(path))
+    }
+
+    pub(super) fn recent_projects(&self) -> impl Iterator<Item = (usize, &Path)> {
+        let mut seen = std::collections::HashSet::new();
+        self.registry
+            .last
+            .iter()
+            .chain(&self.registry.activity)
+            .chain(self.places())
+            .filter(move |root| seen.insert(*root))
+            .filter_map(|root| {
+                let index = self.places().iter().position(|path| path == root)?;
+                Some((index, root.as_path()))
+            })
     }
 
     #[cfg(test)]
@@ -121,15 +170,13 @@ impl State {
     }
 }
 
-/// A short menu label: the folder name, qualified by its parent only when two
+/// A short menu label: the folder name, qualified by its path only when two
 /// places share a name.
 pub(super) fn place_label(root: &Path, places: &[PathBuf]) -> String {
-    let name = |path: &Path| {
-        path.file_name().map_or_else(
-            || path.display().to_string(),
-            |name| name.to_string_lossy().into(),
-        )
-    };
+    qualified_label(root, places, super::folder::name)
+}
+
+fn qualified_label(root: &Path, places: &[PathBuf], name: impl Fn(&Path) -> String) -> String {
     let label = name(root);
     if places
         .iter()
@@ -138,17 +185,19 @@ pub(super) fn place_label(root: &Path, places: &[PathBuf]) -> String {
     {
         return label;
     }
-    let parent = root.parent().unwrap_or(root);
+    format!("{label} — {}", project_path(root))
+}
+
+pub(super) fn project_path(path: &Path) -> String {
     let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_owned());
-    let parent = match home
+    match home
         .as_deref()
-        .and_then(|home| parent.strip_prefix(home).ok())
+        .and_then(|home| path.strip_prefix(home).ok())
     {
         Some(relative) if relative.as_os_str().is_empty() => "~".to_owned(),
         Some(relative) => format!("~{}{}", std::path::MAIN_SEPARATOR, relative.display()),
-        None => parent.display().to_string(),
-    };
-    format!("{label} — {parent}")
+        None => path.display().to_string(),
+    }
 }
 
 impl App {
@@ -174,12 +223,24 @@ impl App {
                 if !kept {
                     self.notification = Some(LIBRARY_FULL.into());
                 }
+                if let Some(workspace) = &self.workspace.current
+                    && let Some(name) = workspace
+                        .project
+                        .as_ref()
+                        .and_then(|project| project.name.as_ref())
+                {
+                    registry
+                        .project_names
+                        .insert(workspace.root.clone(), name.clone());
+                }
                 self.workspace.registry = registry;
                 self.workspace.loaded = true;
                 let reopen = self.workspace.registry.last.clone().filter(|_| {
                     restore
+                        && self.page == super::home::Page::Startup
                         && self.folder.root().is_none()
-                        && self.workspace.opening.is_none()
+                        && !self.workspace.is_opening()
+                        && !self.busy
                         && self.session.path.is_none()
                         && !self.session.dirty
                 });
@@ -188,7 +249,9 @@ impl App {
                 } else {
                     Task::none()
                 };
-                let open = reopen.map_or_else(Task::none, |root| self.open_workspace(root));
+                let open = reopen.map_or_else(Task::none, |root| {
+                    self.open_workspace_for(root, OpenPurpose::Restore)
+                });
                 Task::batch([save, open])
             }
             Message::Opened {
@@ -199,12 +262,17 @@ impl App {
                 if request != self.workspace.request {
                     return Task::none();
                 }
+                let purpose = self.workspace.resolving.take().unwrap_or_default();
+                if purpose == OpenPurpose::Restore && self.page != super::home::Page::Startup {
+                    return Task::none();
+                }
                 match result {
                     Ok(workspace) => {
                         self.folder.prepare_reveal(!workspace.files_hidden);
                         let root = workspace.root.clone();
                         self.workspace.opening = Some(Opening {
                             workspace,
+                            purpose,
                             previous_root: self.folder.root().map(Path::to_owned),
                         });
                         self.scan_folder(root)
@@ -237,7 +305,7 @@ impl App {
                 }
                 if self.folder.root() == Some(root.as_path()) {
                     self.reveal_navigation();
-                    return Task::none();
+                    return self.open_project_document(&root);
                 }
                 self.open_workspace(root)
             }
@@ -261,6 +329,27 @@ impl App {
 
     /// Resolve a folder and read its remembered state, then scan it.
     pub(super) fn open_workspace(&mut self, path: PathBuf) -> Task<AppMessage> {
+        self.open_workspace_for(path, OpenPurpose::Switch)
+    }
+
+    pub(super) fn open_project_workspace(
+        &mut self,
+        path: PathBuf,
+        new_draft: bool,
+    ) -> Task<AppMessage> {
+        let purpose = if new_draft {
+            OpenPurpose::NewDraft
+        } else {
+            OpenPurpose::Switch
+        };
+        self.open_workspace_for(path, purpose)
+    }
+
+    fn open_workspace_for(&mut self, path: PathBuf, purpose: OpenPurpose) -> Task<AppMessage> {
+        if self.workspace.opening.take().is_some() {
+            self.folder.cancel_scan();
+        }
+        self.workspace.resolving = Some(purpose);
         self.workspace.request = self.workspace.request.wrapping_add(1);
         let request = self.workspace.request;
         let directory = self.workspace.directory.clone();
@@ -276,6 +365,10 @@ impl App {
         )
     }
 
+    pub(super) fn workspace_scan_failed(&mut self) -> bool {
+        self.workspace.opening.take().is_some()
+    }
+
     /// Adopt a successfully scanned root as the current workspace, applying
     /// its remembered state when it was opened through [`Self::open_workspace`].
     pub(super) fn workspace_scanned(&mut self, root: &Path, complete: bool) -> Task<AppMessage> {
@@ -289,6 +382,14 @@ impl App {
             .as_ref()
             .is_some_and(|current| current.root == root)
         {
+            if let Some(opening) = opening {
+                self.remember_project_name(&opening.workspace);
+                if let Some(current) = &mut self.workspace.current {
+                    current.project = opening.workspace.project;
+                }
+                let page = self.open_project_document(root);
+                return Task::batch([page, self.persist_workspace()]);
+            }
             return if complete && self.prune_workspace_pins() {
                 self.persist_workspace()
             } else {
@@ -299,9 +400,9 @@ impl App {
         if let Some(outgoing) = self.workspace.current.take() {
             self.workspace.outgoing.push(outgoing);
         }
-        let (workspace, previous_root) = opening.map_or_else(
-            || (Workspace::new(root.to_owned()), None),
-            |opening| (opening.workspace, opening.previous_root),
+        let (workspace, previous_root, purpose) = opening.map_or_else(
+            || (Workspace::new(root.to_owned()), None, OpenPurpose::Switch),
+            |opening| (opening.workspace, opening.previous_root, opening.purpose),
         );
         let remembered = workspace != Workspace::new(root.to_owned());
         if remembered {
@@ -313,7 +414,9 @@ impl App {
         // Reopen where the writer left off only when nothing would be lost or
         // displaced: an empty untitled page, or a clean document belonging to
         // the workspace being left.
-        let replaceable = !self.session.dirty
+        let replaceable = (purpose != OpenPurpose::Restore
+            || self.page == super::home::Page::Startup)
+            && !self.session.dirty
             && !self.busy
             && match &self.session.path {
                 None => self.session.document.source().is_empty(),
@@ -332,12 +435,62 @@ impl App {
         if !self.workspace.registry.opened(root) {
             self.notification = Some(LIBRARY_FULL.into());
         }
+        self.remember_project_name(&workspace);
         self.workspace.current = Some(workspace);
         if complete {
             self.prune_workspace_pins();
         }
-        let open = reopen.map_or_else(Task::none, |path| self.request(Pending::Open(Some(path))));
+        let open = if purpose == OpenPurpose::NewDraft
+            && !self.busy
+            && self.overlay.is_none()
+            && self.commit_cell()
+        {
+            self.install_session(super::session::Session::draft(Some(root.to_owned())));
+            self.activate(0, false)
+        } else {
+            if reopen.is_none()
+                && !self.is_home()
+                && self.session.path.is_none()
+                && !self.session.dirty
+                && self.session.document.source().is_empty()
+            {
+                self.session.folder = Some(root.to_owned());
+            }
+            if let Some(path) = reopen {
+                self.request(Pending::Open(Some(path)))
+            } else if purpose == OpenPurpose::Switch {
+                self.open_project_document(root)
+            } else {
+                Task::none()
+            }
+        };
         Task::batch([self.persist_workspace(), open])
+    }
+
+    fn open_project_document(&mut self, root: &Path) -> Task<AppMessage> {
+        if self.return_to_document() || !self.is_home() {
+            return Task::none();
+        }
+        self.page = super::home::Page::Document;
+        self.session.folder = Some(root.to_owned());
+        if self.overlay.is_none() {
+            self.activate(0, false)
+        } else {
+            Task::none()
+        }
+    }
+
+    fn remember_project_name(&mut self, workspace: &Workspace) {
+        let names = &mut self.workspace.registry.project_names;
+        if let Some(name) = workspace
+            .project
+            .as_ref()
+            .and_then(|project| project.name.as_ref())
+        {
+            names.insert(workspace.root.clone(), name.clone());
+        } else {
+            names.remove(&workspace.root);
+        }
     }
 
     /// Only a complete scan can confirm that a pin is no longer available.
@@ -755,6 +908,113 @@ mod tests {
         drop(tasks);
         app.workspace.directory = Some(data.to_owned());
         app
+    }
+
+    #[tokio::test]
+    async fn legacy_projects_open_without_metadata_until_setup_is_confirmed() {
+        use super::super::{Overlay, projects};
+
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        std::fs::create_dir(root.join("Drafts")).unwrap();
+        std::fs::write(root.join("Drafts/Note.md"), "# Draft\n").unwrap();
+        let mut registry = Registry::default();
+        assert!(registry.opened(&root));
+        workspace_state::save(Some(data.path().to_owned()), registry, vec![])
+            .await
+            .unwrap();
+        let mut app = launched(data.path());
+        let launch = app.workspace_launch(true);
+        settle(&mut app, launch).await;
+        assert_eq!(app.folder.root(), Some(root.as_path()));
+        assert!(
+            app.is_home(),
+            "a remembered project with no resumable document shows Welcome"
+        );
+        assert!(app.folder.has_file(&root.join("Drafts/Note.md")));
+        let manifest = root.join(".dosty/project.toml");
+        assert!(!manifest.exists());
+
+        let setup = app.update_message(AppMessage::Project(projects::Message::SetUp(root.clone())));
+        settle(&mut app, setup).await;
+        assert_eq!(app.overlay, Some(Overlay::Project));
+        assert!(!manifest.exists());
+        let confirm = app.update_message(AppMessage::Project(projects::Message::Confirm));
+        settle(&mut app, confirm).await;
+        assert!(app.overlay.is_none());
+        assert!(manifest.is_file());
+        assert!(app.workspace.has_project_metadata());
+        assert!(
+            !app.is_home(),
+            "explicitly opening a project enters the editor"
+        );
+        assert!(
+            !app.folder
+                .entries()
+                .iter()
+                .any(|entry| entry.path.starts_with(root.join(".dosty")))
+        );
+    }
+
+    #[tokio::test]
+    async fn opening_a_markdown_file_directly_does_not_enter_its_remembered_project() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        let path = root.join("Essay.md");
+        std::fs::write(&path, "# Quiet\n").unwrap();
+        crate::io::project::setup(root.clone(), None).await.unwrap();
+        let mut registry = Registry::default();
+        assert!(registry.opened(&root));
+        workspace_state::save(Some(data.path().to_owned()), registry, vec![])
+            .await
+            .unwrap();
+        let mut app = launched(data.path());
+        let launch = app.workspace_launch(false);
+        settle(&mut app, launch).await;
+        let open = app.update_message(AppMessage::OpenPath(path.clone()));
+        settle(&mut app, open).await;
+        assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
+        assert_eq!(app.session.document.source(), "# Quiet\n");
+        assert!(app.folder.root().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_new_project_opens_a_blank_draft_and_parks_previous_unsaved_writing() {
+        use super::super::projects;
+
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let parent = std::fs::canonicalize(folder.path()).unwrap();
+        let mut app = launched(data.path());
+        app.set_document("Keep this text".into(), None, "Draft.md".into());
+        app.session.dirty = true;
+
+        drop(app.update_message(AppMessage::Project(projects::Message::New)));
+        drop(
+            app.update_message(AppMessage::Project(projects::Message::Name(
+                "Field Notes".into(),
+            ))),
+        );
+        drop(app.update_message(AppMessage::Project(projects::Message::Browse)));
+        drop(
+            app.update_message(AppMessage::Project(projects::Message::LocationPicked(
+                Some(parent.clone()),
+            ))),
+        );
+        let create = app.update_message(AppMessage::Project(projects::Message::Confirm));
+        settle(&mut app, create).await;
+        let root = parent.join("Field Notes");
+        assert!(root.join(".dosty/project.toml").is_file());
+        assert_eq!(app.folder.root(), Some(root.as_path()));
+        assert_eq!(app.session.folder, Some(root));
+        assert!(app.session.document.source().is_empty());
+        assert!(
+            app.background
+                .dirty()
+                .any(|session| session.document.source() == "Keep this text")
+        );
     }
 
     /// Quit and relaunch through the real worker, scan, and load paths.
