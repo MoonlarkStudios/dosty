@@ -675,7 +675,7 @@ fn code_surface_previews() {
             tokens: harness.app.resolved_theme.tokens,
             block: 0,
             base: None,
-            line_height: harness.app.resolved_theme.typography.line_height,
+            line_height: harness.app.resolved_theme.typography.line_height(),
             task: std::cell::Cell::new(0),
         };
         let mut reader = iced::widget::markdown::view_with(
@@ -816,9 +816,9 @@ fn large_document_interactions() {
     load_profile_fonts();
     use crate::theme::WritingFont;
     let font = match std::env::var("DOSTY_PROFILE_FONT").as_deref() {
-        Ok("source-sans-3") => WritingFont::SourceSans3,
+        Ok("source-sans-3") | Err(_) => WritingFont::SourceSans3,
         Ok("newsreader") => WritingFont::Serif,
-        Ok("system-sans") | Err(_) => WritingFont::SansSerif,
+        Ok("system-sans") => WritingFont::SansSerif,
         Ok(other) => panic!("unknown DOSTY_PROFILE_FONT: {other}"),
     };
     println!("typeface: {font}");

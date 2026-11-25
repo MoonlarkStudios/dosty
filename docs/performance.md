@@ -29,8 +29,9 @@ fixtures. It records event dispatch, App update, layout, drawing, software
 rasterization, and per-interaction totals. Cold load and first frame are separate
 observations. Image tasks are dropped; OS event delivery, window chrome, file IO,
 decoded-image memory, GPU execution, and display presentation are excluded.
-Set `DOSTY_PROFILE_FONT=source-sans-3` or `DOSTY_PROFILE_FONT=newsreader` to compare
-against the default System Sans on the same fixtures.
+Source Sans 3 is the default profile typeface. Set
+`DOSTY_PROFILE_FONT=system-sans` or `DOSTY_PROFILE_FONT=newsreader` to compare
+on the same fixtures.
 
 Component benchmarks measure narrower paths and cannot substitute for integrated
 interaction timings. Specialized table and outline harnesses have their own

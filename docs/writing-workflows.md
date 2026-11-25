@@ -147,20 +147,25 @@ the full path. Up/Down and Home/End select rows, Left/Right navigates the hierar
 Enter/Space opens a file or toggles a folder, and F2 renames. Menus support
 Up/Down, Tab/Shift+Tab, Enter, and Escape.
 
-Folder actions create Markdown documents and folders, rename or move items below
-the open root, and show their location. The root also offers Refresh and Remove from Projects.
-The titlebar's document-name
-menu offers Rename, Move to, and Show location for a saved standalone file. Move
-to can select a destination outside the open folder. There is no delete,
-multi-selection, or general-purpose file-manager view.
+Right-click a row for its file or folder actions, including Rename, Move to,
+and Show location. Folder menus also create Markdown documents and folders.
+Cmd-click on Mac or Ctrl-click on Windows and Linux adds or removes a row.
+Shift-click selects a visible range. Right-click a selection to choose a folder
+for the group. The document-name menu also lets a saved standalone file move
+to a destination outside the open project.
 
-Dragging starts after a small movement threshold. A preview follows the pointer,
-valid folders highlight, and a 600 ms pause expands a collapsed destination.
-Escape or leaving the application cancels a drag. A completed move briefly
-highlights the destination and offers **Undo move** in a contextual notice. Undo move is a
-checked reverse move and may fail if the filesystem has changed; it is separate
-from the document's preserved text undo/redo. Opening files and creating a new
-document [keep the outgoing document open](#moving-between-documents).
+Drag any selected row to move the group. A folder moves with its descendants.
+The drag preview gives the item count and destination. Valid folders highlight,
+a short pause expands a collapsed folder, and dragging near the list edges
+scrolls it. Drop on **Project root** at the bottom of Files to move to the top
+level, even in a full list. Items already in the target folder stay there.
+Escape or leaving the application cancels a drag.
+
+A completed move leaves its items selected and offers **Undo move** for the
+whole group. Undo checks the reverse destinations and is separate from text
+undo. When a file check stops a batch after some items move, Dosty reports what
+happened and keeps Undo available for the completed moves. Opening files and
+creating a new document [keep the outgoing document open](#moving-between-documents).
 
 Organization runs on workers under ordered directory and document locks. Moves
 stay on one filesystem, reject occupied names and folder cycles, and preserve
@@ -176,7 +181,7 @@ parent folders stay locked; another Dosty window holding a file inside makes the
 move fail with nothing changed. Renames that change only capitalization work on case-insensitive
 volumes such as default APFS and NTFS; they pass through a temporary visible name. Incoming links from other documents are not rewritten.
 
-Folder moves are bounded to 32,768 entries, 128 directories, 128 Markdown
+A batch can move up to 128 selected items. Folder moves are bounded to 32,768 entries, 128 directories, 128 Markdown
 documents, and 128 MiB of Markdown source; each document retains the ordinary
 16 MiB file limit. Asset copying has a shared 128 MiB limit. Visible names are
 limited to 240 UTF-8 bytes and cannot contain path separators. Cooperative locks
@@ -238,7 +243,7 @@ On macOS the compact row shares the native titlebar and the system menu bar prov
 
 The filename and save indicator stay visible. A check means all changes are saved. New drafts, unsaved changes, saving, and save failure have text labels. Hover for details or click the indicator to save or retry. A save marks its captured snapshot as saved, so later edits remain modified. The failure label remains after the notification is dismissed and clears after a successful save or when another document opens.
 
-Word count and reading time stay at the bottom center of the writing column while typing. A selection shows its prose word count alongside the document reading time. Click the statistics or press Cmd/Ctrl+Alt+I for the document word count, Markdown character count, and reading time. Escape closes the details and keeps the selection. The Writing tab in Settings puts text size, line width, a live typeface sample, and the two gutter statistics together. Line width can follow the theme or use the Narrow or Wide measure. System Sans is the default typeface. Typeface changes preserve the source selection and writing viewport, and remain selected when switching color themes. Reading time assumes about 200 words per minute. Changing statistics visibility preserves the writing viewport. macOS View also exposes these preferences; the fallback File menu groups writing preferences and Help/settings on other platforms. Preferences retain no recent-file or folder-session history.
+Word count and reading time stay at the bottom center of the writing column while typing. A selection shows its prose word count alongside the document reading time. Click the statistics or press Cmd/Ctrl+Alt+I for the document word count, Markdown character count, and reading time. Escape closes the details and keeps the selection. The Writing tab in Settings puts text size, line width, line spacing, a live typeface sample, and the two gutter statistics together. Line width can follow the theme or use the Narrow or Wide measure. Line spacing can follow the theme or use Compact or Relaxed. Source Sans 3 is the default typeface. Writing preferences survive app launches and color theme switches. In Write, typography changes preserve source selection and viewport anchoring. Reading time assumes about 200 words per minute. Changing statistics visibility preserves the writing viewport. macOS View also exposes these preferences; the fallback File menu groups writing preferences and Help/settings on other platforms. Preferences retain no recent-file or folder-session history.
 
 ### Quick Open
 

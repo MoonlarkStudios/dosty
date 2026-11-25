@@ -7,6 +7,9 @@ use iced::{Color, Element, Point, Rectangle, Renderer, Theme};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Icon {
+    Home,
+    Back,
+    Forward,
     Sidebar,
     Outline,
     Document,
@@ -22,6 +25,9 @@ pub enum Icon {
     Unsaved,
     Warning,
     Settings,
+    Edit,
+    Keyboard,
+    Appearance,
     Save,
     Code,
     Close,
@@ -76,6 +82,13 @@ impl<Message> canvas::Program<Message> for Drawing {
             .with_line_cap(canvas::LineCap::Round)
             .with_line_join(canvas::LineJoin::Round);
         let paths: &[&[(f32, f32)]] = match self.kind {
+            Icon::Home => &[
+                &[(2., 8.), (9., 2.), (16., 8.)],
+                &[(4., 7.), (4., 15.), (14., 15.), (14., 7.)],
+                &[(7., 15.), (7., 10.), (11., 10.), (11., 15.)],
+            ],
+            Icon::Back => &[&[(7., 4.), (2., 9.), (7., 14.)], &[(2., 9.), (15., 9.)]],
+            Icon::Forward => &[&[(11., 4.), (16., 9.), (11., 14.)], &[(3., 9.), (16., 9.)]],
             Icon::ChevronDown => &[&[(5., 7.), (9., 11.), (13., 7.)]],
             Icon::ChevronRight => &[&[(7., 5.), (11., 9.), (7., 13.)]],
             Icon::Sidebar => &[
@@ -138,6 +151,25 @@ impl<Message> canvas::Program<Message> for Drawing {
                 &[(6., 3.), (6., 7.)],
                 &[(12., 11.), (12., 15.)],
             ],
+            Icon::Edit => &[
+                &[
+                    (3., 15.),
+                    (4., 11.),
+                    (12., 3.),
+                    (15., 6.),
+                    (7., 14.),
+                    (3., 15.),
+                ],
+                &[(10., 5.), (13., 8.)],
+            ],
+            Icon::Keyboard => &[
+                &[(2., 4.), (16., 4.), (16., 14.), (2., 14.), (2., 4.)],
+                &[(5., 7.), (5.2, 7.)],
+                &[(9., 7.), (9.2, 7.)],
+                &[(13., 7.), (13.2, 7.)],
+                &[(5., 11.), (13., 11.)],
+            ],
+            Icon::Appearance => &[&[(9., 3.), (9., 15.)]],
             Icon::Save => &[
                 &[
                     (3., 2.),
@@ -306,6 +338,9 @@ impl<Message> canvas::Program<Message> for Drawing {
         }
         if matches!(self.kind, Icon::Search) {
             frame.stroke(&Path::circle(Point::new(7.5, 7.5), 5.0), stroke);
+        }
+        if matches!(self.kind, Icon::Appearance) {
+            frame.stroke(&Path::circle(Point::new(9.0, 9.0), 6.0), stroke);
         }
         if matches!(self.kind, Icon::Modified) {
             frame.fill(&Path::circle(Point::new(9.0, 9.0), 3.5), self.color);

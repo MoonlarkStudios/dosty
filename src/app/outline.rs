@@ -683,7 +683,10 @@ impl App {
         let tool = |kind, label, message, enabled: bool| {
             let tokens = self.resolved_theme.tokens;
             let selected = matches!(kind, Icon::Search) && self.outline.filter_open;
-            container(tooltip(
+            let action = AppMessage::Outline(message);
+            let hint = super::chrome::control_hint(label, &action);
+            container(styles::hint(
+                tokens,
                 button(icon::sized(
                     kind,
                     if !enabled {
@@ -696,7 +699,7 @@ impl App {
                     16.0,
                 ))
                 .padding(6)
-                .on_press_maybe(enabled.then_some(AppMessage::Outline(message)))
+                .on_press_maybe(enabled.then_some(action))
                 .style(styles::button_style(
                     tokens,
                     if selected {
@@ -705,14 +708,18 @@ impl App {
                         Button::Quiet
                     },
                 )),
-                text(label).size(11),
+                hint,
                 tooltip::Position::Bottom,
             ))
         };
         row![
             tool(
                 Icon::Search,
-                "Filter headings",
+                if self.outline.filter_open {
+                    "Close heading filter"
+                } else {
+                    "Filter headings"
+                },
                 if self.outline.filter_open {
                     Message::CancelFilter
                 } else {
@@ -723,14 +730,14 @@ impl App {
             .id("outline-filter-control"),
             tool(
                 Icon::CollapseAll,
-                "Collapse all",
+                "Collapse all headings",
                 Message::FoldAll(true),
                 !self.outline.filtering()
             )
             .id("outline-collapse-control"),
             tool(
                 Icon::ExpandAll,
-                "Expand all",
+                "Expand all headings",
                 Message::FoldAll(false),
                 !self.outline.filtering()
             )

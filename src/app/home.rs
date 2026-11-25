@@ -202,19 +202,13 @@ impl App {
     pub(super) fn home_view(&self, size: Size) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
         let ready = !self.busy && !self.loading;
-        let shortcut = |mac, other| {
-            if cfg!(target_os = "macos") {
-                mac
-            } else {
-                other
-            }
-        };
-        let action = |label, key, kind, message, style| {
+        let action = |label, kind, message, style| {
             let foreground = if matches!(style, Button::Primary) {
                 tokens.on_accent
             } else {
                 tokens.muted
             };
+            let key = chrome::shortcut_label(&message).unwrap_or_default();
             button(
                 row![
                     icon::sized(kind, foreground, 17.0),
@@ -231,11 +225,10 @@ impl App {
             .style(styles::button_style(tokens, style))
         };
         let returning = self.page == Page::Welcome;
-        let mut documents = column![text("Documents").size(17)].spacing(9).width(Fill);
+        let mut documents = column![text("Documents").size(19)].spacing(7).width(Fill);
         if returning {
             documents = documents.push(action(
                 "Return to Document",
-                "Esc",
                 Icon::Document,
                 Message::ReturnToDocument,
                 Button::Primary,
@@ -244,7 +237,6 @@ impl App {
         documents = documents
             .push(action(
                 "New Document",
-                shortcut("⌘N", "Ctrl+N"),
                 Icon::Plus,
                 Message::New,
                 if returning {
@@ -255,32 +247,43 @@ impl App {
             ))
             .push(action(
                 "Open Markdown File…",
-                shortcut("⌘O", "Ctrl+O"),
                 Icon::Document,
                 Message::Open,
                 Button::Quiet,
+            ))
+            .push(action(
+                "Quick Open…",
+                Icon::Search,
+                Message::QuickOpen(quick_open::Message::Open),
+                Button::Quiet,
             ));
 
-        let project_button = |label, message, style| {
-            button(text(label).size(13))
-                .padding([8, 11])
-                .on_press_maybe(ready.then_some(message))
-                .style(styles::button_style(tokens, style))
+        let project_button = |label, kind, message, style| {
+            button(
+                row![icon::sized(kind, tokens.muted, 15.0), text(label).size(13)]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+            )
+            .padding([8, 11])
+            .on_press_maybe(ready.then_some(message))
+            .style(styles::button_style(tokens, style))
         };
         let project_actions = row![
             project_button(
                 "Open Project…",
+                Icon::Folder,
                 Message::Folder(folder::Message::Pick),
                 Button::Selected
             ),
             project_button(
                 "New Project…",
+                Icon::Plus,
                 Message::Project(projects::Message::New),
                 Button::Quiet
             ),
         ]
         .spacing(6);
-        let mut project_list = column![text("Projects").size(17)].spacing(9).width(Fill);
+        let mut project_list = column![].spacing(9).width(Fill);
         if self.workspace.places().is_empty() {
             project_list = project_list.push(
                 text("Keep related Markdown files together in a folder.")
@@ -322,23 +325,23 @@ impl App {
                     ready.then_some(Message::Workspace(workspace::Message::OpenPlace(index))),
                 )
                 .style(styles::button_style(tokens, Button::Quiet));
-                project_list = project_list.push(tooltip(
-                    open,
-                    container(text(path).size(12))
-                        .padding(8)
-                        .style(styles::context_menu(tokens)),
-                    tooltip::Position::Bottom,
-                ));
+                project_list =
+                    project_list.push(styles::hint(tokens, open, path, tooltip::Position::Bottom));
             }
         }
-        let projects = container(project_list)
-            .padding(18)
-            .width(Fill)
-            .style(styles::card(tokens));
+        let projects = column![
+            text("Projects").size(19),
+            container(project_list)
+                .padding(16)
+                .width(Fill)
+                .style(styles::inset(tokens)),
+        ]
+        .spacing(7)
+        .width(Fill);
         let sections: Element<'_, Message> = if size.width >= 700.0 {
             row![
                 container(documents).width(iced::Length::FillPortion(5)),
-                projects.width(iced::Length::FillPortion(6)),
+                container(projects).width(iced::Length::FillPortion(6)),
             ]
             .spacing(32)
             .align_y(Alignment::Start)
@@ -346,11 +349,11 @@ impl App {
         } else {
             column![documents, projects].spacing(24).into()
         };
-        let mut contents = column![brand::view(tokens)].spacing(18);
+        let mut contents = column![brand::view(tokens)].spacing(22);
         if self.page == Page::Startup && (!self.workspace.settled() || self.loading) {
             contents = contents.push(text("Opening Dosty…").size(20).color(tokens.muted));
         } else {
-            contents = contents.push(text("Welcome").size(38)).push(sections);
+            contents = contents.push(text("Welcome").size(42)).push(sections);
         }
         let page = container(contents.width(Fill))
             .max_width(922)

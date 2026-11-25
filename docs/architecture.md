@@ -37,6 +37,10 @@ Live editing uses one document-wide native buffer and one source selection.
 and input-method positioning over that buffer. `RichLayout` supplies the same
 measured geometry to drawing, caret placement, and navigation. Drawing does not
 parse Markdown. The optional Read renderer is separate and initialized lazily.
+Write lays out its text in a centered rectangle within the scrolling pane.
+Text, caret, and cell-draft coordinates use that rectangle. The scrollbar and
+wheel input use the pane bounds. Resizing the margins retains the cached layout
+while the text column stays the same width.
 
 Blank and filled Write rows use the same paragraph line height. The placeholder
 shares the first row's origin and typography. The insertion bar uses the row's
@@ -148,10 +152,12 @@ in-window command menu. The macOS content extends into the transparent native
 titlebar while retaining system window buttons.
 
 Startup creates one blank document and reopens the last project on a normal
-launch. Explicit file opens use the standalone load path. Preferences retain appearance, independent
-statistics visibility, and writing typeface. The typeface is applied to the stored
-resolved typography on startup, appearance changes, and preference changes;
-layout/cache metrics include it so text is reshaped on a switch.
+launch. Explicit file opens use the standalone load path. Preferences retain appearance, independent statistics visibility, writing
+typeface, measure, spacing, and text size. The stored typography applies the
+writing preferences on startup and on theme or preference changes. Layout
+keys include the effective geometry and font. A stale custom theme load cannot
+replace a later appearance choice, and preference writes coalesce before a
+confirmed window close.
 
 `app/session.rs` holds what must survive when a document leaves the page: its
 text and history, selection, path, and saved baseline. `App` keeps one session on
@@ -204,9 +210,12 @@ in the remembered workspace state and follow checked file moves.
 The folder workflow owns navigation, expanded paths, bounded scan generations,
 and operation identities. Folder discovery returns path-only snapshots from a
 worker; stale completions cannot replace a newer scan. The native file-tree
-widget owns pointer/keyboard interaction, hover disclosure, and drag feedback,
-then emits application actions. File organization runs on blocking workers under
-ordered directory and checkpoint locks, with destination and reference guards.
+widget owns pointer and keyboard selection, hover disclosure, and drag feedback,
+then emits application actions. Batch moves check destination names before
+publishing individual moves on a blocking worker. Each item uses the same
+directory locks, checkpoint guards, and reference checks as a single move.
+The application remaps every completed item and keeps the group together for
+organization undo.
 Moving an active file updates its path without reinstalling its document or
 discarding history. Recovery identities rotate when that path changes. See
 [files and folders](writing-workflows.md#files-and-folders) for limits and behavior.

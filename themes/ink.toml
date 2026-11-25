@@ -1,0 +1,24 @@
+name = "Ink"
+
+[colors]
+canvas = "#FFFFFF"
+surface = "#F0F2F7"
+elevated = "#FAFBFE"
+text = "#171C29"
+muted = "#424C61"
+faint = "#4D586D"
+border = "#C9D0DC"
+accent = "#354C91"
+accent_soft = "#E2E8FA"
+selection = "#CDDAFA"
+code = "#EEF1F8"
+danger = "#9B304A"
+success = "#296344"
+brand_accent = "#8092C2"
+brand_ink = "#354C91"
+brand_paper = "#CBD3E9"
+
+[typography]
+body_size = 17
+line_height = 1.65
+content_width = 610

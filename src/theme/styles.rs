@@ -1,13 +1,14 @@
 //! All component styling consumes the same resolved semantic tokens.
 
 use iced::widget::{
-    button, checkbox, container, markdown, pick_list, scrollable, text_editor, text_input,
+    button, checkbox, container, markdown, pick_list, scrollable, text, text_editor, text_input,
+    tooltip,
 };
-use iced::{Background, Border, Color, Font, Theme};
+use iced::{Background, Border, Color, Element, Font, Theme};
 
 use crate::theme::{ResolvedTheme, Tokens};
 
-pub const BODY_FONT: Font = crate::theme::WritingFont::SansSerif.font();
+pub const BODY_FONT: Font = crate::theme::WritingFont::SourceSans3.font();
 pub const SIDEBAR_ROW_HEIGHT: f32 = 32.0;
 pub const SIDEBAR_TEXT_SIZE: f32 = 13.0;
 pub const SIDEBAR_INDENT: f32 = 14.0;
@@ -70,6 +71,23 @@ pub fn context_menu(tokens: Tokens) -> impl Fn(&Theme) -> container::Style {
         },
         ..container::Style::default()
     }
+}
+
+pub fn hint<'a, Message: 'a>(
+    tokens: Tokens,
+    content: impl Into<Element<'a, Message>>,
+    label: impl text::IntoFragment<'a>,
+    position: tooltip::Position,
+) -> tooltip::Tooltip<'a, Message, Theme, iced::Renderer> {
+    tooltip(
+        content,
+        container(text(label).size(12))
+            .padding([6, 9])
+            .max_width(360)
+            .style(context_menu(tokens)),
+        position,
+    )
+    .gap(5)
 }
 
 pub fn code_surface(tokens: Tokens) -> container::Style {

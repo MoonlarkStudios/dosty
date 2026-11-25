@@ -329,7 +329,7 @@ impl RichLayout {
             tokens: theme.tokens,
             font: theme.typography.font,
             size: theme.typography.body_size * zoom,
-            line_height: theme.typography.line_height,
+            line_height: theme.typography.line_height(),
             width: width.max(1.0),
             y: top,
             line_starts: Arc::clone(&projection.line_starts),
@@ -399,7 +399,7 @@ impl RichLayout {
             tokens: theme.tokens,
             font: theme.typography.font,
             size: theme.typography.body_size * zoom,
-            line_height: theme.typography.line_height,
+            line_height: theme.typography.line_height(),
             width: width.max(1.0),
             y: 5.0,
             line_starts: Arc::clone(&projection.line_starts),
@@ -589,7 +589,7 @@ impl RichLayout {
             tokens: theme.tokens,
             font: theme.typography.font,
             size: theme.typography.body_size * metrics.zoom,
-            line_height: theme.typography.line_height,
+            line_height: theme.typography.line_height(),
             width: bounds.width,
             y: bounds.y,
             line_starts: Arc::clone(&projection.line_starts),
@@ -1671,6 +1671,7 @@ mod tests {
         let source = "# A clear thought\n\ncafé **words** and *ideas* beside `code`.\n\n| Draft | Next |\n|---|---|\n| Quiet words | Read it aloud |\n\nA final paragraph to make room for another thought.";
         let projection = Projection::new(source);
         let mut theme = Preset::Paper.resolve();
+        theme.typography.font = WritingFont::SansSerif;
         let images = ImageStore::default();
         let mut actual = RichLayout::default();
         actual.rebuild(&projection, &theme, 1.0, 320.0, None, &images);

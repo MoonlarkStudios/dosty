@@ -234,63 +234,49 @@ impl Command {
     }
 
     fn shortcut(&self) -> Option<&'static str> {
-        let Message::Run(action) = &self.action else {
-            return None;
-        };
-        let mac = cfg!(target_os = "macos");
-        Some(match action.as_ref() {
-            AppMessage::Format(Format::Bold) => {
-                if mac {
-                    "⌘B"
-                } else {
-                    "Ctrl+B"
-                }
-            }
-            AppMessage::Format(Format::Italic) => {
-                if mac {
-                    "⌘I"
-                } else {
-                    "Ctrl+I"
-                }
-            }
-            AppMessage::Format(Format::Strikethrough) => {
-                if mac {
-                    "⇧⌘X"
-                } else {
-                    "Ctrl+Shift+X"
-                }
-            }
-            AppMessage::Format(Format::Link) => {
-                if mac {
-                    "⌘K"
-                } else {
-                    "Ctrl+K"
-                }
-            }
-            AppMessage::Save => {
-                if mac {
-                    "⌘S"
-                } else {
-                    "Ctrl+S"
-                }
-            }
-            AppMessage::SaveAs => {
-                if mac {
-                    "⇧⌘S"
-                } else {
-                    "Ctrl+Shift+S"
-                }
-            }
-            AppMessage::QuickOpen(super::quick_open::Message::Open) => {
-                if mac {
-                    "⌘P"
-                } else {
-                    "Ctrl+P"
-                }
-            }
-            _ => return None,
-        })
+        match &self.action {
+            Message::Run(action) => shortcut_label(action),
+            _ => None,
+        }
     }
+}
+
+pub(super) const fn platform_keys(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        other
+    }
+}
+
+pub(super) fn shortcut_label(action: &AppMessage) -> Option<&'static str> {
+    let (mac, other) = match action {
+        AppMessage::New => ("⌘N", "Ctrl+N"),
+        AppMessage::Open => ("⌘O", "Ctrl+O"),
+        AppMessage::Format(Format::Bold) => ("⌘B", "Ctrl+B"),
+        AppMessage::Format(Format::Italic) => ("⌘I", "Ctrl+I"),
+        AppMessage::Format(Format::Strikethrough) => ("⇧⌘X", "Ctrl+Shift+X"),
+        AppMessage::Format(Format::Link) => ("⌘K", "Ctrl+K"),
+        AppMessage::Save => ("⌘S", "Ctrl+S"),
+        AppMessage::SaveAs => ("⇧⌘S", "Ctrl+Shift+S"),
+        AppMessage::QuickOpen(super::quick_open::Message::Open) => ("⌘P", "Ctrl+P"),
+        AppMessage::Step(Direction::Back) => ("⌘[", "Ctrl+["),
+        AppMessage::Step(Direction::Forward) => ("⌘]", "Ctrl+]"),
+        AppMessage::ShowSettings => ("⌘,", "Ctrl+,"),
+        AppMessage::ToggleSidebar(Sidebar::Files) => ("⇧⌘B", "Ctrl+Shift+B"),
+        AppMessage::ToggleSidebar(Sidebar::Outline) => ("⌥⌘O", "Ctrl+Alt+O"),
+        AppMessage::FolderSearch(super::folder_search::Message::Open) => ("⌥⌘F", "Ctrl+Alt+F"),
+        AppMessage::Outline(super::outline::Message::Filter) => ("⇧⌘J", "Ctrl+Shift+J"),
+        AppMessage::ReturnToDocument => ("Esc", "Esc"),
+        _ => return None,
+    };
+    Some(platform_keys(mac, other))
+}
+
+pub(super) fn control_hint<'a>(label: &'a str, action: &AppMessage) -> Cow<'a, str> {
+    shortcut_label(action).map_or(Cow::Borrowed(label), |keys| {
+        Cow::Owned(format!("{label} · {keys}"))
+    })
 }
 
 pub(super) fn event_message(
@@ -666,6 +652,7 @@ impl App {
             Icon::Close,
             "Close statistics",
             AppMessage::CloseOverlay,
+            true,
             false,
             None,
         );
@@ -715,25 +702,30 @@ impl App {
         kind: Icon,
         label: &'a str,
         message: AppMessage,
+        enabled: bool,
         selected: bool,
         caption: Option<&'static str>,
     ) -> Element<'a, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let color = if selected {
+        let color = if !enabled {
+            tokens.disabled
+        } else if selected {
             tokens.on_accent_soft
         } else {
             tokens.muted
         };
         let mut content = row![icon::view(kind, color)]
-            .spacing(5)
+            .spacing(6)
             .align_y(Alignment::Center);
         if let Some(caption) = caption {
-            content = content.push(text(caption).size(12));
+            content = content.push(text(caption).size(13).wrapping(text::Wrapping::None));
         }
-        tooltip(
+        let hint = control_hint(label, &message);
+        styles::hint(
+            tokens,
             button(content)
-                .on_press(message)
-                .padding(6)
+                .on_press_maybe(enabled.then_some(message))
+                .padding([5, 6])
                 .style(styles::button_style(
                     tokens,
                     if selected {
@@ -742,9 +734,7 @@ impl App {
                         Button::Quiet
                     },
                 )),
-            container(text(label).size(11))
-                .padding([6, 9])
-                .style(styles::context_menu(tokens)),
+            hint,
             tooltip::Position::Bottom,
         )
         .into()
@@ -754,71 +744,96 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         iced::widget::responsive(move |size| {
             let (files_visible, outline_visible) = self.docked_sidebars(size.width);
-            let wide = size.width >= 880.0;
-            let side_width = if wide { 268.0 } else { 216.0 };
-            // Preserve the actual macOS traffic lights, including their native hit targets.
+            let wide = size.width >= 960.0;
+            let side_width = if wide { 324.0 } else { 244.0 };
+            let ready = !self.busy && !self.loading;
+            // Leave the native macOS window buttons and their hit targets clear.
             let native_inset = if cfg!(target_os = "macos") { 76.0 } else { 0.0 };
-            let file: Element<'_, AppMessage> = if cfg!(target_os = "macos") {
-                space().width(0).into()
-            } else {
-                button(text("File").size(12))
-                    .padding([5, 10])
-                    .on_press(AppMessage::Chrome(Message::Menu(Menu::File)))
-                    .style(styles::button_style(
-                        tokens,
-                        if self.chrome.menu == Some(Menu::File) {
-                            Button::Selected
-                        } else {
-                            Button::Quiet
-                        },
-                    ))
-                    .into()
-            };
+            let mut left = row![space().width(native_inset)];
+            if !cfg!(target_os = "macos") {
+                left = left.push(self.small_button(
+                    "File",
+                    AppMessage::Chrome(Message::Menu(Menu::File)),
+                    self.chrome.menu == Some(Menu::File),
+                ));
+            }
             let files = container(self.titlebar_icon(
                 Icon::Sidebar,
-                "Files · ⌘/Ctrl Shift B",
+                if files_visible {
+                    "Hide Files"
+                } else {
+                    "Show Files"
+                },
                 AppMessage::ToggleSidebar(Sidebar::Files),
+                ready,
                 files_visible,
-                Some("Files"),
+                None,
             ))
             .id("titlebar-files");
             let quick_open = container(self.titlebar_icon(
                 Icon::Search,
-                if cfg!(target_os = "macos") {
-                    "Quick Open · ⌘P"
-                } else {
-                    "Quick Open · Ctrl+P"
-                },
+                "Quick Open",
                 AppMessage::QuickOpen(super::quick_open::Message::Open),
+                ready,
                 self.overlay == Some(Overlay::QuickOpen),
                 wide.then_some("Quick Open"),
             ))
             .id("titlebar-quick-open");
-            let left = row![space().width(native_inset), file, files, quick_open]
-                .spacing(4)
+            let left = left
+                .push(files)
+                .push(self.titlebar_icon(
+                    Icon::Home,
+                    "Welcome",
+                    AppMessage::ShowWelcome,
+                    ready,
+                    false,
+                    None,
+                ))
+                .push(self.titlebar_icon(
+                    Icon::Back,
+                    "Previous document",
+                    AppMessage::Step(Direction::Back),
+                    ready && self.trail.can_step(Direction::Back),
+                    false,
+                    None,
+                ))
+                .push(self.titlebar_icon(
+                    Icon::Forward,
+                    "Next document",
+                    AppMessage::Step(Direction::Forward),
+                    ready && self.trail.can_step(Direction::Forward),
+                    false,
+                    None,
+                ))
+                .push(quick_open)
+                .spacing(3)
                 .align_y(Alignment::Center)
                 .width(side_width);
-            let name =
-                tooltip(
-                    button(
+            let name = styles::hint(
+                tokens,
+                button(
+                    row![
                         text(&self.session.display_name)
-                            .size(12)
+                            .font(iced::Font {
+                                weight: iced::font::Weight::Bold,
+                                ..styles::BODY_FONT
+                            })
+                            .size(13)
                             .wrapping(text::Wrapping::None),
-                    )
-                    .padding([5, 6])
-                    .on_press(AppMessage::Chrome(Message::Menu(Menu::Document)))
-                    .style(styles::button_style(tokens, Button::Quiet)),
-                    container(
-                        text(self.session.path.as_ref().map_or_else(
-                            || "Not saved yet".into(),
-                            |path| path.display().to_string(),
-                        ))
-                        .size(11),
-                    )
-                    .padding(8)
-                    .style(styles::context_menu(tokens)),
-                    tooltip::Position::Bottom,
-                );
+                        icon::sized(Icon::ChevronDown, tokens.muted, 10.0),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                )
+                .padding([5, 6])
+                .on_press_maybe(ready.then_some(AppMessage::Chrome(Message::Menu(Menu::Document))))
+                .style(styles::button_style(tokens, Button::Quiet)),
+                self.session.path.as_ref().map_or_else(
+                    || "Document actions".into(),
+                    |path| format!("Document actions · {}", path.display()),
+                ),
+                tooltip::Position::Bottom,
+            );
             let (status_icon, status_label, caption, status_color) = match self.save_state() {
                 SaveState::Unsaved => (
                     Icon::Unsaved,
@@ -863,7 +878,8 @@ impl App {
             if let Some(caption) = caption {
                 status_content = status_content.push(text(caption).size(11).color(status_color));
             }
-            let status = tooltip(
+            let status = styles::hint(
+                tokens,
                 button(status_content)
                     .on_press_maybe((!self.busy).then_some(
                         if self.save_state() == SaveState::Saved {
@@ -874,10 +890,7 @@ impl App {
                     ))
                     .padding(6)
                     .style(styles::button_style(tokens, Button::Quiet)),
-                container(text(status_label).size(11))
-                    .max_width(360)
-                    .padding(8)
-                    .style(styles::context_menu(tokens)),
+                status_label,
                 tooltip::Position::Bottom,
             );
             let title = container(
@@ -897,63 +910,75 @@ impl App {
                 .align_y(Alignment::Center),
             )
             .center_x(Fill);
-            let mode = button(
-                row![
-                    text(match self.mode {
-                        EditorMode::Live => "Write",
-                        EditorMode::Source => "Source",
-                        EditorMode::Read => "Read",
-                    })
-                    .size(12)
-                    .color(tokens.accent),
-                    icon::sized(Icon::ChevronDown, tokens.muted, 10.0),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center),
-            )
-            .padding([5, 8])
-            .on_press_maybe(
-                (!self.loading).then_some(AppMessage::Chrome(Message::Menu(Menu::Mode))),
-            )
-            .style(styles::button_style(tokens, Button::Quiet));
-            let format: Element<'_, AppMessage> = {
+            let (mode_icon, mode_label) = match self.mode {
+                EditorMode::Live => (Icon::Edit, "Write"),
+                EditorMode::Source => (Icon::Code, "Source"),
+                EditorMode::Read => (Icon::Book, "Read"),
+            };
+            let mode_open = self.chrome.menu == Some(Menu::Mode);
+            let mode = styles::hint(
+                tokens,
                 button(
                     row![
-                        text("Format").size(12),
-                        icon::sized(Icon::ChevronDown, tokens.muted, 10.0)
+                        icon::sized(mode_icon, tokens.accent, 14.0),
+                        text(mode_label).size(13),
+                        icon::sized(Icon::ChevronDown, tokens.muted, 10.0),
                     ]
-                    .spacing(4)
+                    .spacing(5)
                     .align_y(Alignment::Center),
                 )
-                .padding([5, 10])
-                .on_press_maybe(
-                    (!self.loading && self.mode != EditorMode::Read)
-                        .then_some(AppMessage::Chrome(Message::Menu(Menu::Format))),
-                )
+                .padding([5, 8])
+                .on_press_maybe(ready.then_some(AppMessage::Chrome(Message::Menu(Menu::Mode))))
                 .style(styles::button_style(
                     tokens,
-                    if self.chrome.menu == Some(Menu::Format) {
+                    if mode_open {
                         Button::Selected
                     } else {
                         Button::Quiet
                     },
-                ))
-                .into()
-            };
+                )),
+                "Change editing mode",
+                tooltip::Position::Bottom,
+            );
             let right = row![
                 space::horizontal(),
                 container(mode).id("titlebar-mode"),
-                container(format).id("titlebar-format"),
+                container(self.titlebar_icon(
+                    Icon::Bold,
+                    if self.mode == EditorMode::Read {
+                        "Switch to Write or Source to format"
+                    } else {
+                        "Format document"
+                    },
+                    AppMessage::Chrome(Message::Menu(Menu::Format)),
+                    ready && self.mode != EditorMode::Read,
+                    self.chrome.menu == Some(Menu::Format),
+                    Some("Format"),
+                ))
+                .id("titlebar-format"),
                 container(self.titlebar_icon(
                     Icon::Outline,
-                    "Outline · ⌘/Ctrl Alt O",
+                    if outline_visible {
+                        "Hide Outline"
+                    } else {
+                        "Show Outline"
+                    },
                     AppMessage::ToggleSidebar(Sidebar::Outline),
+                    ready,
                     outline_visible,
-                    wide.then_some("Outline"),
+                    None,
                 ))
                 .id("titlebar-outline"),
+                self.titlebar_icon(
+                    Icon::Settings,
+                    "Settings",
+                    AppMessage::ShowSettings,
+                    !self.busy,
+                    self.overlay == Some(Overlay::Settings),
+                    None,
+                ),
             ]
-            .spacing(6)
+            .spacing(4)
             .align_y(Alignment::Center)
             .width(side_width);
             mouse_area(
@@ -983,11 +1008,25 @@ impl App {
             self.small_button("File", AppMessage::Chrome(Message::Menu(Menu::File)), false)
         };
         mouse_area(
-            container(content)
-                .padding([0, 12])
-                .center_y(TITLEBAR_HEIGHT)
-                .width(Fill)
-                .style(styles::panel(tokens.surface)),
+            container(
+                row![
+                    content,
+                    space::horizontal(),
+                    self.titlebar_icon(
+                        Icon::Settings,
+                        "Settings",
+                        AppMessage::ShowSettings,
+                        !self.busy,
+                        self.overlay == Some(Overlay::Settings),
+                        None,
+                    )
+                ]
+                .align_y(Alignment::Center),
+            )
+            .padding([0, 12])
+            .center_y(TITLEBAR_HEIGHT)
+            .width(Fill)
+            .style(styles::panel(tokens.surface)),
         )
         .on_press(AppMessage::Chrome(Message::DragWindow))
         .on_double_click(AppMessage::Chrome(Message::MaximizeWindow))
@@ -1052,13 +1091,13 @@ impl App {
                     ),
                     Command::action(
                         "Back",
-                        Icon::Document,
+                        Icon::Back,
                         AppMessage::Step(Direction::Back),
                         ready && self.trail.can_step(Direction::Back),
                     ),
                     Command::action(
                         "Forward",
-                        Icon::Document,
+                        Icon::Forward,
                         AppMessage::Step(Direction::Forward),
                         ready && self.trail.can_step(Direction::Forward),
                     ),
@@ -1078,7 +1117,7 @@ impl App {
                 ];
                 if !self.is_home() {
                     commands.extend([
-                        Command::action("Welcome", Icon::Book, AppMessage::ShowWelcome, ready),
+                        Command::action("Welcome", Icon::Home, AppMessage::ShowWelcome, ready),
                         Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                         Command::menu("Document actions…", Icon::Document, Menu::Document),
                         Command::action("Export HTML…", Icon::Export, AppMessage::Export, ready),
@@ -1543,10 +1582,8 @@ impl App {
         .max_height((size.height - top - 8.0).max(80.0))
         .style(styles::context_menu(tokens));
         let left = match menu {
-            Menu::Format => (size.width - width - 16.0).max(8.0),
-            Menu::Mode => {
-                (size.width - width - if size.width >= 880.0 { 150.0 } else { 112.0 }).max(8.0)
-            }
+            Menu::Format => (size.width - width - 80.0).max(8.0),
+            Menu::Mode => (size.width - width - 150.0).max(8.0),
             Menu::Document => ((size.width - width) / 2.0).max(8.0),
             Menu::Projects => ((size.width - width) / 2.0).max(8.0),
             Menu::Workspace => crate::theme::styles::SIDEBAR_INSET,

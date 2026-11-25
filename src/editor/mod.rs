@@ -12,3 +12,5 @@ pub(crate) mod rich_layout;
 pub(crate) mod source_editor;
 pub(crate) mod viewport;
 mod virtual_layout;
+
+pub(crate) const WRITING_PLACEHOLDER: &str = "Start writing…";

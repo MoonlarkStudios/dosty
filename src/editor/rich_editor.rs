@@ -40,6 +40,8 @@ pub struct RichEditor<'a> {
     theme: &'a ResolvedTheme,
     images: &'a ImageStore,
     base: Option<&'a Path>,
+    column_width: f32,
+    side_margin: f32,
     zoom: f32,
     window_scale: f32,
     source_selection: Selection,
@@ -174,6 +176,8 @@ impl<'a> RichEditor<'a> {
             theme,
             images,
             base: None,
+            column_width: f32::INFINITY,
+            side_margin: 0.0,
             zoom: 1.0,
             window_scale: 1.0,
             source_selection: Selection::default(),
@@ -197,6 +201,24 @@ impl<'a> RichEditor<'a> {
         self.window_scale = scale;
         self
     }
+
+    pub(crate) fn writing_column(mut self, width: f32, margin: f32) -> Self {
+        self.column_width = width;
+        self.side_margin = margin;
+        self
+    }
+
+    fn content_bounds(&self, pane: Rectangle) -> Rectangle {
+        let width = (pane.width - 2.0 * self.side_margin)
+            .max(0.0)
+            .min(self.column_width);
+        Rectangle {
+            x: pane.x + (pane.width - width) / 2.0,
+            width,
+            ..pane
+        }
+    }
+
     pub(crate) fn section_folds(
         mut self,
         targets: &'a [SectionFoldTarget],
@@ -1045,6 +1067,16 @@ impl State {
         (y, height)
     }
 
+    fn scrollbar_track(&self, pane: Rectangle) -> Option<Rectangle> {
+        (self.rich.height() > pane.height).then(|| {
+            let width = pane.width.min(12.0);
+            Rectangle::new(
+                Point::new(pane.x + pane.width - width, pane.y),
+                Size::new(width, pane.height),
+            )
+        })
+    }
+
     fn drag_scrollbar(&mut self, y: f32, anchor: f32) {
         let (_, height) = self.scrollbar();
         self.scroll = (y - anchor) / (self.viewport_height - height).max(1.0)
@@ -1144,7 +1176,9 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         limits: &layout::Limits,
     ) -> layout::Node {
         let state = tree.state.downcast_mut::<State>();
-        let bounds = limits.width(Length::Fill).height(Length::Fill).max();
+        let pane = limits.width(Length::Fill).height(Length::Fill).max();
+        let content = self.content_bounds(Rectangle::with_size(pane));
+        let bounds = content.size();
         let causal = self
             .collaboration
             .map(|document| (document.id(), document.replica_id(), document.generation()));
@@ -1369,10 +1403,10 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     ),
                 );
             }
-            node.move_to_mut(Point::new(rect.x, rect.y - state.scroll));
-            layout::Node::with_children(bounds, vec![node])
+            node.move_to_mut(Point::new(content.x + rect.x, rect.y - state.scroll));
+            layout::Node::with_children(pane, vec![node])
         } else {
-            layout::Node::new(bounds)
+            layout::Node::new(pane)
         }
     }
 
@@ -1383,12 +1417,13 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         _renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
+        let bounds = self.content_bounds(layout.bounds());
         operation.focusable(
             Some(&widget::Id::from("document-editor")),
-            layout.bounds(),
+            bounds,
             tree.state.downcast_mut::<State>(),
         );
-        operation.custom(None, layout.bounds(), tree.state.downcast_mut::<State>());
+        operation.custom(None, bounds, tree.state.downcast_mut::<State>());
         if let (Some(child), Some(child_layout)) = (&mut self.cell_editor, layout.children().next())
         {
             child.as_widget_mut().operate(
@@ -1413,7 +1448,8 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
     ) {
         let state = tree.state.downcast_mut::<State>();
         let previous_scroll = state.scroll;
-        let bounds = layout.bounds();
+        let pane = layout.bounds();
+        let bounds = self.content_bounds(pane);
         if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
             let available = state.table_menu_available();
             state.modifiers = *modifiers;
@@ -1495,7 +1531,15 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
                 ));
             let wheel = matches!(event, Event::Mouse(mouse::Event::WheelScrolled { .. }));
-            if !outside_click && !wheel {
+            let scrollbar_drag = state.scroll_drag.is_some()
+                && matches!(
+                    event,
+                    Event::Mouse(
+                        mouse::Event::CursorMoved { .. }
+                            | mouse::Event::ButtonReleased(mouse::Button::Left)
+                    )
+                );
+            if !outside_click && !wheel && !scrollbar_drag {
                 if matches!(event, Event::Keyboard(keyboard::Event::KeyPressed { .. }))
                     && state
                         .preedit
@@ -1578,6 +1622,24 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     }));
                     shell.capture_event();
                 }
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if state
+                    .scrollbar_track(pane)
+                    .is_some_and(|track| cursor.is_over(track)) =>
+            {
+                let position = cursor.position_in(pane).expect("track is within the pane");
+                let (y, height) = state.scrollbar();
+                let anchor = if (y..=y + height).contains(&position.y) {
+                    position.y - y
+                } else {
+                    height / 2.0
+                };
+                state.scroll_drag = Some(anchor);
+                state.drag_scrollbar(position.y, anchor);
+                self.refresh_viewport(state, bounds.size());
+                shell.capture_event();
+                shell.request_redraw();
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(target) = self.hovered_fold(state, bounds, cursor) {
@@ -1694,20 +1756,6 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     }
                     if state.preedit.as_ref().is_none_or(|p| p.content.is_empty()) {
                         state.composition_target = None;
-                    }
-                    if position.x >= bounds.width - 10.0 && state.rich.height() > bounds.height {
-                        let (y, height) = state.scrollbar();
-                        let anchor = if y <= position.y && position.y <= y + height {
-                            position.y - y
-                        } else {
-                            height / 2.0
-                        };
-                        state.scroll_drag = Some(anchor);
-                        state.drag_scrollbar(position.y, anchor);
-                        self.refresh_viewport(state, bounds.size());
-                        shell.capture_event();
-                        shell.request_redraw();
-                        return;
                     }
                     let click = mouse::Click::new(position, mouse::Button::Left, state.last_click);
                     if let Some((table, row, column, extent)) = table_hit(
@@ -1904,9 +1952,12 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                 state.drag_anchor = None;
                 state.stable_drag = None;
                 state.drag_position = None;
-                state.scroll_drag = None;
+                if state.scroll_drag.take().is_some() {
+                    shell.capture_event();
+                    shell.request_redraw();
+                }
             }
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(pane) => {
                 if let Some(press) = &mut state.pending_task {
                     press.cancelled = true;
                 }
@@ -2151,13 +2202,40 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<State>();
-        let bounds = layout.bounds();
+        let pane = layout.bounds();
+        let bounds = self.content_bounds(pane);
+        let tokens = self.theme.tokens;
+        use iced::advanced::Renderer as _;
+        if let Some(track) = state.scrollbar_track(pane)
+            && let Some(clip) = track.intersection(viewport)
+        {
+            let (y, height) = state.scrollbar();
+            let width = track.width.min(4.0);
+            renderer.with_layer(clip, |renderer| {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: Rectangle::new(
+                            Point::new(track.center().x - width / 2.0, track.y + y),
+                            Size::new(width, height),
+                        ),
+                        border: iced::Border {
+                            radius: 2.0.into(),
+                            ..iced::Border::default()
+                        },
+                        ..renderer::Quad::default()
+                    },
+                    if state.scroll_drag.is_some() {
+                        tokens.muted
+                    } else {
+                        tokens.border
+                    },
+                );
+            });
+        }
         let Some(clip) = bounds.intersection(viewport) else {
             return;
         };
         let translation = bounds.position() - Point::ORIGIN - Vector::new(0.0, state.scroll);
-        let tokens = self.theme.tokens;
-        use iced::advanced::Renderer as _;
         renderer.with_layer(clip, |renderer| {
             let visible = clip.y - translation.y..clip.y + clip.height - translation.y;
             for (rect, kind) in state.rich.resident().visible_decorations(visible.clone()) {
@@ -2472,12 +2550,12 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                 let size = self.theme.typography.body_size * self.zoom;
                 renderer.fill_text(
                     text::Text {
-                        content: "Begin anywhere…".into(),
+                        content: super::WRITING_PLACEHOLDER.into(),
                         bounds: bounds.size(),
                         size: size.into(),
                         font: self.theme.typography.font.font(),
                         line_height: text::LineHeight::Absolute(
-                            (size * self.theme.typography.line_height).into(),
+                            (size * self.theme.typography.line_height()).into(),
                         ),
                         align_x: text::Alignment::Default,
                         align_y: iced::alignment::Vertical::Top,
@@ -2503,26 +2581,9 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
                     tokens.accent,
                 );
             }
-            if state.rich.height() > bounds.height {
-                let (y, height) = state.scrollbar();
-                renderer.fill_quad(
-                    renderer::Quad {
-                        bounds: Rectangle::new(
-                            Point::new(bounds.x + bounds.width - 4.0, bounds.y + y),
-                            Size::new(3.0, height),
-                        ),
-                        border: iced::Border {
-                            radius: 2.0.into(),
-                            ..iced::Border::default()
-                        },
-                        ..renderer::Quad::default()
-                    },
-                    tokens.border,
-                );
-            }
         });
-        // Only the handle layer may reach into the page margin. The document
-        // and draft remain clipped to the editor's original content bounds.
+        // Fold and table handles sit in the left margin. The document and
+        // draft stay clipped to the writing column.
         let handle_bounds = Rectangle::new(
             Point::new(bounds.x - 28.0, bounds.y),
             Size::new(bounds.width + 28.0, bounds.height),
@@ -2564,14 +2625,21 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         _renderer: &Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<State>();
-        if self.hovered_fold(state, layout.bounds(), cursor).is_some() {
+        let pane = layout.bounds();
+        let bounds = self.content_bounds(pane);
+        if state.scroll_drag.is_some()
+            || state
+                .scrollbar_track(pane)
+                .is_some_and(|track| cursor.is_over(track))
+            || self.hovered_fold(state, bounds, cursor).is_some()
+        {
             return mouse::Interaction::Pointer;
         }
         if state.table_menu_available()
             && cursor
                 .position()
-                .map(|point| point - (layout.bounds().position() - Point::ORIGIN))
-                .filter(|point| point.y >= 0.0 && point.y <= layout.bounds().height)
+                .map(|point| point - (bounds.position() - Point::ORIGIN))
+                .filter(|point| point.y >= 0.0 && point.y <= bounds.height)
                 .is_some_and(|position| {
                     table_menu_hit(
                         &state.rich,
@@ -2597,8 +2665,8 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         }
         if cursor
             .position()
-            .map(|point| point - (layout.bounds().position() - Point::ORIGIN))
-            .filter(|point| point.y >= 0.0 && point.y <= layout.bounds().height)
+            .map(|point| point - (bounds.position() - Point::ORIGIN))
+            .filter(|point| point.y >= 0.0 && point.y <= bounds.height)
             .is_some_and(|position| {
                 table_hit(
                     &state.rich,
@@ -2613,18 +2681,13 @@ impl Widget<Message, Theme, Renderer> for RichEditor<'_> {
         {
             return mouse::Interaction::Crosshair;
         }
-        if cursor.position_in(layout.bounds()).is_some_and(|position| {
+        if cursor.position_in(bounds).is_some_and(|position| {
             let point = position + Vector::new(0.0, state.scroll);
             code_copy_at(state, point, self.zoom).is_some()
                 || task_at(state, self.projection, point).is_some()
-        }) || state.scroll_drag.is_some()
-            || cursor
-                .position_in(layout.bounds())
-                .is_some_and(|p| p.x >= layout.bounds().width - 10.0)
-                && state.rich.height() > layout.bounds().height
-        {
+        }) {
             mouse::Interaction::Pointer
-        } else if cursor.is_over(layout.bounds()) {
+        } else if cursor.is_over(bounds) {
             mouse::Interaction::Text
         } else {
             mouse::Interaction::None

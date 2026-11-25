@@ -66,6 +66,7 @@ pub enum Message {
         pinned: bool,
     },
     MoveTo(PathBuf),
+    MoveSelectionTo(Vec<PathBuf>),
     ChooseDestination(PathBuf),
     Destination(PathBuf),
     ShowLocation(PathBuf),
@@ -99,6 +100,7 @@ pub enum Outcome {
     Document(PathBuf),
     Directory(PathBuf),
     Move(file_ops::MoveResult),
+    Moves(file_ops::MoveBatch),
 }
 
 #[derive(Debug, Clone)]
@@ -116,13 +118,17 @@ enum Dialog {
         path: PathBuf,
         position: Point,
     },
+    SelectionMenu {
+        sources: Vec<PathBuf>,
+        position: Point,
+    },
     Name {
         action: NameAction,
         value: String,
         error: Option<String>,
     },
     Move {
-        source: PathBuf,
+        sources: Vec<PathBuf>,
         error: Option<String>,
     },
     Location(PathBuf),
@@ -160,7 +166,7 @@ pub(super) struct State {
     dialog: Option<Dialog>,
     next_operation: u64,
     inflight: Option<InFlight>,
-    undo: Option<(PathBuf, PathBuf)>,
+    undo: Vec<(PathBuf, PathBuf)>,
     notice: Option<String>,
     highlighted: Option<PathBuf>,
     selected: usize,
@@ -229,10 +235,13 @@ impl State {
         self.notice.as_deref()
     }
     pub(super) fn can_undo(&self) -> bool {
-        self.undo.is_some() && self.inflight.is_none()
+        !self.undo.is_empty() && self.inflight.is_none()
     }
     pub(super) fn is_menu(&self) -> bool {
-        matches!(self.dialog, Some(Dialog::Menu { .. }))
+        matches!(
+            self.dialog,
+            Some(Dialog::Menu { .. } | Dialog::SelectionMenu { .. })
+        )
     }
     pub(super) fn has_file(&self, path: &Path) -> bool {
         self.files().any(|file| file == path)
@@ -650,7 +659,15 @@ impl App {
                     return self.pick_move_destination(source);
                 }
                 self.folder.dialog = Some(Dialog::Move {
-                    source,
+                    sources: vec![source],
+                    error: None,
+                });
+                self.overlay = Some(Overlay::Folder);
+                self.first_folder_choice();
+            }
+            Message::MoveSelectionTo(sources) if !self.busy && sources.len() > 1 => {
+                self.folder.dialog = Some(Dialog::Move {
+                    sources,
                     error: None,
                 });
                 self.overlay = Some(Overlay::Folder);
@@ -660,13 +677,8 @@ impl App {
                 return self.pick_move_destination(source);
             }
             Message::Destination(parent) if !self.busy => {
-                if let Some(Dialog::Move { source, .. }) = &self.folder.dialog {
-                    let source = source.clone();
-                    let Some(filename) = source.file_name() else {
-                        return Task::none();
-                    };
-                    let to = parent.join(filename);
-                    return self.start_folder_move(source, to, false, false);
+                if let Some(Dialog::Move { sources, .. }) = &self.folder.dialog {
+                    return self.move_tree_selection(sources.clone(), parent);
                 }
             }
             Message::ShowLocation(path) if !self.busy => {
@@ -729,11 +741,20 @@ impl App {
             {
                 self.folder.selected = index;
             }
-            Message::UndoMove if !self.busy => {
-                if let Some((from, to)) = self.folder.undo.clone() {
-                    return self.start_folder_move(to, from, true, false);
+            Message::UndoMove if !self.busy => match self.folder.undo.as_slice() {
+                [] => {}
+                [(from, to)] => {
+                    return self.start_folder_move(to.clone(), from.clone(), true, false);
                 }
-            }
+                moves => {
+                    let moves = moves
+                        .iter()
+                        .rev()
+                        .map(|(from, to)| (to.clone(), from.clone()))
+                        .collect();
+                    return self.start_folder_batch(moves, true);
+                }
+            },
             _ => {}
         }
         Task::none()
@@ -794,6 +815,11 @@ impl App {
                 self.overlay = Some(Overlay::Folder);
                 self.first_folder_choice();
             }
+            file_tree::Action::SelectionMenu { sources, position } => {
+                self.folder.dialog = Some(Dialog::SelectionMenu { sources, position });
+                self.overlay = Some(Overlay::Folder);
+                self.first_folder_choice();
+            }
             file_tree::Action::Rename(path) => return self.update_folder(Message::Rename(path)),
             file_tree::Action::Move {
                 source,
@@ -804,6 +830,12 @@ impl App {
                 };
                 let to = destination.join(filename);
                 return self.start_folder_move(source, to, false, false);
+            }
+            file_tree::Action::MoveSelection {
+                sources,
+                destination,
+            } => {
+                return self.move_tree_selection(sources, destination);
             }
         }
         Task::none()
@@ -957,8 +989,8 @@ impl App {
             && self
                 .folder
                 .undo
-                .as_ref()
-                .is_some_and(|(old, new)| old == &to && new == &from);
+                .iter()
+                .any(|(old, new)| old == &to && new == &from);
         if root_move
             || !(inside
                 || active_rename
@@ -1001,8 +1033,18 @@ impl App {
         if !self.commit_cell() {
             return Task::none();
         }
-        let active = self
-            .session
+        let active = self.active_move_snapshot();
+        let operation = self.begin_folder_operation(true, undoing);
+        Task::perform(file_ops::move_item(from, to, active), move |result| {
+            AppMessage::Folder(Message::Finished {
+                operation,
+                result: result.map(Outcome::Move),
+            })
+        })
+    }
+
+    fn active_move_snapshot(&self) -> Option<file_ops::ActiveDocument> {
+        self.session
             .path
             .clone()
             .map(|path| file_ops::ActiveDocument {
@@ -1011,12 +1053,75 @@ impl App {
                 saved_version: self.session.saved_version.clone(),
                 source: self.session.document.source().to_owned(),
                 history: self.images.history(),
-            });
+            })
+    }
+
+    fn move_tree_selection(
+        &mut self,
+        sources: Vec<PathBuf>,
+        destination: PathBuf,
+    ) -> Task<AppMessage> {
+        let mut moves = Vec::new();
+        for source in sources {
+            if source.parent() == Some(destination.as_path()) {
+                continue;
+            }
+            let Some(filename) = source.file_name() else {
+                self.folder_error("Choose files or folders within the project.".into());
+                return Task::none();
+            };
+            let to = destination.join(filename);
+            moves.push((source, to));
+        }
+        if let [(from, to)] = moves.as_slice() {
+            return self.start_folder_move(from.clone(), to.clone(), false, false);
+        }
+        self.start_folder_batch(moves, false)
+    }
+
+    fn start_folder_batch(
+        &mut self,
+        moves: Vec<(PathBuf, PathBuf)>,
+        undoing: bool,
+    ) -> Task<AppMessage> {
+        if moves.is_empty() {
+            return Task::none();
+        }
+        let Some(root) = self.folder.root.clone() else {
+            return Task::none();
+        };
+        for (from, to) in &moves {
+            if from == &root
+                || !from.starts_with(&root)
+                || !to.starts_with(&root)
+                || to.starts_with(from)
+            {
+                self.folder_error(
+                    "Choose a destination within the project and outside the selected folders."
+                        .into(),
+                );
+                return Task::none();
+            }
+            if is_image(from) {
+                self.folder_error(
+                    "Images stay where they are: documents that use them are not updated.".into(),
+                );
+                return Task::none();
+            }
+            if let Some(unsaved) = self.background.dirty_under(from) {
+                self.folder_error(format!("Save {} before moving it.", unsaved.display_name));
+                return Task::none();
+            }
+        }
+        if !self.commit_cell() {
+            return Task::none();
+        }
+        let active = self.active_move_snapshot();
         let operation = self.begin_folder_operation(true, undoing);
-        Task::perform(file_ops::move_item(from, to, active), move |result| {
+        Task::perform(file_ops::move_items(root, moves, active), move |result| {
             AppMessage::Folder(Message::Finished {
                 operation,
-                result: result.map(Outcome::Move),
+                result: result.map(Outcome::Moves),
             })
         })
     }
@@ -1055,7 +1160,7 @@ impl App {
                     });
                 }
                 self.folder.notice = Some(format!("Created {}", name(&path)));
-                self.folder.undo = None;
+                self.folder.undo.clear();
                 open = Some(path.clone());
                 path
             }
@@ -1067,41 +1172,19 @@ impl App {
                     });
                 }
                 self.folder.notice = Some(format!("Created {}", name(&path)));
-                self.folder.undo = None;
+                self.folder.undo.clear();
                 self.folder.expanded.insert(path.clone());
                 path
             }
             Outcome::Move(result) => {
-                if let Some(warning) = result.warning {
-                    self.notification = Some(warning);
-                }
-                self.folder.remap(&result.from, &result.to);
-                remembered = self.workspace_moved(&result.from, &result.to);
-                for parked in self.background.release_clean_under(&result.from) {
-                    self.recovery.discard(parked.checkpoint);
-                }
-                self.trail.moved(&result.from, &result.to);
-                if self.session.document.collaboration().id() == inflight.document
-                    && self.session.document.collaboration().replica_id() == inflight.replica
-                    && let Some(path) = result.active_path
-                {
-                    self.session.display_name = name(&path);
-                    self.session.path = Some(path);
-                    self.recovery.path_changed();
-                    self.page_settled();
-                }
-                self.folder.notice = Some(if inflight.undoing {
-                    "Move undone".into()
-                } else if result.from.parent() == result.to.parent() {
-                    format!("Renamed to {}", name(&result.to))
-                } else {
-                    format!(
-                        "Moved to {}",
-                        result.to.parent().map_or_else(String::new, name)
-                    )
-                });
-                self.folder.undo = (!inflight.undoing).then_some((result.from, result.to.clone()));
-                result.to
+                let (path, task) = self.apply_folder_moves(&inflight, vec![result], None);
+                remembered = task;
+                path
+            }
+            Outcome::Moves(batch) => {
+                let (path, task) = self.apply_folder_moves(&inflight, batch.moved, batch.failure);
+                remembered = task;
+                path
             }
         };
         self.folder.highlighted = Some(highlighted.clone());
@@ -1127,6 +1210,83 @@ impl App {
             ]);
         }
         Task::batch([refresh, settle, remembered])
+    }
+
+    fn apply_folder_moves(
+        &mut self,
+        inflight: &InFlight,
+        moved: Vec<file_ops::MoveResult>,
+        failure: Option<FileError>,
+    ) -> (PathBuf, Task<AppMessage>) {
+        let mut tasks = Vec::with_capacity(moved.len());
+        for result in &moved {
+            if let Some(warning) = &result.warning {
+                self.notification = Some(warning.clone());
+            }
+            self.folder.remap(&result.from, &result.to);
+            tasks.push(self.workspace_moved(&result.from, &result.to));
+            for parked in self.background.release_clean_under(&result.from) {
+                self.recovery.discard(parked.checkpoint);
+            }
+            self.trail.moved(&result.from, &result.to);
+            if self.session.document.collaboration().id() == inflight.document
+                && self.session.document.collaboration().replica_id() == inflight.replica
+                && let Some(path) = &result.active_path
+            {
+                self.session.display_name = name(path);
+                self.session.path = Some(path.clone());
+                self.recovery.path_changed();
+                self.page_settled();
+            }
+        }
+        if inflight.undoing {
+            self.folder.undo.retain(|(from, to)| {
+                !moved
+                    .iter()
+                    .any(|result| &result.from == to && &result.to == from)
+            });
+        } else {
+            self.folder.undo = moved
+                .iter()
+                .map(|result| (result.from.clone(), result.to.clone()))
+                .collect();
+        }
+        let first = moved
+            .first()
+            .expect("a completed move reports at least one moved item");
+        let count = moved.len();
+        self.folder.notice = Some(if inflight.undoing {
+            if failure.is_some() {
+                format!(
+                    "Restored {count} {}",
+                    if count == 1 { "item" } else { "items" }
+                )
+            } else {
+                "Move undone".into()
+            }
+        } else if count > 1 || failure.is_some() {
+            format!(
+                "Moved {count} {}",
+                if count == 1 { "item" } else { "items" }
+            )
+        } else if first.from.parent() == first.to.parent() {
+            format!("Renamed to {}", name(&first.to))
+        } else {
+            format!(
+                "Moved to {}",
+                first.to.parent().map_or_else(String::new, name)
+            )
+        });
+        if let Some(failure) = failure {
+            self.notification = Some(format!(
+                "{} before the operation stopped. {failure}",
+                self.folder.notice.as_deref().unwrap_or_default()
+            ));
+        }
+        tasks.push(file_tree::select_moved(
+            moved.iter().map(|result| result.to.clone()).collect(),
+        ));
+        (first.to.clone(), Task::batch(tasks))
     }
 
     fn folder_error(&mut self, error: String) {
@@ -1275,11 +1435,15 @@ impl App {
     }
 
     pub(super) fn folder_menu_view(&self, size: Size) -> Element<'_, AppMessage> {
-        let Some(Dialog::Menu { path, position }) = &self.folder.dialog else {
-            return text("").into();
+        let (label, position) = match &self.folder.dialog {
+            Some(Dialog::Menu { path, position }) => (name(path), position),
+            Some(Dialog::SelectionMenu { sources, position }) => {
+                (format!("{} items", sources.len()), position)
+            }
+            _ => return text("").into(),
         };
         let tokens = self.resolved_theme.tokens;
-        let mut content = column![text(name(path)).size(12).color(tokens.muted)].spacing(3);
+        let mut content = column![text(label).size(12).color(tokens.muted)].spacing(3);
         let choices = self.folder_choices();
         for (index, choice) in choices.iter().enumerate() {
             content = content.push(self.folder_choice_button(choice, index));
@@ -1361,12 +1525,13 @@ impl App {
                     .spacing(8),
                 );
             }
-            Some(Dialog::Move { source, error }) => {
-                content = content.push(
-                    text(format!("Move {}", name(source)))
-                        .font(styles::BODY_FONT)
-                        .size(26),
-                );
+            Some(Dialog::Move { sources, error }) => {
+                let title = if let [source] = sources.as_slice() {
+                    format!("Move {}", name(source))
+                } else {
+                    format!("Move {} items", sources.len())
+                };
+                content = content.push(text(title).font(styles::BODY_FONT).size(26));
                 let mut destinations = column![].spacing(0);
                 for (index, choice) in self.folder_choices().iter().enumerate() {
                     destinations = destinations.push(self.folder_choice_button(choice, index));
@@ -1540,11 +1705,18 @@ impl App {
                     })
                     .collect()
             }
-            Some(Dialog::Move { source, .. }) => {
-                let mut choices = vec![Choice {
-                    label: "Choose folder…".into(),
-                    message: Some(Message::ChooseDestination(source.clone())),
-                }];
+            Some(Dialog::SelectionMenu { sources, .. }) => vec![Choice {
+                label: "Move to…".into(),
+                message: Some(Message::MoveSelectionTo(sources.clone())),
+            }],
+            Some(Dialog::Move { sources, .. }) => {
+                let mut choices = Vec::new();
+                if let [source] = sources.as_slice() {
+                    choices.push(Choice {
+                        label: "Choose folder…".into(),
+                        message: Some(Message::ChooseDestination(source.clone())),
+                    });
+                }
                 let existing: HashSet<&Path> = self
                     .folder
                     .entries
@@ -1559,7 +1731,7 @@ impl App {
                         .map(|entry| &entry.path),
                 );
                 for destination in dirs.take(MAX_DESTINATIONS) {
-                    if destination.starts_with(source) {
+                    if sources.iter().any(|source| destination.starts_with(source)) {
                         continue;
                     }
                     let label = self
@@ -1578,13 +1750,18 @@ impl App {
                                 )
                             },
                         );
-                    let target = source
-                        .file_name()
-                        .map(|filename| destination.join(filename));
-                    let collision = target
-                        .as_ref()
-                        .is_some_and(|target| existing.contains(target.as_path()));
-                    let same = source.parent() == Some(destination.as_path());
+                    let mut names = HashSet::new();
+                    let mut moving = sources
+                        .iter()
+                        .filter(|source| source.parent() != Some(destination.as_path()))
+                        .peekable();
+                    let same = moving.peek().is_none();
+                    let collision = moving.any(|source| {
+                        source.file_name().is_some_and(|filename| {
+                            !names.insert(filename)
+                                || existing.contains(destination.join(filename).as_path())
+                        })
+                    });
                     choices.push(Choice {
                         label: if same {
                             format!("{label} · current folder")

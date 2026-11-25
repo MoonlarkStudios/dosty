@@ -23,3 +23,4 @@ resolve commit IDs and application names in older captures.
 | [Column transactions](table-column-performance.md) | Matched large-table command comparison |
 | [Table interactions](table-editing.md) | Table commands, drafts, ranges, and bulk paste |
 | [Dependency updates](dependencies.md) | Regression smoke measurements around dependency repairs |
+| [UI refresh typefaces](ui-polish.md) | Matched System Sans and Source Sans 3 software profiles |

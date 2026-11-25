@@ -151,8 +151,11 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
     let legacy: Preferences =
         toml::from_str("theme = 'Sage'\nalways_show_controls = false\nanimate_controls = true")
             .unwrap();
-    assert_eq!(legacy.writing_font, WritingFont::SansSerif);
-    assert_eq!(Preferences::default().writing_font, WritingFont::SansSerif);
+    assert_eq!(legacy.writing_font, WritingFont::SourceSans3);
+    assert_eq!(
+        Preferences::default().writing_font,
+        WritingFont::SourceSans3
+    );
     for mode in [EditorMode::Live, EditorMode::Source, EditorMode::Read] {
         let mut app = app("# Draft\n\ncafé **words** and 🦀\n\nLast line.");
         send(&mut app, AppMessage::Edit(Action::Edit(Edit::Insert('!'))));
@@ -174,12 +177,16 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
                 send(&mut app, AppMessage::Theme(preset));
                 assert_eq!(app.resolved_theme.typography.font, font);
             }
+            let request = app.theme_request;
             send(
                 &mut app,
-                AppMessage::ThemeLoaded(Ok(Some((
-                    "custom.toml".into(),
-                    include_str!("../../themes/paper.toml").into(),
-                )))),
+                AppMessage::ThemeLoaded(
+                    request,
+                    Ok(Some((
+                        "custom.toml".into(),
+                        include_str!("../../themes/paper.toml").into(),
+                    ))),
+                ),
             );
             assert_eq!(app.resolved_theme.typography.font, font);
             assert_eq!(app.preferences.writing_font, font);
@@ -850,18 +857,18 @@ fn welcome_has_no_editor_and_the_new_document_shortcut_focuses_the_draft() {
     assert!(harness.editor().1);
 }
 
+fn editor_tree(tree: &widget::Tree, tag: widget::tree::Tag) -> Option<&widget::Tree> {
+    if tree.tag == tag {
+        return Some(tree);
+    }
+    tree.children
+        .iter()
+        .find_map(|child| editor_tree(child, tag))
+}
+
 #[test]
 fn returning_from_welcome_preserves_the_open_draft_and_its_viewport() {
     use crate::editor::rich_editor::RichEditor;
-
-    fn editor_tree(tree: &widget::Tree, tag: widget::tree::Tag) -> Option<&widget::Tree> {
-        if tree.tag == tag {
-            return Some(tree);
-        }
-        tree.children
-            .iter()
-            .find_map(|child| editor_tree(child, tag))
-    }
 
     let source = "café and 🦀\n\n".repeat(160);
     let mut harness = Harness::new(&source, EditorMode::Live, Size::new(1180.0, 820.0));
@@ -936,6 +943,70 @@ fn write_and_read_share_the_same_writing_column() {
             (reading.x, reading.y, reading.width),
             (writing.x, writing.y, writing.width)
         );
+    }
+}
+
+#[test]
+fn write_scrollbar_drags_at_the_pane_edge_without_displacing_text_selection() {
+    use crate::editor::rich_editor::RichEditor;
+    use iced::Point;
+
+    let source = "café and 🦀\n\n".repeat(160);
+    for size in [Size::new(760.0, 520.0), Size::new(1180.0, 820.0)] {
+        for outline_open in [false, true] {
+            let mut harness = Harness::new(&source, EditorMode::Live, size);
+            harness.app.chrome.outline.open = outline_open;
+            harness.focus(EDITOR);
+            let (writing, _) = harness.editor();
+            let pane_right = size.width - if outline_open { OUTLINE_WIDTH } else { 0.0 };
+            let thumb = Point::new(pane_right - 6.0, writing.y + 12.0);
+            assert!(thumb.x > writing.x + writing.width + 20.0);
+
+            let tag = harness.app.editor_view(false).as_widget().tag();
+            let scroll = |harness: &Harness| {
+                RichEditor::intent_stats(editor_tree(&harness.tree, tag).unwrap()).0
+            };
+            let selection = harness.app.session.selection;
+            let before = scroll(&harness);
+            let end = Point::new(thumb.x, writing.center().y);
+            for (event, position) in [
+                (mouse::Event::ButtonPressed(mouse::Button::Left), thumb),
+                (mouse::Event::CursorMoved { position: end }, end),
+                (mouse::Event::ButtonReleased(mouse::Button::Left), end),
+            ] {
+                for message in
+                    harness.input(Event::Mouse(event), mouse::Cursor::Available(position))
+                {
+                    harness.message(message);
+                }
+            }
+            let after_drag = scroll(&harness);
+            assert!(after_drag > before);
+            for message in harness.input(
+                Event::Mouse(mouse::Event::WheelScrolled {
+                    delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -32.0 },
+                }),
+                mouse::Cursor::Available(Point::new(pane_right - 18.0, end.y)),
+            ) {
+                harness.message(message);
+            }
+            assert!(scroll(&harness) > after_drag);
+            assert_eq!(harness.app.session.selection, selection);
+            assert_eq!(harness.editor(), (writing, true));
+            assert!(!harness.app.session.document.can_undo());
+
+            let text_edge = Point::new(writing.x + writing.width - 5.0, writing.y + 12.0);
+            let messages = harness.input(
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                mouse::Cursor::Available(text_edge),
+            );
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| matches!(message, AppMessage::SelectSource(_))),
+                "the text edge should place the caret"
+            );
+        }
     }
 }
 
@@ -1166,12 +1237,26 @@ fn settings_tabs_respond_to_pointer_input() {
 
     let mut harness = Harness::new("café and 🦀", EditorMode::Live, Size::new(1180.0, 820.0));
     harness.message(AppMessage::ShowSettings);
-    for (x, section) in [
-        (450.0, SettingsSection::Appearance),
-        (541.0, SettingsSection::Shortcuts),
-        (366.0, SettingsSection::Writing),
+    struct TabBounds(&'static str, Option<Rectangle>);
+    impl widget::Operation for TabBounds {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+            operate(self);
+        }
+
+        fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+            if id == Some(&widget::Id::from(self.0)) {
+                self.1 = Some(bounds);
+            }
+        }
+    }
+    for (id, section) in [
+        ("settings-appearance", SettingsSection::Appearance),
+        ("settings-shortcuts", SettingsSection::Shortcuts),
+        ("settings-writing", SettingsSection::Writing),
     ] {
-        let point = iced::Point::new(x, 198.0);
+        let mut tab = TabBounds(id, None);
+        harness.operate(&mut tab);
+        let point = tab.1.unwrap().center();
         for event in [
             mouse::Event::CursorMoved { position: point },
             mouse::Event::ButtonPressed(mouse::Button::Left),
@@ -1215,6 +1300,43 @@ fn writing_measure_reflows_the_column_and_preserves_the_source_selection() {
     }
     let legacy: Preferences = toml::from_str("theme = 'Paper'").unwrap();
     assert_eq!(legacy.writing_measure, WritingMeasure::Theme);
+}
+
+#[test]
+fn typography_settings_keep_the_custom_theme_default_and_directed_selection() {
+    use crate::theme::WritingSpacing;
+
+    let source = "# Draft\n\ncafé and 🦀";
+    let mut app = app(source);
+    let selection = reverse_selection(source);
+    send(&mut app, AppMessage::SelectSource(selection));
+    send(
+        &mut app,
+        AppMessage::WritingSpacing(WritingSpacing::Relaxed),
+    );
+    send(&mut app, AppMessage::Zoom(0.2));
+    let stale = app.theme_request;
+    send(&mut app, AppMessage::Theme(Preset::Midnight));
+    let custom = include_str!("../../themes/paper.toml").replace("1.65", "1.75");
+    send(
+        &mut app,
+        AppMessage::ThemeLoaded(stale, Ok(Some(("stale.toml".into(), custom.clone())))),
+    );
+    assert_eq!(app.resolved_theme.name, "Midnight");
+    let request = app.theme_request;
+    send(
+        &mut app,
+        AppMessage::ThemeLoaded(request, Ok(Some(("custom.toml".into(), custom)))),
+    );
+    assert_eq!(app.resolved_theme.typography.line_height(), 1.9);
+    let saved: Preferences = toml::from_str(&toml::to_string(&app.preferences).unwrap()).unwrap();
+    assert_eq!(saved.writing_spacing, WritingSpacing::Relaxed);
+    assert_eq!(saved.writing_zoom, 1.2);
+    send(&mut app, AppMessage::WritingSpacing(WritingSpacing::Theme));
+    assert_eq!(app.resolved_theme.typography.line_height(), 1.75);
+    assert_eq!(app.session.document.source(), source);
+    assert_eq!(app.session.selection, selection);
+    assert!(!app.session.document.can_undo());
 }
 
 #[test]
@@ -1610,41 +1732,218 @@ fn native_titlebar_menu_keyboard_choices_stay_visible_in_a_short_window() {
     }
 }
 
+fn tree_bounds(harness: &mut Harness) -> Rectangle {
+    use crate::editor::file_tree;
+    #[derive(Default)]
+    struct Probe(Option<Rectangle>);
+    impl widget::Operation for Probe {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+            operate(self);
+        }
+        fn focusable(
+            &mut self,
+            id: Option<&widget::Id>,
+            bounds: Rectangle,
+            _state: &mut dyn widget::operation::Focusable,
+        ) {
+            if id == Some(&widget::Id::from(file_tree::ID)) {
+                self.0 = Some(bounds);
+            }
+        }
+    }
+    let mut probe = Probe::default();
+    harness.operate(&mut probe);
+    probe.0.unwrap()
+}
+
+fn row_point(bounds: Rectangle, row: usize) -> iced::Point {
+    // Point inside the label, away from actions.
+    iced::Point::new(
+        bounds.x + 80.0,
+        bounds.y + (row as f32 + 0.5) * crate::theme::styles::SIDEBAR_ROW_HEIGHT,
+    )
+}
+
+#[tokio::test]
+async fn file_tree_moves_a_selection_to_root_and_folder_and_undoes_the_group() {
+    use crate::editor::file_tree::Action as TreeAction;
+    use iced::Point;
+
+    async fn pointer(harness: &mut Harness, event: mouse::Event, point: Point) -> Vec<AppMessage> {
+        harness
+            .input_async(Event::Mouse(event), mouse::Cursor::Available(point))
+            .await
+    }
+
+    async fn drag(harness: &mut Harness, from: Point, to: Point) -> Vec<AppMessage> {
+        pointer(
+            harness,
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            from,
+        )
+        .await;
+        pointer(harness, mouse::Event::CursorMoved { position: to }, to).await;
+        pointer(
+            harness,
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+            to,
+        )
+        .await
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let drafts = root.join("Drafts");
+    let archive = root.join("Archive");
+    std::fs::create_dir(&drafts).unwrap();
+    std::fs::create_dir(&archive).unwrap();
+    let source = "# Draft\n\ncafé and 🦀";
+    let files = ["A.md", "B.md"];
+    for file in files {
+        std::fs::write(drafts.join(file), source).unwrap();
+    }
+    // The list fills the pane. Root is still reachable during a drag.
+    for n in 0..30 {
+        std::fs::write(root.join(format!("Filler {n:02}.md")), "Padding").unwrap();
+    }
+    let snapshot = crate::io::folder::scan(
+        root.clone(),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .await
+    .unwrap();
+    let mut harness = Harness::new(source, EditorMode::Live, Size::new(760.0, 520.0));
+    harness.app.session.path = Some(drafts.join(files[0]));
+    harness.app.chrome.files.open = true;
+    harness.message(AppMessage::Folder(folder::Message::Scanned {
+        generation: 0,
+        result: Ok(snapshot),
+    }));
+    let identity = harness.app.session.document.collaboration().id();
+    harness.message(AppMessage::SelectSource(Selection::caret(source.len())));
+    harness.message(AppMessage::Edit(Action::Edit(Edit::Insert('!'))));
+    let dirty = harness.app.session.document.source().to_owned();
+    harness.message(AppMessage::SelectSource(reverse_selection(&dirty)));
+    let selection = harness.app.session.selection;
+    let bounds = tree_bounds(&mut harness);
+    let first = row_point(bounds, 2);
+    let second = row_point(bounds, 3);
+    pointer(
+        &mut harness,
+        mouse::Event::ButtonPressed(mouse::Button::Left),
+        first,
+    )
+    .await;
+    pointer(
+        &mut harness,
+        mouse::Event::ButtonReleased(mouse::Button::Left),
+        first,
+    )
+    .await;
+    harness
+        .input_async(
+            Event::Keyboard(keyboard::Event::ModifiersChanged(
+                keyboard::Modifiers::SHIFT,
+            )),
+            mouse::Cursor::Available(second),
+        )
+        .await;
+    pointer(
+        &mut harness,
+        mouse::Event::ButtonPressed(mouse::Button::Left),
+        second,
+    )
+    .await;
+    pointer(
+        &mut harness,
+        mouse::Event::ButtonReleased(mouse::Button::Left),
+        second,
+    )
+    .await;
+    harness
+        .input_async(
+            Event::Keyboard(keyboard::Event::ModifiersChanged(
+                keyboard::Modifiers::COMMAND,
+            )),
+            mouse::Cursor::Available(second),
+        )
+        .await;
+    for _ in 0..2 {
+        pointer(
+            &mut harness,
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            second,
+        )
+        .await;
+        pointer(
+            &mut harness,
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+            second,
+        )
+        .await;
+    }
+    harness
+        .input_async(
+            Event::Keyboard(keyboard::Event::ModifiersChanged(
+                keyboard::Modifiers::empty(),
+            )),
+            mouse::Cursor::Available(second),
+        )
+        .await;
+    let menu = pointer(
+        &mut harness,
+        mouse::Event::ButtonPressed(mouse::Button::Right),
+        first,
+    )
+    .await;
+    assert!(menu.iter().any(|message| matches!(
+        message,
+        AppMessage::Folder(folder::Message::Tree(TreeAction::SelectionMenu { sources, .. }))
+            if sources == &[drafts.join("A.md"), drafts.join("B.md")]
+    )));
+    harness.message(AppMessage::CloseOverlay);
+
+    let root_target = Point::new(bounds.center_x(), bounds.y + bounds.height - 12.0);
+    let dropped = drag(&mut harness, first, root_target).await;
+    assert!(dropped.iter().any(|message| matches!(
+        message,
+        AppMessage::Folder(folder::Message::Tree(TreeAction::MoveSelection { sources, destination }))
+            if sources.len() == 2 && destination == &root
+    )));
+    for file in files {
+        assert!(root.join(file).is_file() && !drafts.join(file).exists());
+    }
+    assert_eq!(harness.app.session.path, Some(root.join("A.md")));
+    assert_eq!(harness.app.session.selection, selection);
+
+    let bounds = tree_bounds(&mut harness);
+    let dropped = drag(&mut harness, row_point(bounds, 2), row_point(bounds, 0)).await;
+    assert!(dropped.iter().any(|message| matches!(
+        message,
+        AppMessage::Folder(folder::Message::Tree(TreeAction::MoveSelection { sources, destination }))
+            if sources.len() == 2 && destination == &archive
+    )));
+    for file in files {
+        assert!(archive.join(file).is_file() && !root.join(file).exists());
+    }
+    harness
+        .message_async(AppMessage::Folder(folder::Message::UndoMove))
+        .await;
+    for file in files {
+        assert!(root.join(file).is_file() && !archive.join(file).exists());
+    }
+    assert_eq!(harness.app.session.path, Some(root.join("A.md")));
+    assert_eq!(harness.app.session.selection, selection);
+    assert_eq!(harness.app.session.document.collaboration().id(), identity);
+    assert_eq!(harness.app.session.document.source(), dirty);
+    assert!(harness.app.session.dirty);
+    assert_eq!(std::fs::read_to_string(root.join("A.md")).unwrap(), source);
+}
+
 #[tokio::test]
 async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_hover_expansion() {
     use crate::editor::file_tree;
     use iced::Point;
-
-    fn tree_bounds(harness: &mut Harness) -> Rectangle {
-        #[derive(Default)]
-        struct Probe(Option<Rectangle>);
-        impl widget::Operation for Probe {
-            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
-                operate(self);
-            }
-            fn focusable(
-                &mut self,
-                id: Option<&widget::Id>,
-                bounds: Rectangle,
-                _state: &mut dyn widget::operation::Focusable,
-            ) {
-                if id == Some(&widget::Id::from(file_tree::ID)) {
-                    self.0 = Some(bounds);
-                }
-            }
-        }
-        let mut probe = Probe::default();
-        harness.operate(&mut probe);
-        probe.0.unwrap()
-    }
-
-    fn row_point(bounds: Rectangle, row: usize) -> Point {
-        // Point inside the label, away from actions.
-        Point::new(
-            bounds.x + 80.0,
-            bounds.y + (row as f32 + 0.5) * crate::theme::styles::SIDEBAR_ROW_HEIGHT,
-        )
-    }
 
     async fn pointer(harness: &mut Harness, event: mouse::Event, point: Point) -> Vec<AppMessage> {
         harness

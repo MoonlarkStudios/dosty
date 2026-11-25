@@ -1,7 +1,7 @@
 //! File operations run off the UI thread. Saves are atomic and detect external changes.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
@@ -54,6 +54,8 @@ pub struct Preferences {
     pub show_reading_time: bool,
     pub writing_font: crate::theme::WritingFont,
     pub writing_measure: crate::theme::WritingMeasure,
+    pub writing_spacing: crate::theme::WritingSpacing,
+    pub writing_zoom: f32,
 }
 
 impl Default for Preferences {
@@ -65,6 +67,8 @@ impl Default for Preferences {
             show_reading_time: true,
             writing_font: crate::theme::WritingFont::default(),
             writing_measure: crate::theme::WritingMeasure::default(),
+            writing_spacing: crate::theme::WritingSpacing::default(),
+            writing_zoom: 1.0,
         }
     }
 }
@@ -106,6 +110,24 @@ pub async fn save_preferences(preferences: Preferences) -> Result<(), FileError>
             fs::create_dir_all(parent)?;
         }
         atomic_write(&path, source.as_bytes())
+    })
+    .await
+    .map_err(|error| FileError::Io(error.to_string()))?
+}
+
+pub async fn load_theme(path: PathBuf) -> Result<(PathBuf, String), FileError> {
+    const MAX_THEME_BYTES: u64 = 64 * 1024;
+    tokio::task::spawn_blocking(move || {
+        let mut bytes = Vec::new();
+        fs::File::open(&path)?
+            .take(MAX_THEME_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_THEME_BYTES {
+            return Err(FileError::Io("Theme files can be at most 64 KiB.".into()));
+        }
+        let source = String::from_utf8(bytes)
+            .map_err(|_| FileError::Io("Theme files must use UTF-8.".into()))?;
+        Ok((path, source))
     })
     .await
     .map_err(|error| FileError::Io(error.to_string()))?
