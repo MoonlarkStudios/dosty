@@ -14,6 +14,7 @@ pub enum Icon {
     Folder,
     Search,
     ChevronDown,
+    ChevronRight,
     CollapseAll,
     ExpandAll,
     Check,
@@ -76,6 +77,7 @@ impl<Message> canvas::Program<Message> for Drawing {
             .with_line_join(canvas::LineJoin::Round);
         let paths: &[&[(f32, f32)]] = match self.kind {
             Icon::ChevronDown => &[&[(5., 7.), (9., 11.), (13., 7.)]],
+            Icon::ChevronRight => &[&[(7., 5.), (11., 9.), (7., 13.)]],
             Icon::Sidebar => &[
                 &[(3., 3.), (15., 3.), (15., 15.), (3., 15.), (3., 3.)],
                 &[(7., 3.), (7., 15.)],

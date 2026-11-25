@@ -53,6 +53,8 @@ pub(super) mod links;
 pub(super) mod native_menus;
 #[path = "outline.rs"]
 pub(super) mod outline;
+#[path = "projects.rs"]
+mod projects;
 #[path = "quick_open.rs"]
 pub(super) mod quick_open;
 #[path = "recovery.rs"]
@@ -133,6 +135,7 @@ pub struct App {
     preferences_pending: bool,
     settings_section: SettingsSection,
     chrome: chrome::State,
+    page: home::Page,
     menu_input: Vec<crate::editor::menu_input::Request>,
     menu_input_sequence: u64,
     #[cfg(target_os = "macos")]
@@ -142,6 +145,7 @@ pub struct App {
     folder: folder::State,
     folder_search: folder_search::State,
     workspace: workspace::State,
+    projects: projects::State,
     quick_open: quick_open::State,
     image_preview: image_preview::State,
     overlay: Option<Overlay>,
@@ -180,6 +184,7 @@ pub enum Message {
     FolderSearch(folder_search::Message),
     ImagePreview(image_preview::Message),
     Workspace(workspace::Message),
+    Project(projects::Message),
     QuickOpen(quick_open::Message),
     #[cfg(target_os = "macos")]
     Accessibility(accesskit::ActionRequest),
@@ -249,14 +254,16 @@ pub enum Message {
     Undo,
     Redo,
     New,
+    ShowWelcome,
+    ReturnToDocument,
     Open,
     OpenPath(PathBuf),
     Guide,
-    Welcome,
     Save,
     SaveAs,
     ChosenFile(Option<PathBuf>),
     Loaded(Result<LoadedFile, FileError>),
+    LoadedStandalone(Result<LoadedFile, FileError>),
     LoadedLinked(Result<LoadedFile, FileError>, links::Jump),
     ResolvedLinked(Result<PathBuf, FileError>, Option<links::Jump>),
     Saved {
@@ -341,6 +348,7 @@ enum Overlay {
     Statistics,
     Folder,
     QuickOpen,
+    Project,
     FolderSearch,
     Table,
     Settings,
@@ -363,13 +371,13 @@ enum Pending {
     FolderNew(PathBuf),
     New,
     Open(Option<PathBuf>),
+    Standalone(PathBuf),
     FolderMatch {
         root: PathBuf,
         target: crate::io::folder_search::Target,
     },
     Replica,
     Guide,
-    Welcome,
     Sample,
     Recover(Box<crate::io::recovery::Snapshot>),
     Close(window::Id),
@@ -418,6 +426,7 @@ impl App {
             preferences_pending: false,
             settings_section: SettingsSection::default(),
             chrome: chrome::State::default(),
+            page: home::Page::Startup,
             menu_input: Vec::new(),
             menu_input_sequence: 0,
             #[cfg(target_os = "macos")]
@@ -427,6 +436,7 @@ impl App {
             folder: folder::State::default(),
             folder_search: folder_search::State::default(),
             workspace: workspace::State::default(),
+            projects: projects::State::default(),
             quick_open: quick_open::State::default(),
             image_preview: image_preview::State::default(),
             overlay: None,
@@ -495,6 +505,9 @@ impl App {
     }
 
     pub fn title(&self) -> String {
+        if self.is_home() {
+            return "Dosty".into();
+        }
         format!(
             "{}{} — Dosty",
             if self.session.dirty { "● " } else { "" },
@@ -531,8 +544,10 @@ impl App {
             iced::event::listen_with(match self.overlay {
                 Some(Overlay::Chrome) => chrome::event_message,
                 Some(Overlay::Folder) => folder::event_message,
+                Some(Overlay::Project) => projects::event_message,
                 Some(Overlay::Table) => table::event_message,
                 Some(Overlay::Backlinks) => links::event_message,
+                None if self.is_home() => home::event_message,
                 _ => event_message,
             }),
             #[cfg(target_os = "macos")]
@@ -578,12 +593,30 @@ impl App {
     }
 
     fn update_message(&mut self, mut message: Message) -> Task<Message> {
+        if self.is_home()
+            && matches!(
+                message,
+                Message::Save
+                    | Message::SaveAs
+                    | Message::Export
+                    | Message::ToggleSource
+                    | Message::ToggleReading
+                    | Message::SetMode(_)
+                    | Message::ToggleSearch
+                    | Message::Format(_)
+                    | Message::Undo
+                    | Message::Redo
+            )
+        {
+            return Task::none();
+        }
         // Captured Escape also dismisses native text-input dialogs; editor
         // bindings retain their own single CloseOverlay action.
         if self.overlay == Some(Overlay::Chrome)
             && matches!(
                 message,
                 Message::New
+                    | Message::ShowWelcome
                     | Message::Open
                     | Message::OpenPath(_)
                     | Message::Save
@@ -650,7 +683,6 @@ impl App {
                     | Message::Open
                     | Message::OpenPath(_)
                     | Message::Guide
-                    | Message::Welcome
                     | Message::CloseRequested(_)
                     | Message::Dropped(_)
                     | Message::ConfirmSave
@@ -795,7 +827,6 @@ impl App {
                     | Message::Open
                     | Message::OpenPath(_)
                     | Message::Guide
-                    | Message::Welcome
                     | Message::ToggleSource
                     | Message::ToggleReading
                     | Message::SetMode(_)
@@ -816,6 +847,7 @@ impl App {
                     Some(
                         Overlay::Chrome
                             | Overlay::Folder
+                            | Overlay::Project
                             | Overlay::QuickOpen
                             | Overlay::Statistics
                     )
@@ -851,6 +883,7 @@ impl App {
             Message::FolderSearch(message) => return self.update_folder_search(message),
             Message::ImagePreview(message) => return self.update_image_preview(message),
             Message::Workspace(message) => return self.update_workspace(message),
+            Message::Project(message) => return self.update_projects(message),
             Message::QuickOpen(message) => return self.update_quick_open(message),
             #[cfg(target_os = "macos")]
             Message::Accessibility(request) => return self.accessibility_action(request),
@@ -1183,6 +1216,20 @@ impl App {
                 }
             }
             Message::New => return self.request(Pending::New),
+            Message::ShowWelcome => {
+                if self.page == home::Page::Document
+                    && !self.busy
+                    && !self.loading
+                    && self.overlay.is_none()
+                {
+                    self.page = home::Page::Welcome;
+                }
+            }
+            Message::ReturnToDocument => {
+                if !self.busy && self.overlay.is_none() {
+                    self.return_to_document();
+                }
+            }
             Message::Open => return self.request(Pending::Open(None)),
             Message::Dropped(path) if crate::io::assets::is_image(&path) => {
                 return self.import_dropped_image(path);
@@ -1191,7 +1238,6 @@ impl App {
                 return self.update_folder(folder::Message::OpenPath(path));
             }
             Message::Guide => return self.request(Pending::Guide),
-            Message::Welcome => return self.request(Pending::Welcome),
             Message::Step(direction) => return self.step(direction),
             Message::Resume(session) => {
                 if self.busy || self.overlay.is_some() || !self.commit_cell() {
@@ -1221,12 +1267,15 @@ impl App {
                 self.busy = false;
                 self.loading = false;
                 if let Some(path) = path {
-                    return self.execute(Pending::Open(Some(path)));
+                    return self.execute(Pending::Standalone(path));
                 }
             }
-            Message::Loaded(result) => return self.complete_document_load(result, None),
+            Message::Loaded(result) => return self.complete_document_load(result, None, true),
+            Message::LoadedStandalone(result) => {
+                return self.complete_document_load(result, None, false);
+            }
             Message::LoadedLinked(result, jump) => {
-                return self.complete_document_load(result, Some(OpenPosition::Link(jump)));
+                return self.complete_document_load(result, Some(OpenPosition::Link(jump)), true);
             }
             Message::ResolvedLinked(result, jump) => {
                 self.busy = false;
@@ -1235,7 +1284,7 @@ impl App {
                     Ok(path) if self.session.path.as_ref() == Some(&path) => {
                         return self.focus_link_target(jump);
                     }
-                    Ok(path) => return self.open_file(path, jump),
+                    Ok(path) => return self.open_file(path, jump, true),
                     Err(error) => self.notification = Some(error.to_string()),
                 }
             }
@@ -1383,6 +1432,12 @@ impl App {
                 }
             }
             Message::CloseOverlay => {
+                if self.overlay.is_none() && !self.busy && self.return_to_document() {
+                    return Task::none();
+                }
+                if self.overlay == Some(Overlay::Project) {
+                    return self.close_project_dialog();
+                }
                 if self.overlay == Some(Overlay::Statistics) {
                     self.overlay = None;
                     return Task::none();
@@ -2479,7 +2534,7 @@ impl App {
 
     /// Brings a background document back to the page as it was left.
     fn resume(&mut self, parked: Parked) -> Task<Message> {
-        self.resume_at(parked, None)
+        self.resume_at(parked, None, true)
     }
 
     fn jump_to_open_position(&mut self, jump: OpenPosition) -> Option<Task<Message>> {
@@ -2489,7 +2544,12 @@ impl App {
         }
     }
 
-    fn resume_at(&mut self, parked: Parked, jump: Option<OpenPosition>) -> Task<Message> {
+    fn resume_at(
+        &mut self,
+        parked: Parked,
+        jump: Option<OpenPosition>,
+        follow_project: bool,
+    ) -> Task<Message> {
         self.install_parked(parked);
         self.editor_focused = true;
         self.sync_editor();
@@ -2503,7 +2563,11 @@ impl App {
             });
         Task::batch([
             self.folder_document_changed(),
-            self.follow_document(),
+            if follow_project {
+                self.follow_document()
+            } else {
+                Task::none()
+            },
             self.persist_workspace(),
             navigation,
         ])
@@ -2521,14 +2585,17 @@ impl App {
             Pending::New => {
                 // A new page belongs beside the document the writer was in, or
                 // in the open place when that document has no folder of its own.
-                let folder = self
-                    .session
-                    .path
-                    .as_deref()
-                    .and_then(std::path::Path::parent)
-                    .map(std::path::Path::to_owned)
-                    .or_else(|| self.session.folder.clone())
-                    .or_else(|| self.folder.root().map(std::path::Path::to_owned));
+                let folder = if self.is_home() {
+                    None
+                } else {
+                    self.session
+                        .path
+                        .as_deref()
+                        .and_then(std::path::Path::parent)
+                        .map(std::path::Path::to_owned)
+                        .or_else(|| self.session.folder.clone())
+                        .or_else(|| self.folder.root().map(std::path::Path::to_owned))
+                };
                 self.install_session(Session::draft(folder));
                 return self.activate(0, false);
             }
@@ -2537,15 +2604,11 @@ impl App {
                 None,
                 "Markdown guide.md".into(),
             ),
-            Pending::Welcome => self.set_document(
-                include_str!("../../assets/welcome.md").into(),
-                None,
-                "Welcome.md".into(),
-            ),
             Pending::FolderMatch { root, target } => {
                 return self.open_folder_match(root, target);
             }
-            Pending::Open(Some(path)) => return self.open_file(path, None),
+            Pending::Open(Some(path)) => return self.open_file(path, None, true),
+            Pending::Standalone(path) => return self.open_file(path, None, false),
             Pending::Open(None) => {
                 self.busy = true;
                 self.loading = true;
@@ -2596,10 +2659,18 @@ impl App {
         operation::snap_to(SCROLL, scrollable::RelativeOffset::START)
     }
 
-    fn open_file(&mut self, path: PathBuf, jump: Option<links::Jump>) -> Task<Message> {
+    fn open_file(
+        &mut self,
+        path: PathBuf,
+        jump: Option<links::Jump>,
+        follow_project: bool,
+    ) -> Task<Message> {
         // Reading the page's own file would replace its unsaved writing
         // with the saved copy. A clean page is reread as it always was.
         if self.session.dirty && self.session.path.as_ref() == Some(&path) {
+            if self.return_to_document() {
+                return Task::none();
+            }
             self.notification = Some(format!(
                 "{} is already open with unsaved changes.",
                 self.session.display_name
@@ -2609,12 +2680,13 @@ impl App {
         // Unsaved writing is newer than the file, so it returns without
         // a read. Saving still checks the file against its baseline.
         if let Some(parked) = self.background.take_dirty(Some(&path)) {
-            return self.resume_at(parked, jump.map(OpenPosition::Link));
+            return self.resume_at(parked, jump.map(OpenPosition::Link), follow_project);
         }
         self.busy = true;
         self.loading = true;
         Task::perform(storage::load(path), move |result| match &jump {
             Some(jump) => Message::LoadedLinked(result, jump.clone()),
+            None if !follow_project => Message::LoadedStandalone(result),
             None => Message::Loaded(result),
         })
     }
@@ -2623,7 +2695,9 @@ impl App {
         &mut self,
         result: Result<LoadedFile, FileError>,
         jump: Option<OpenPosition>,
+        follow_project: bool,
     ) -> Task<Message> {
+        let from_welcome = self.is_home();
         self.busy = false;
         self.loading = false;
         let file = match result {
@@ -2665,7 +2739,7 @@ impl App {
         let navigation = jump
             .and_then(|jump| self.jump_to_open_position(jump))
             .unwrap_or_else(|| {
-                let focus = if self.restore_workspace_caret() {
+                let focus = if self.restore_workspace_caret() || from_welcome {
                     operation::focus(EDITOR)
                 } else {
                     Task::none()
@@ -2677,7 +2751,11 @@ impl App {
             });
         Task::batch([
             folder_task,
-            self.follow_document(),
+            if follow_project {
+                self.follow_document()
+            } else {
+                Task::none()
+            },
             self.persist_workspace(),
             navigation,
         ])
@@ -2736,6 +2814,7 @@ impl App {
     }
 
     fn install_session(&mut self, session: Session) {
+        self.page = home::Page::Document;
         self.workspace_document_leaving();
         self.menu_input.clear();
         #[cfg(target_os = "macos")]
@@ -2883,7 +2962,11 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
-        let mut layers = stack![responsive(move |size| self.workspace_view(size))];
+        let workspace = home::Pages::view(
+            responsive(move |size| self.workspace_view(size)).into(),
+            self.is_home(),
+        );
+        let mut layers = stack![workspace];
         if let Some(actions) = self.context_actions() {
             layers = layers.push(actions);
         }
@@ -2919,6 +3002,7 @@ impl App {
                     Overlay::Chrome => self.chrome_menu_view(size),
                     Overlay::Statistics => self.statistics_popover(size),
                     Overlay::Folder => self.folder_overlay_view((size.height - 48.0).max(80.0)),
+                    Overlay::Project => self.project_dialog(),
                     Overlay::Settings => self.settings_view((size.height - 48.0).min(600.0)),
                     Overlay::Collaboration => self.collaboration_view(),
                     Overlay::Unsaved => self.unsaved_view(),
@@ -2985,9 +3069,12 @@ impl App {
                     button(
                         row![
                             container(
-                                text(root.map_or_else(|| "Library".into(), folder::name))
-                                    .size(styles::SIDEBAR_TEXT_SIZE)
-                                    .wrapping(text::Wrapping::None)
+                                text(root.map_or_else(
+                                    || "Projects".into(),
+                                    |root| self.workspace.project_name(root)
+                                ))
+                                .size(styles::SIDEBAR_TEXT_SIZE)
+                                .wrapping(text::Wrapping::None)
                             )
                             .clip(true)
                             .width(Fill),
@@ -3003,7 +3090,7 @@ impl App {
                     .width(Fill)
                     .style(styles::button_style(tokens, Button::Quiet)),
                     text(root.map_or_else(
-                        || "No place is open".into(),
+                        || "No project is open".into(),
                         |root| root.display().to_string(),
                     ))
                     .size(11),
@@ -3079,7 +3166,7 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         let width = self.writing_width();
         if self.mode != EditorMode::Read {
-            let page = container(
+            return container(
                 column![self.editor_view(self.mode == EditorMode::Source)]
                     .spacing(0)
                     .max_width(width)
@@ -3087,13 +3174,8 @@ impl App {
             )
             .padding(WRITING_PAGE_PADDING)
             .center_x(Fill)
-            .height(Fill);
-            // Keep the editor's widget state when typing dismisses Home.
-            let mut layers = stack![page];
-            if self.is_home() {
-                layers = layers.push(self.home_view());
-            }
-            return layers.into();
+            .height(Fill)
+            .into();
         }
         let mut blocks = column![].spacing(12);
         let mut settings = styles::markdown_settings(&self.resolved_theme);
@@ -3621,17 +3703,27 @@ impl App {
         message: Message,
         selected: bool,
     ) -> Element<'a, Message> {
+        self.small_button_disabled(
+            label,
+            Some(message),
+            if selected {
+                Button::Selected
+            } else {
+                Button::Quiet
+            },
+        )
+    }
+
+    fn small_button_disabled<'a>(
+        &self,
+        label: &'a str,
+        message: Option<Message>,
+        style: Button,
+    ) -> Element<'a, Message> {
         button(text(label.to_owned()).size(12))
-            .on_press(message)
+            .on_press_maybe(message)
             .padding([6, 10])
-            .style(styles::button_style(
-                self.resolved_theme.tokens,
-                if selected {
-                    Button::Selected
-                } else {
-                    Button::Quiet
-                },
-            ))
+            .style(styles::button_style(self.resolved_theme.tokens, style))
             .into()
     }
 

@@ -483,6 +483,20 @@ fn theme_ui_previews() {
     app.chrome.files.open = true;
     app.chrome.sidebars_hidden = false;
     app.notification = None;
+    app.workspace
+        .remember_for_preview(&["/writing/Field notes", "/writing/Studio essays"]);
+    app.chrome.files.open = false;
+    render(&app, Size::new(760.0, 520.0), "project-home-narrow");
+    drop(app.update_projects(super::projects::Message::New));
+    drop(app.update_projects(super::projects::Message::Name("Field Guide".into())));
+    drop(
+        app.update_projects(super::projects::Message::LocationPicked(Some(
+            "/writing".into(),
+        ))),
+    );
+    render(&app, Size::new(760.0, 520.0), "new-project-narrow");
+    drop(app.update_message(Message::CloseOverlay));
+    app.chrome.files.open = true;
     for preset in Preset::ALL {
         app.resolved_theme = preset.resolve();
         render(&app, Size::new(1180.0, 820.0), preset.name());
@@ -643,8 +657,8 @@ fn native_quiet_previews() {
     drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Workspace)));
     render(&app, Size::new(1180.0, 820.0), "workspace-menu");
     drop(app.update_message(Message::CloseOverlay));
-    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Places)));
-    render(&app, Size::new(1180.0, 820.0), "places-menu");
+    drop(app.update_chrome(chrome::Message::Menu(chrome::Menu::Projects)));
+    render(&app, Size::new(1180.0, 820.0), "projects-menu");
     drop(app.update_message(Message::CloseOverlay));
     for font in WritingFont::ALL {
         app.resolved_theme.typography.font = font;

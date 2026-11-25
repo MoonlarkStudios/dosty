@@ -631,7 +631,7 @@ impl App {
             return self.focus_link_target(jump);
         }
         if let Some(parked) = self.background.take_dirty(Some(&path)) {
-            return self.resume_at(parked, jump.map(super::OpenPosition::Link));
+            return self.resume_at(parked, jump.map(super::OpenPosition::Link), true);
         }
         self.busy = true;
         self.loading = true;

@@ -13,12 +13,14 @@
 //!   <root id>/state.toml how one workspace was left
 //! ```
 
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::project::{self, Project};
 use super::storage::{self, FileError, atomic_write};
 
 pub const MAX_PLACES: usize = 64;
@@ -40,6 +42,10 @@ pub struct Registry {
     /// become places.
     #[serde(alias = "recent")]
     pub places: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub activity: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub project_names: BTreeMap<PathBuf, String>,
 }
 
 impl Registry {
@@ -50,13 +56,14 @@ impl Registry {
     #[must_use]
     pub fn opened(&mut self, root: &Path) -> bool {
         self.last = Some(root.to_owned());
-        if self.places.iter().any(|path| path == root) {
-            return true;
+        if !self.places.iter().any(|path| path == root) {
+            if self.places.len() >= MAX_PLACES {
+                return false;
+            }
+            self.places.push(root.to_owned());
         }
-        if self.places.len() >= MAX_PLACES {
-            return false;
-        }
-        self.places.push(root.to_owned());
+        self.activity.retain(|path| path != root);
+        self.activity.insert(0, root.to_owned());
         true
     }
 
@@ -64,6 +71,8 @@ impl Registry {
     /// folder and its files are untouched.
     pub fn forget(&mut self, root: &Path) {
         self.places.retain(|path| path != root);
+        self.activity.retain(|path| path != root);
+        self.project_names.remove(root);
         if self.last.as_deref() == Some(root) {
             self.last = None;
         }
@@ -76,6 +85,11 @@ impl Registry {
         let mut seen = std::collections::HashSet::new();
         self.places.retain(|path| seen.insert(path.clone()));
         self.places.truncate(MAX_PLACES);
+        let mut seen = std::collections::HashSet::new();
+        self.activity
+            .retain(|path| self.places.contains(path) && seen.insert(path.clone()));
+        self.project_names
+            .retain(|path, name| self.places.contains(path) && project::valid_display_name(name));
     }
 }
 
@@ -94,6 +108,8 @@ pub struct Workspace {
     pub documents: Vec<DocumentState>,
     /// Pinned files, in the order they were pinned.
     pub pins: Vec<PathBuf>,
+    #[serde(skip)]
+    pub project: Option<Project>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,7 +162,7 @@ impl Workspace {
         match self.pin_status(relative) {
             None => Err("This file’s path cannot be remembered."),
             Some(false) if pinned && self.pins.len() == MAX_PINS => {
-                Err("This workspace already has 32 pinned files.")
+                Err("This project already has 32 pinned files.")
             }
             Some(false) if pinned => {
                 self.pins.push(relative.to_owned());
@@ -340,12 +356,21 @@ pub async fn open(directory: Option<PathBuf>, path: PathBuf) -> Result<Workspace
     tokio::task::spawn_blocking(move || {
         let root = fs::canonicalize(&path)?;
         if !root.is_dir() {
-            return Err(FileError::Io("Choose a folder to add as a place.".into()));
+            return Err(FileError::Io("Choose a project folder.".into()));
         }
-        Ok(directory.map_or_else(
+        let mut workspace = directory.map_or_else(
             || Workspace::new(root.clone()),
             |directory| load_workspace_in(&directory, &root),
-        ))
+        );
+        // A remembered folder can still open if its optional metadata becomes unreadable.
+        workspace.project = project::read(&root).unwrap_or_else(|error| {
+            tracing::warn!(
+                "could not read project metadata in {}: {error}",
+                root.display()
+            );
+            None
+        });
+        Ok(workspace)
     })
     .await
     .map_err(|error| FileError::Io(error.to_string()))?

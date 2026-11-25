@@ -1,16 +1,20 @@
 # The Markdown field guide
 
-Simple marks. Beautiful words. The active heading shows its markers, and the inline span under your caret reveals its syntax. Move out of that span to conceal its marks immediately. Hidden marks leave no gaps; nearby text may reflow while the source caret, selection, and viewport remain anchored. Headings, tables, and images render directly in this live editor. Choose **Source** from the document-name menu to inspect the exact Markdown.
+Simple marks. Beautiful words. The active heading shows its markers, and the inline span under your caret reveals its syntax. Move out of that span to conceal its marks immediately. Hidden marks leave no gaps; nearby text may reflow while the source caret, selection, and viewport remain anchored. Headings, tables, and images render directly in this live editor. Choose **Source** from the editing mode dropdown to inspect the exact Markdown.
 
 ## Your writing space
 
-Dosty reopens where you left off. When there is nothing to return to, it opens a blank page with your places and recent documents beneath it: start typing to begin, or choose one to go back. Open a file, or choose **File → Add Place…** to add a folder to your library. A place stays in the library until you remove it, and **File → Places** moves between them. Files is always available from its titlebar toggle; before you add a place it offers to add one. A dot at the right of a row marks a document with unsaved changes, a fainter dot marks a collapsed folder that holds one, and new pages you have not saved yet are listed at the top. The place name at the top of Files opens its actions: move to another place, add a place, create a document or folder, refresh, show its location, or remove it from the library. On macOS, **Show in Finder** reveals the folder. Removing a place never touches its files and leaves your document open. Dosty remembers each place: the next launch reopens the last one with its document, caret, expanded folders and sidebars, and Files follows the document you are in to the place that holds it.
+Dosty resumes your last project and document. When there is no document to resume, Welcome shows your recent projects. Choose **New Document** to start a standalone draft or choose **Open Markdown File…** to edit an existing file. **New Project…** creates a folder at the location you choose and opens a blank draft. **Open Project…** opens a folder and asks before adding its `.dosty/project.toml` metadata. Use **File → Projects…** to return to any remembered project. Older Places appear there with their working state. **Set Up Project…** adds metadata when you choose.
 
-With a place open, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Files. Use the right button or Cmd/Ctrl+Alt+O to toggle Outline independently. At narrow widths, opening a sidebar brings it forward and tucks the other away. Both can return when the window widens. The writing stays fully visible. **Hide Sidebars** (Cmd/Ctrl+Shift+F) hides both panels while retaining their open state; the same command restores them. Escape dismisses the current editing context rather than restoring hidden sidebars.
+To revisit Welcome with a document open, choose **View → Welcome** on macOS or **File → Welcome** in the in-window menu. **Return to Document** or Escape takes you back to your writing.
 
-**Quick Open** (Cmd/Ctrl+P, or the search icon in the titlebar) is the one place to move between documents. Before you type, it lists documents with unsaved changes, the documents you used most recently, the folders and documents of the open place, and your other places. Use Up/Down to choose, Right or Enter to step into a folder, Left to step back out, and Enter to open a document. Type one or more terms to search by name or path across every place in your library. Escape returns focus to where you were working. The search is cleared when closed. Type `#` and a space to jump to a heading in the current document. Use **Pin in Quick Open** from a file's context menu to keep it above recent files for its place. The Files header search opens **Find in Folder** for document contents in the active place.
+Files shows the project’s folders and documents. The project name opens its actions, including creation, refresh, location, and removal from the list. **Show in Finder** reveals the folder on macOS. A dot marks unsaved changes beside a document. A fainter dot marks a collapsed folder with unsaved changes. Drafts appear above the tree.
 
-**Find in Folder** (Cmd/Ctrl+Alt+F) searches Markdown in the open place. Type a phrase and press Enter. Choose a result to select the match in its file. Escape returns to writing.
+With a project open, use the left titlebar button or Cmd/Ctrl+Shift+B to toggle Files. Use the right button or Cmd/Ctrl+Alt+O to toggle Outline independently. At narrow widths, opening a sidebar brings it forward and tucks the other away. Both can return when the window widens. The writing stays fully visible. **Hide Sidebars** (Cmd/Ctrl+Shift+F) hides both panels while retaining their open state; the same command restores them. Escape dismisses the current editing context rather than restoring hidden sidebars.
+
+**Quick Open** (Cmd/Ctrl+P, or the search icon in the titlebar) helps you move between documents. Before you type, it lists documents with unsaved changes, the documents you used most recently, the folders and documents of the open project, and your other projects. Use Up/Down to choose, Right or Enter to step into a folder, Left to step back out, and Enter to open a document. Type one or more terms to search by name or path across every project in your library. Escape returns focus to where you were working. The search is cleared when closed. Type `#` and a space to jump to a heading in the current document. Use **Pin in Quick Open** from a file's context menu to keep it above recent files for its project. The Files header search opens **Find in Folder** for document contents in the active project.
+
+**Find in Folder** (Cmd/Ctrl+Alt+F) searches Markdown in the open project. Type a phrase and press Enter. Choose a result to select the match in its file. Escape returns to writing.
 
 **New document** (Cmd/Ctrl+N) gives you an empty page immediately. It takes its title from its first line and belongs to the folder of the document you were in; the first save puts it there without asking, and never over an existing file. Use **Name…** in the document menu to choose the file name yourself first.
 
@@ -18,13 +22,13 @@ Moving to another document never interrupts you. The one you leave stays open in
 
 Outline offers Search, Collapse All, and Expand All icons when the document has headings. Search opens an inline filter; Cmd/Ctrl+Shift+J focuses it. Matching headings keep their parent context. Up/Down chooses a match, Enter jumps, and Escape closes the filter. In Write, hover next to a heading in the left margin and click its chevron to fold the section body. Cmd/Ctrl+Alt+L toggles the fold for the current section.
 
-Files also shows the images in a place. Choose one to preview it, and use **Insert into document** there, or in its menu, to reference it from the page where it already lives; nothing is copied. Images cannot be renamed or moved here, because pages that use them would lose them.
+Files also shows the images in a project. Choose one to preview it, and use **Insert into document** there, or in its menu, to reference it from the page where it already lives; nothing is copied. Images cannot be renamed or moved here, because pages that use them would lose them.
 
-Hover a file or folder to reveal its actions, or right-click it. A folder's menu offers **New document…** and **New folder…**; items below the root also offer **Rename** and **Move to…**. **Show location** displays the full path and can open its containing folder. Drag a file or folder onto another folder, or into the tree’s empty space to move it to the top of the place. A small preview and highlighted destination show where it will go; pausing over a collapsed folder opens it. Escape cancels the drag. Moves preserve unsaved writing and text undo; collisions, cross-filesystem moves, and references that cannot be preserved produce an error. There is no delete action. **Undo move** appears in a contextual notice and remains available in the document-name menu.
+Hover a file or folder to reveal its actions, or right-click it. A folder's menu offers **New document…** and **New folder…**; items below the root also offer **Rename** and **Move to…**. **Show location** displays the full path and can open its containing folder. Drag a file or folder onto another folder, or into the tree’s empty space to move it to the top of the project. A small preview and highlighted destination show where it will go; pausing over a collapsed folder opens it. Escape cancels the drag. Moves preserve unsaved writing and text undo; collisions, cross-filesystem moves, and references that cannot be preserved produce an error. There is no delete action. **Undo move** appears in a contextual notice and remains available in the document-name menu.
 
 In the file tree, Up/Down selects a row, Left/Right collapses or expands folders, and Enter or Space opens a file or toggles a folder. Home/End reaches the first/last row. F2 renames the selected item; Shift+F10 or the context-menu key opens its actions. Use Up/Down or Tab/Shift+Tab and Enter in menus. Hovering an item also shows its full path.
 
-Titlebar navigation, the filename, and the save indicator stay visible while you type: a check means saved, a filled dot means unsaved changes, an empty circle means never saved, and a warning means saving failed. Click the indicator to save; hover it for details. The document-name menu holds Save, Rename, Move, and the **Write / Source / Read** modes. Source and Read show a small label beside the filename while active.
+The filename menu holds file actions such as Save, Rename, and Move. Choose **Write**, **Source**, or **Read** from the mode dropdown on the right. The titlebar shows when a draft is new, a document is unsaved, or a save failed. A check means all changes are saved. Click the indicator to save or retry, and hover for details.
 
 **Format** in the titlebar opens formatting and insertion commands on demand. On macOS, the native menu bar also offers File, Edit, Format, View, Window, and Help; Edit commands act on the focused editor, table draft, or text field. **Dosty → Settings…** configures appearance, writing typeface, word count, and reading time. The **Writing** tab previews System Sans, Source Sans 3, or Newsreader and lets you set the line width and text size. **Appearance** holds themes and **Shortcuts** lists keyboard commands. System Sans is the default. The typeface remains selected when switching themes. Statistics stay at the bottom center of the writing column while you type. Select text to count its words. Click the statistics or press Cmd/Ctrl+Alt+I for document totals, including the Markdown character count. Reading time assumes about 200 words per minute. View also exposes the writing preferences. On Windows/Linux, the in-window File menu contains the equivalent command groups. F10 opens that keyboard-operated command menu on every platform.
 
@@ -57,9 +61,9 @@ fn main() {
 | :--- | :--- |
 | F10 | Open the File menu |
 | Cmd/Ctrl + O | Open a file |
-| Cmd/Ctrl + P | Quick Open: move between documents and places |
+| Cmd/Ctrl + P | Quick Open: move between documents and projects |
 | Cmd/Ctrl + [ and ] | Back and Forward through visited documents |
-| Cmd/Ctrl + Shift + O | Open a folder |
+| Cmd/Ctrl + Shift + O | Open a project |
 | Cmd/Ctrl + S | Save document |
 | Cmd/Ctrl + Shift + B | Toggle Files |
 | Cmd/Ctrl + Alt + O | Toggle Outline |
@@ -80,16 +84,16 @@ fn main() {
 | Cmd/Ctrl + Z | Undo |
 | Cmd/Ctrl + Shift + Z | Redo |
 
-## Link files in a place
+## Link files in a project
 
-Use **Find file or heading…** in the link dialog to pick a file in the open place or
+Use **Find file or heading…** in the link dialog to pick a file in the open project or
 one of its headings. Apply writes a relative Markdown link. Open **Linked
-from…** in the filename menu to see which files in the open place link to the current
+from…** in the filename menu to see which files in the open project link to the current
 document. Choose a result to follow it back to its source.
 
 ## Tables and images, without leaving the page
 
-Tables normally show a bold header and subtle row rules. Click a cell to reveal its grid, row numbers, column letters, and editing controls without moving the text. Type to replace its value. Double-click or press Enter to edit the existing text. Arrows move between cells. Up from the header and Down from the last row move into text or a blank paragraph outside the table. At a document edge, the arrow creates a missing paragraph and places the caret there. Creating it is one undo step; your typing is a separate step. Shift+Arrow extends a range. Inside text editing, arrows move the text caret. Enter commits and moves down, Shift+Enter moves up, and Tab or Shift+Tab commits and moves right or left. Tab remembers the entry column for the next Enter. Cmd/Ctrl+Enter adds a cell line break.
+Tables normally show a bold header and subtle row rules. Click a cell to reveal its grid, row numbers, column letters, and editing controls without moving the text. Type to replace its value. Double-click or press Enter to edit the existing text. Arrows move between cells. Up from the header and Down from the last row move into text or a blank paragraph outside the table. At a document edge, the arrow creates a missing paragraph and projects the caret there. Creating it is one undo step; your typing is a separate step. Shift+Arrow extends a range. Inside text editing, arrows move the text caret. Enter commits and moves down, Shift+Enter moves up, and Tab or Shift+Tab commits and moves right or left. Tab remembers the entry column for the next Enter. Cmd/Ctrl+Enter adds a cell line break.
 
 Escape cancels pending typing without changing the document, then collapses a selected range, then hides the table controls. Click surrounding prose to commit and return to the quiet table presentation. **Leave table** starts a paragraph after it.
 

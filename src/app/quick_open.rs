@@ -6,6 +6,7 @@
 //! first. Everything it holds is derived when it opens and discarded when it
 //! closes; other places are scanned on a worker only while it is open.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -112,6 +113,7 @@ pub(super) struct State {
     folders: Vec<PathBuf>,
     unsaved: Vec<Unsaved>,
     places: Vec<PathBuf>,
+    project_names: HashMap<PathBuf, String>,
     pins: Vec<PathBuf>,
     /// The folder being browsed while the query is empty; `None` is the top.
     location: Option<PathBuf>,
@@ -143,10 +145,22 @@ impl State {
         };
     }
 
-    fn candidate(path: &Path, root: &Path, other: bool, recency: usize) -> Option<Candidate> {
+    fn project_name(&self, root: &Path) -> String {
+        self.project_names
+            .get(root)
+            .cloned()
+            .unwrap_or_else(|| super::folder::name(root))
+    }
+
+    fn candidate(
+        path: &Path,
+        root: &Path,
+        project: &str,
+        other: bool,
+        recency: usize,
+    ) -> Option<Candidate> {
         let relative = path.strip_prefix(root).ok()?;
         let name = path.file_name()?.to_string_lossy().into_owned();
-        let place = super::folder::name(root);
         let parent = relative.parent().map(portable).unwrap_or_default();
         let relative = portable(relative);
         Some(Candidate {
@@ -154,13 +168,13 @@ impl State {
             path: path.to_owned(),
             title: super::folder::title(path),
             location: match (other, parent.is_empty()) {
-                (_, true) => place.clone(),
+                (_, true) => project.to_owned(),
                 (false, false) => parent,
-                (true, false) => format!("{place} / {parent}"),
+                (true, false) => format!("{project} / {parent}"),
             },
             name_lower: name.to_lowercase(),
             path_lower: if other {
-                format!("{}/{}", place.to_lowercase(), relative.to_lowercase())
+                format!("{}/{}", project.to_lowercase(), relative.to_lowercase())
             } else {
                 relative.to_lowercase()
             },
@@ -188,6 +202,7 @@ impl State {
             .map(|(rank, path)| (path.as_path(), rank))
             .collect();
         let recency = |path: &Path| recency.get(path).copied().unwrap_or(usize::MAX);
+        let project = self.project_name(root);
         self.candidates
             .retain(|candidate| candidate.place.is_some());
         self.candidates.extend(
@@ -195,7 +210,7 @@ impl State {
                 .iter()
                 .filter(|entry| !entry.is_directory)
                 .filter_map(|entry| {
-                    Self::candidate(&entry.path, root, false, recency(&entry.path))
+                    Self::candidate(&entry.path, root, &project, false, recency(&entry.path))
                 }),
         );
         self.folders = entries
@@ -211,12 +226,19 @@ impl State {
     fn index_library(&mut self, snapshots: &[discovery::Snapshot]) {
         self.candidates
             .retain(|candidate| candidate.place.is_none());
+        let project_names = &self.project_names;
         let documents = snapshots.iter().flat_map(|snapshot| {
+            let project = project_names
+                .get(&snapshot.root)
+                .cloned()
+                .unwrap_or_else(|| super::folder::name(&snapshot.root));
             snapshot
                 .entries
                 .iter()
                 .filter(|entry| !entry.is_directory)
-                .filter_map(|entry| Self::candidate(&entry.path, &snapshot.root, true, usize::MAX))
+                .filter_map(move |entry| {
+                    Self::candidate(&entry.path, &snapshot.root, &project, true, usize::MAX)
+                })
         });
         self.candidates
             .extend(documents.take(MAX_LIBRARY_DOCUMENTS));
@@ -338,20 +360,20 @@ impl State {
             .collect();
         self.push_section("Recent", &mut section);
         if let Some(root) = self.root.clone() {
-            self.push_children(&root, super::folder::name(&root));
+            self.push_children(&root, self.project_name(&root));
         }
         let mut section: Vec<_> = self
             .places
             .iter()
             .map(|place| Row {
                 target: Target::Place(place.clone()),
-                title: super::workspace::place_label(place, &self.places),
-                location: String::new(),
+                title: self.project_name(place),
+                location: super::workspace::project_path(place),
                 unsaved: false,
                 heading: None,
             })
             .collect();
-        self.push_section("Places", &mut section);
+        self.push_section("Projects", &mut section);
     }
 
     fn push_section(&mut self, heading: impl Into<String>, section: &mut Vec<Row>) {
@@ -481,6 +503,13 @@ impl App {
             .iter()
             .filter(|place| Some(place.as_path()) != root.as_deref())
             .cloned()
+            .collect();
+        self.quick_open.project_names = self
+            .quick_open
+            .places
+            .iter()
+            .chain(root.iter())
+            .map(|root| (root.clone(), self.workspace.project_name(root)))
             .collect();
         self.quick_open.root.clone_from(&root);
         self.quick_open.pins = root.as_ref().map_or_else(Vec::new, |root| {
@@ -749,6 +778,7 @@ impl App {
                 }
                 let focus = self.cancel_quick_open();
                 if self.session.path.as_ref() == Some(&path) {
+                    self.return_to_document();
                     return focus;
                 }
                 // This is a known file choice. Reuse Files' loader;
@@ -777,6 +807,7 @@ impl App {
                 self.quick_open.clear();
                 self.overlay = None;
                 self.preserve_viewport_generation = None;
+                self.return_to_document();
                 self.update_message(AppMessage::Outline(outline::Message::Jump(index)))
             }
             Target::Folder(folder) => {
@@ -994,7 +1025,7 @@ impl App {
                     } else if self.quick_open.location.is_some() {
                         "This folder holds no documents"
                     } else {
-                        "Add a place to keep your writing within reach"
+                        "Open a project to search its files"
                     })
                     .size(13)
                     .color(tokens.muted),

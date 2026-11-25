@@ -11,8 +11,8 @@ use iced::{Alignment, Element, Event, Fill, Padding, Size, Task, window};
 
 use super::trail::Direction;
 use super::{
-    App, EDITOR, EditorMode, Format, Message as AppMessage, Overlay, Sidebar, folder, recovery,
-    writing,
+    App, EDITOR, EditorMode, Format, Message as AppMessage, Overlay, Sidebar, folder, projects,
+    recovery, writing,
 };
 use crate::app::brand;
 use crate::app::icon::{self, Icon};
@@ -114,11 +114,12 @@ pub enum Menu {
     File,
     Edit,
     Document,
+    Mode,
     Format,
     Help,
     Navigation,
     Preferences,
-    Places,
+    Projects,
     Workspace,
 }
 
@@ -387,6 +388,9 @@ impl App {
     }
 
     pub(super) fn workspace_view(&self, size: Size) -> Element<'_, AppMessage> {
+        if self.is_home() {
+            return self.home_view(size);
+        }
         let (files_docked, outline_docked) = self.docked_sidebars(size.width);
         let content = column![
             self.search_bar(),
@@ -515,7 +519,7 @@ impl App {
                             | Menu::Format
                             | Menu::Navigation
                             | Menu::Preferences
-                            | Menu::Places
+                            | Menu::Projects
                             | Menu::Workspace
                     )
                 ) {
@@ -582,11 +586,12 @@ impl App {
             || self.grid.draft.is_some();
         !self.loading
             && (field_focused
-                || match command {
-                    menu_input::Command::Undo => self.session.document.can_undo(),
-                    menu_input::Command::Redo => self.session.document.can_redo(),
-                    _ => self.mode != EditorMode::Read,
-                })
+                || !self.is_home()
+                    && match command {
+                        menu_input::Command::Undo => self.session.document.can_undo(),
+                        menu_input::Command::Redo => self.session.document.can_redo(),
+                        _ => self.mode != EditorMode::Read,
+                    })
     }
 
     fn save_state(&self) -> SaveState {
@@ -662,6 +667,7 @@ impl App {
             "Close statistics",
             AppMessage::CloseOverlay,
             false,
+            None,
         );
         let metric = |label: &'static str, value: String| {
             row![
@@ -710,27 +716,32 @@ impl App {
         label: &'a str,
         message: AppMessage,
         selected: bool,
+        caption: Option<&'static str>,
     ) -> Element<'a, AppMessage> {
         let tokens = self.resolved_theme.tokens;
+        let color = if selected {
+            tokens.on_accent_soft
+        } else {
+            tokens.muted
+        };
+        let mut content = row![icon::view(kind, color)]
+            .spacing(5)
+            .align_y(Alignment::Center);
+        if let Some(caption) = caption {
+            content = content.push(text(caption).size(12));
+        }
         tooltip(
-            button(icon::view(
-                kind,
-                if selected {
-                    tokens.on_accent_soft
-                } else {
-                    tokens.muted
-                },
-            ))
-            .on_press(message)
-            .padding(6)
-            .style(styles::button_style(
-                tokens,
-                if selected {
-                    Button::Selected
-                } else {
-                    Button::Quiet
-                },
-            )),
+            button(content)
+                .on_press(message)
+                .padding(6)
+                .style(styles::button_style(
+                    tokens,
+                    if selected {
+                        Button::Selected
+                    } else {
+                        Button::Quiet
+                    },
+                )),
             container(text(label).size(11))
                 .padding([6, 9])
                 .style(styles::context_menu(tokens)),
@@ -743,7 +754,8 @@ impl App {
         let tokens = self.resolved_theme.tokens;
         iced::widget::responsive(move |size| {
             let (files_visible, outline_visible) = self.docked_sidebars(size.width);
-            let side_width = if size.width < 900.0 { 236.0 } else { 280.0 };
+            let wide = size.width >= 880.0;
+            let side_width = if wide { 268.0 } else { 216.0 };
             // Preserve the actual macOS traffic lights, including their native hit targets.
             let native_inset = if cfg!(target_os = "macos") { 76.0 } else { 0.0 };
             let file: Element<'_, AppMessage> = if cfg!(target_os = "macos") {
@@ -767,6 +779,7 @@ impl App {
                 "Files · ⌘/Ctrl Shift B",
                 AppMessage::ToggleSidebar(Sidebar::Files),
                 files_visible,
+                Some("Files"),
             ))
             .id("titlebar-files");
             let quick_open = container(self.titlebar_icon(
@@ -778,9 +791,10 @@ impl App {
                 },
                 AppMessage::QuickOpen(super::quick_open::Message::Open),
                 self.overlay == Some(Overlay::QuickOpen),
+                wide.then_some("Quick Open"),
             ))
             .id("titlebar-quick-open");
-            let left = row![space().width(native_inset), files, quick_open, file]
+            let left = row![space().width(native_inset), file, files, quick_open]
                 .spacing(4)
                 .align_y(Alignment::Center)
                 .width(side_width);
@@ -805,33 +819,52 @@ impl App {
                     .style(styles::context_menu(tokens)),
                     tooltip::Position::Bottom,
                 );
-            let (status_icon, status_label, status_color) = match self.save_state() {
+            let (status_icon, status_label, caption, status_color) = match self.save_state() {
                 SaveState::Unsaved => (
                     Icon::Unsaved,
                     "Not saved yet · Click to save".to_owned(),
+                    Some("New draft"),
                     tokens.accent,
                 ),
                 SaveState::Modified => (
                     Icon::Modified,
                     "Unsaved changes · Click to save".to_owned(),
+                    Some("Unsaved"),
                     tokens.accent,
                 ),
-                SaveState::Saved => (Icon::Check, "All changes saved".to_owned(), tokens.muted),
-                SaveState::Saving => (Icon::Save, "Saving…".to_owned(), tokens.muted),
+                SaveState::Saved => (
+                    Icon::Check,
+                    "All changes saved".to_owned(),
+                    None,
+                    tokens.muted,
+                ),
+                SaveState::Saving => (
+                    Icon::Save,
+                    "Saving…".to_owned(),
+                    Some("Saving…"),
+                    tokens.muted,
+                ),
                 SaveState::Failed => (
                     Icon::Warning,
                     format!(
-                        "Save failed: {}",
+                        "{} · Click to retry",
                         self.chrome
                             .save_error
                             .as_deref()
                             .unwrap_or("Try saving again")
                     ),
+                    Some("Save failed"),
                     tokens.danger,
                 ),
             };
+            let mut status_content = row![icon::view(status_icon, status_color)]
+                .spacing(4)
+                .align_y(Alignment::Center);
+            if let Some(caption) = caption {
+                status_content = status_content.push(text(caption).size(11).color(status_color));
+            }
             let status = tooltip(
-                button(icon::view(status_icon, status_color))
+                button(status_content)
                     .on_press_maybe((!self.busy).then_some(
                         if self.save_state() == SaveState::Saved {
                             AppMessage::Chrome(Message::Menu(Menu::Document))
@@ -853,34 +886,36 @@ impl App {
                         .max_width(
                             (size.width
                                 - side_width * 2.0
-                                - 74.0
-                                - if self.mode == EditorMode::Live {
-                                    0.0
-                                } else {
-                                    42.0
-                                })
+                                - if caption.is_some() { 146.0 } else { 74.0 })
                             .max(48.0)
                         )
                         .clip(true)
                         .id("titlebar-name"),
-                    match self.mode {
-                        EditorMode::Live => space().width(0).into(),
-                        mode => Element::from(
-                            text(if mode == EditorMode::Source {
-                                "Source"
-                            } else {
-                                "Read"
-                            })
-                            .size(10)
-                            .color(tokens.muted)
-                        ),
-                    },
                     container(status).id("titlebar-save-state"),
                 ]
                 .spacing(2)
                 .align_y(Alignment::Center),
             )
             .center_x(Fill);
+            let mode = button(
+                row![
+                    text(match self.mode {
+                        EditorMode::Live => "Write",
+                        EditorMode::Source => "Source",
+                        EditorMode::Read => "Read",
+                    })
+                    .size(12)
+                    .color(tokens.accent),
+                    icon::sized(Icon::ChevronDown, tokens.muted, 10.0),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center),
+            )
+            .padding([5, 8])
+            .on_press_maybe(
+                (!self.loading).then_some(AppMessage::Chrome(Message::Menu(Menu::Mode))),
+            )
+            .style(styles::button_style(tokens, Button::Quiet));
             let format: Element<'_, AppMessage> = {
                 button(
                     row![
@@ -907,12 +942,14 @@ impl App {
             };
             let right = row![
                 space::horizontal(),
+                container(mode).id("titlebar-mode"),
                 container(format).id("titlebar-format"),
                 container(self.titlebar_icon(
                     Icon::Outline,
                     "Outline · ⌘/Ctrl Alt O",
                     AppMessage::ToggleSidebar(Sidebar::Outline),
-                    outline_visible
+                    outline_visible,
+                    wide.then_some("Outline"),
                 ))
                 .id("titlebar-outline"),
             ]
@@ -938,8 +975,27 @@ impl App {
         .into()
     }
 
+    pub(super) fn home_titlebar(&self) -> Element<'_, AppMessage> {
+        let tokens = self.resolved_theme.tokens;
+        let content: Element<'_, AppMessage> = if cfg!(target_os = "macos") {
+            space().into()
+        } else {
+            self.small_button("File", AppMessage::Chrome(Message::Menu(Menu::File)), false)
+        };
+        mouse_area(
+            container(content)
+                .padding([0, 12])
+                .center_y(TITLEBAR_HEIGHT)
+                .width(Fill)
+                .style(styles::panel(tokens.surface)),
+        )
+        .on_press(AppMessage::Chrome(Message::DragWindow))
+        .on_double_click(AppMessage::Chrome(Message::MaximizeWindow))
+        .into()
+    }
+
     pub(super) fn context_actions(&self) -> Option<Element<'_, AppMessage>> {
-        if self.chrome.sidebars_hidden {
+        if self.is_home() || self.chrome.sidebars_hidden {
             return None;
         }
         let mut actions = row![].spacing(8).align_y(Alignment::Center);
@@ -980,9 +1036,14 @@ impl App {
         let ready = !self.busy;
         match menu {
             Menu::File => {
-                vec![
+                let mut commands = vec![
                     Command::action("New document", Icon::Plus, AppMessage::New, ready),
-                    Command::action("Open file…", Icon::Document, AppMessage::Open, ready),
+                    Command::action(
+                        "Open Markdown File…",
+                        Icon::Document,
+                        AppMessage::Open,
+                        ready,
+                    ),
                     Command::action(
                         "Quick Open…",
                         Icon::Search,
@@ -1002,33 +1063,49 @@ impl App {
                         ready && self.trail.can_step(Direction::Forward),
                     ),
                     Command::action(
-                        "Add place…",
+                        "Open Project…",
                         Icon::Folder,
                         AppMessage::Folder(folder::Message::Pick),
                         ready,
                     ),
-                    Command::menu("Places…", Icon::Folder, Menu::Places),
-                    Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
-                    Command::menu("Document actions…", Icon::Document, Menu::Document),
-                    Command::action("Export HTML…", Icon::Export, AppMessage::Export, ready),
                     Command::action(
-                        "Find & replace…",
-                        Icon::Search,
-                        AppMessage::ToggleSearch,
-                        true,
+                        "New Project…",
+                        Icon::Plus,
+                        AppMessage::Project(projects::Message::New),
+                        ready,
                     ),
-                    Command::action(
-                        "Find in folder…",
-                        Icon::Search,
-                        AppMessage::FolderSearch(super::folder_search::Message::Open),
-                        ready && self.folder.root().is_some(),
-                    ),
-                    Command::menu("Formatting…", Icon::Heading, Menu::Format),
-                    Command::menu("Edit…", Icon::Document, Menu::Edit),
-                    Command::menu("View…", Icon::Sidebar, Menu::Navigation),
-                    Command::menu("Writing preferences…", Icon::Settings, Menu::Preferences),
-                    Command::menu("Help & settings…", Icon::Settings, Menu::Help),
-                ]
+                    Command::menu("Projects…", Icon::Folder, Menu::Projects),
+                ];
+                if !self.is_home() {
+                    commands.extend([
+                        Command::action("Welcome", Icon::Book, AppMessage::ShowWelcome, ready),
+                        Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
+                        Command::menu("Document actions…", Icon::Document, Menu::Document),
+                        Command::action("Export HTML…", Icon::Export, AppMessage::Export, ready),
+                        Command::action(
+                            "Find & replace…",
+                            Icon::Search,
+                            AppMessage::ToggleSearch,
+                            true,
+                        ),
+                        Command::action(
+                            "Find in folder…",
+                            Icon::Search,
+                            AppMessage::FolderSearch(super::folder_search::Message::Open),
+                            ready && self.folder.root().is_some(),
+                        ),
+                        Command::menu("Formatting…", Icon::Heading, Menu::Format),
+                        Command::menu("Edit…", Icon::Document, Menu::Edit),
+                        Command::menu("View…", Icon::Sidebar, Menu::Navigation),
+                        Command::menu("Writing preferences…", Icon::Settings, Menu::Preferences),
+                    ]);
+                }
+                commands.push(Command::menu(
+                    "Help & settings…",
+                    Icon::Settings,
+                    Menu::Help,
+                ));
+                commands
             }
             Menu::Edit => [
                 ("Undo", menu_input::Command::Undo, Icon::Undo),
@@ -1107,25 +1184,25 @@ impl App {
                         true,
                     ));
                 }
-                commands.extend(
-                    [
-                        ("Write", Icon::Document, EditorMode::Live),
-                        ("Source", Icon::Code, EditorMode::Source),
-                        ("Read", Icon::Book, EditorMode::Read),
-                    ]
-                    .into_iter()
-                    .map(|(label, icon, mode)| {
-                        Command::action(
-                            label,
-                            if self.mode == mode { Icon::Check } else { icon },
-                            AppMessage::SetMode(mode),
-                            !self.loading,
-                        )
-                    }),
-                );
                 commands
             }
+            Menu::Mode => [
+                ("Write", Icon::Document, EditorMode::Live),
+                ("Source", Icon::Code, EditorMode::Source),
+                ("Read", Icon::Book, EditorMode::Read),
+            ]
+            .into_iter()
+            .map(|(label, icon, mode)| {
+                Command::action(
+                    label,
+                    if self.mode == mode { Icon::Check } else { icon },
+                    AppMessage::SetMode(mode),
+                    ready,
+                )
+            })
+            .collect(),
             Menu::Navigation => vec![
+                Command::menu("Editing mode…", Icon::Document, Menu::Mode),
                 Command::action(
                     "Files",
                     Icon::Folder,
@@ -1167,15 +1244,14 @@ impl App {
                     self.chrome.files.open || self.chrome.outline.open,
                 ),
             ],
-            Menu::Places => {
-                let places = self.workspace.places();
-                let mut commands: Vec<_> = places
-                    .iter()
-                    .enumerate()
+            Menu::Projects => {
+                let mut commands: Vec<_> = self
+                    .workspace
+                    .recent_projects()
                     .map(|(index, root)| {
                         Command::action(
-                            super::workspace::place_label(root, places),
-                            if self.folder.root() == Some(root.as_path()) {
+                            self.workspace.project_label(root),
+                            if self.folder.root() == Some(root) {
                                 Icon::Check
                             } else {
                                 Icon::Folder
@@ -1185,28 +1261,33 @@ impl App {
                         )
                     })
                     .collect();
-                if commands.is_empty() {
-                    commands.push(Command::action(
-                        "No places yet",
+                commands.extend([
+                    Command::action(
+                        "Open Project…",
                         Icon::Folder,
-                        AppMessage::Dismiss,
-                        false,
-                    ));
-                }
+                        AppMessage::Folder(folder::Message::Pick),
+                        ready,
+                    ),
+                    Command::action(
+                        "New Project…",
+                        Icon::Plus,
+                        AppMessage::Project(projects::Message::New),
+                        ready,
+                    ),
+                ]);
                 commands
             }
             Menu::Workspace => {
-                let mut commands = Vec::new();
-                if self.workspace.places().len() > 1 {
-                    commands.push(Command::menu("Places…", Icon::Folder, Menu::Places));
-                }
-                commands.push(Command::action(
-                    "Add place…",
-                    Icon::Folder,
-                    AppMessage::Folder(folder::Message::Pick),
-                    ready,
-                ));
+                let mut commands = vec![Command::menu("Projects…", Icon::Folder, Menu::Projects)];
                 if let Some(root) = self.folder.root() {
+                    if !self.workspace.has_project_metadata() {
+                        commands.push(Command::action(
+                            "Set Up Project…",
+                            Icon::Folder,
+                            AppMessage::Project(projects::Message::SetUp(root.to_owned())),
+                            ready,
+                        ));
+                    }
                     commands.extend([
                         Command::action(
                             "Show location",
@@ -1243,7 +1324,7 @@ impl App {
                             ready,
                         ),
                         Command::action(
-                            "Remove from library",
+                            "Remove from Projects",
                             Icon::Close,
                             AppMessage::Folder(folder::Message::Remove),
                             ready,
@@ -1337,7 +1418,6 @@ impl App {
             }
             Menu::Help => vec![
                 Command::action("Settings…", Icon::Settings, AppMessage::ShowSettings, true),
-                Command::action("Welcome", Icon::Book, AppMessage::Welcome, true),
                 Command::action("Markdown guide", Icon::Book, AppMessage::Guide, true),
                 Command::action(
                     "The quiet hour · sample",
@@ -1438,7 +1518,12 @@ impl App {
                 .width(Fill),
             );
         }
-        let width = 280.0_f32.min((size.width - 24.0).max(120.0));
+        let preferred_width: f32 = match menu {
+            Menu::Mode => 144.0,
+            Menu::Projects => 360.0,
+            _ => 280.0,
+        };
+        let width = preferred_width.min((size.width - 24.0).max(120.0));
         let top = if menu == Menu::Workspace {
             TITLEBAR_HEIGHT
                 + crate::theme::styles::SIDEBAR_INSET
@@ -1459,7 +1544,11 @@ impl App {
         .style(styles::context_menu(tokens));
         let left = match menu {
             Menu::Format => (size.width - width - 16.0).max(8.0),
+            Menu::Mode => {
+                (size.width - width - if size.width >= 880.0 { 150.0 } else { 112.0 }).max(8.0)
+            }
             Menu::Document => ((size.width - width) / 2.0).max(8.0),
+            Menu::Projects => ((size.width - width) / 2.0).max(8.0),
             Menu::Workspace => crate::theme::styles::SIDEBAR_INSET,
             _ => 16.0,
         };
