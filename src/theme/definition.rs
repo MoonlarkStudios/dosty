@@ -46,25 +46,37 @@ pub struct ResolvedTheme {
 #[serde(default, deny_unknown_fields)]
 pub struct Typography {
     pub body_size: f32,
-    pub line_height: f32,
+    line_height: f32,
     pub content_width: f32,
     /// A writing preference, independent of the selected color theme.
     #[serde(skip)]
     pub font: WritingFont,
+    #[serde(skip)]
+    pub spacing: WritingSpacing,
+}
+
+impl Typography {
+    pub fn line_height(self) -> f32 {
+        match self.spacing {
+            WritingSpacing::Theme => self.line_height,
+            WritingSpacing::Compact => 1.4,
+            WritingSpacing::Relaxed => 1.9,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WritingFont {
-    #[default]
     SansSerif,
+    #[default]
     #[serde(rename = "source-sans-3")]
     SourceSans3,
     Serif,
 }
 
 impl WritingFont {
-    pub const ALL: [Self; 3] = [Self::SansSerif, Self::SourceSans3, Self::Serif];
+    pub const ALL: [Self; 3] = [Self::SourceSans3, Self::Serif, Self::SansSerif];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -137,6 +149,29 @@ impl std::fmt::Display for WritingMeasure {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WritingSpacing {
+    #[default]
+    Theme,
+    Compact,
+    Relaxed,
+}
+
+impl WritingSpacing {
+    pub const ALL: [Self; 3] = [Self::Theme, Self::Compact, Self::Relaxed];
+}
+
+impl std::fmt::Display for WritingSpacing {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Theme => "Theme default",
+            Self::Compact => "Compact",
+            Self::Relaxed => "Relaxed",
+        })
+    }
+}
+
 impl Default for Typography {
     fn default() -> Self {
         Self {
@@ -144,6 +179,7 @@ impl Default for Typography {
             line_height: 1.65,
             content_width: 610.0,
             font: WritingFont::default(),
+            spacing: WritingSpacing::Theme,
         }
     }
 }
@@ -153,24 +189,27 @@ pub enum Preset {
     Paper,
     Midnight,
     Sage,
+    Ink,
 }
 
 impl Preset {
-    pub const ALL: [Self; 3] = [Self::Paper, Self::Midnight, Self::Sage];
+    pub const ALL: [Self; 4] = [Self::Paper, Self::Midnight, Self::Sage, Self::Ink];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Paper => "Paper",
             Self::Midnight => "Midnight",
             Self::Sage => "Sage",
+            Self::Ink => "Ink",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Paper => "Warm paper & smoked teal",
-            Self::Midnight => "A softer light after dark",
-            Self::Sage => "Quiet greens & warm linen",
+            Self::Paper => "Warm ivory and teal",
+            Self::Midnight => "Charcoal and cream",
+            Self::Sage => "Linen and leaf green",
+            Self::Ink => "Bright white and deep blue",
         }
     }
 
@@ -180,6 +219,7 @@ impl Preset {
             Self::Paper => include_str!("../../themes/paper.toml"),
             Self::Midnight => include_str!("../../themes/midnight.toml"),
             Self::Sage => include_str!("../../themes/sage.toml"),
+            Self::Ink => include_str!("../../themes/ink.toml"),
         };
         ResolvedTheme::from_toml(definition).expect("built-in themes must pass validation")
     }

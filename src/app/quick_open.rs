@@ -902,7 +902,7 @@ impl App {
     pub(super) fn quick_open_view(&self, size: Size) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
         let headings = self.quick_open.heading_query().is_some();
-        let input = text_input("Search or jump to…", &self.quick_open.query)
+        let input = text_input("Search by document name or path…", &self.quick_open.query)
             .id(INPUT)
             .on_input(|query| AppMessage::QuickOpen(Message::Query(query)))
             .on_submit(AppMessage::QuickOpen(Message::Accept))
@@ -957,14 +957,20 @@ impl App {
                 );
             }
             let mark = match &entry.target {
-                Target::Folder(_) | Target::Place(_) => Some(Icon::Folder),
-                Target::File(path) if crate::io::assets::is_image(path) => Some(Icon::Image),
-                Target::Heading { .. } => Some(Icon::Heading),
-                Target::File(_) | Target::Session(_) => None,
+                Target::Folder(_) | Target::Place(_) => Icon::Folder,
+                Target::File(path) if crate::io::assets::is_image(path) => Icon::Image,
+                Target::Heading { .. } => Icon::Heading,
+                Target::File(_) | Target::Session(_) => Icon::Document,
             };
-            let mark = mark.map_or_else(
-                || space().width(14).into(),
-                |mark| icon::sized(mark, tokens.muted, 14.0),
+            let selected = position == self.quick_open.selected;
+            let mark = icon::sized(
+                mark,
+                if selected {
+                    tokens.on_accent_soft
+                } else {
+                    tokens.muted
+                },
+                16.0,
             );
             let line = row![
                 mark,
@@ -992,19 +998,17 @@ impl App {
                 .on_press(AppMessage::QuickOpen(activate))
                 .style(styles::button_style(
                     tokens,
-                    if position == self.quick_open.selected {
+                    if selected {
                         Button::Selected
                     } else {
                         Button::Quiet
                     },
                 ));
             let choice: Element<'_, AppMessage> = match &entry.target {
-                Target::File(path) | Target::Folder(path) | Target::Place(path) => tooltip(
+                Target::File(path) | Target::Folder(path) | Target::Place(path) => styles::hint(
+                    tokens,
                     choice,
-                    container(text(path.display().to_string()).size(11))
-                        .padding([6, 8])
-                        .max_width(420)
-                        .style(styles::context_menu(tokens)),
+                    path.display().to_string(),
                     tooltip::Position::Bottom,
                 )
                 .into(),
@@ -1023,7 +1027,7 @@ impl App {
                     } else if !self.quick_open.query.trim().is_empty() {
                         "No matching documents"
                     } else if self.quick_open.location.is_some() {
-                        "This folder holds no documents"
+                        "No documents in this folder"
                     } else {
                         "Open a project to search its files"
                     })
@@ -1054,7 +1058,7 @@ impl App {
                 self.quick_open.matches
             )
         } else if self.quick_open.query.is_empty() && !self.outline.sections.is_empty() {
-            "# then Space for headings".into()
+            "Type # and a space to find headings".into()
         } else {
             String::new()
         };

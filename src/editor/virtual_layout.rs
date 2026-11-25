@@ -341,7 +341,7 @@ impl VirtualLayout {
             self.geometry.source_caret(source, y)
         } else {
             let height = self.metrics.as_ref().map_or(24.0, |m| {
-                m.typography.body_size * m.zoom * m.typography.line_height
+                m.typography.body_size * m.zoom * m.typography.line_height()
             });
             Rectangle::new(
                 Point::new(0.0, self.top(unit)),
@@ -473,7 +473,7 @@ fn height_key(unit: &LayoutUnit, input: LayoutInput<'_>) -> u64 {
 
 fn estimate(unit: &LayoutUnit, input: LayoutInput<'_>) -> f32 {
     let body = input.theme.typography.body_size * input.zoom;
-    let line_height = input.theme.typography.line_height;
+    let line_height = input.theme.typography.line_height();
     if matches!(unit.kind, UnitKind::Line(_))
         && let Some((_, block)) = input.projection.rich.code_line(&unit.range)
     {

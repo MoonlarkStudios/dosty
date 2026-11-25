@@ -27,7 +27,7 @@ use crate::io::collaboration_store;
 use crate::io::image_store::{ImageStore, LoadedImage};
 use crate::io::storage::{self, FileError, LoadedFile, Preferences};
 use crate::theme::styles::{self, Button};
-use crate::theme::{Preset, ResolvedTheme, WritingFont, WritingMeasure};
+use crate::theme::{Preset, ResolvedTheme, WritingFont, WritingMeasure, WritingSpacing};
 use background::{Background, Parked};
 use session::Session;
 use trail::{Direction, Trail};
@@ -129,10 +129,12 @@ pub struct App {
     busy: bool,
     loading: bool,
     resolved_theme: ResolvedTheme,
-    preset_themes: [ResolvedTheme; 3],
+    preset_themes: [ResolvedTheme; Preset::ALL.len()],
+    theme_request: u64,
     preferences: Preferences,
     preferences_writing: bool,
     preferences_pending: bool,
+    preferences_close: Option<window::Id>,
     settings_section: SettingsSection,
     chrome: chrome::State,
     page: home::Page,
@@ -157,7 +159,6 @@ pub struct App {
     match_index: usize,
     match_revealed: bool,
     notification: Option<String>,
-    zoom: f32,
     writing: writing::State,
     links: links::State,
     footnotes: footnotes::State,
@@ -286,8 +287,9 @@ pub enum Message {
     Theme(Preset),
     WritingFont(WritingFont),
     WritingMeasure(WritingMeasure),
+    WritingSpacing(WritingSpacing),
     LoadTheme,
-    ThemeLoaded(Result<Option<(PathBuf, String)>, FileError>),
+    ThemeLoaded(u64, Result<Option<(PathBuf, String)>, FileError>),
     PreferencesSaved(Result<(), FileError>),
     ToggleSearch,
     Query(String),
@@ -385,7 +387,12 @@ enum Pending {
 
 impl App {
     pub fn new() -> (Self, Task<Message>) {
-        let (preferences, remove_legacy_history) = storage::load_preferences();
+        let (mut preferences, remove_legacy_history) = storage::load_preferences();
+        preferences.writing_zoom = if preferences.writing_zoom.is_finite() {
+            preferences.writing_zoom.clamp(0.75, 1.5)
+        } else {
+            Preferences::default().writing_zoom
+        };
         let preset = Preset::ALL
             .into_iter()
             .find(|preset| preset.name() == preferences.theme)
@@ -397,6 +404,7 @@ impl App {
             .cloned()
             .unwrap_or_else(|| preset_themes[0].clone());
         resolved_theme.typography.font = preferences.writing_font;
+        resolved_theme.typography.spacing = preferences.writing_spacing;
         let session = Session::new(Document::new(String::new()), None, "Untitled.md".into());
         let projection = Projection::new(session.document.source());
         let mut app = Self {
@@ -421,9 +429,11 @@ impl App {
             loading: false,
             resolved_theme,
             preset_themes,
+            theme_request: 0,
             preferences,
             preferences_writing: false,
             preferences_pending: false,
+            preferences_close: None,
             settings_section: SettingsSection::default(),
             chrome: chrome::State::default(),
             page: home::Page::Startup,
@@ -448,7 +458,6 @@ impl App {
             match_index: 0,
             match_revealed: false,
             notification: None,
-            zoom: 1.0,
             writing: writing::State::default(),
             links: links::State::default(),
             footnotes: footnotes::State::default(),
@@ -468,11 +477,8 @@ impl App {
         app.trail.visit(app.session.id(), None);
         let theme_task = if let Some(path) = app.preferences.custom_theme.clone() {
             Task::perform(
-                async move {
-                    let source = tokio::fs::read_to_string(&path).await?;
-                    Ok(Some((path, source)))
-                },
-                Message::ThemeLoaded,
+                async move { storage::load_theme(path).await.map(Some) },
+                |result| Message::ThemeLoaded(0, result),
             )
         } else {
             Task::none()
@@ -1488,6 +1494,7 @@ impl App {
                 }
             }
             Message::Theme(preset) => {
+                self.theme_request = self.theme_request.wrapping_add(1);
                 self.resolved_theme = self
                     .preset_themes
                     .iter()
@@ -1496,25 +1503,23 @@ impl App {
                     .unwrap_or_else(|| self.preset_themes[0].clone());
                 self.preferences.theme = preset.name().into();
                 self.preferences.custom_theme = None;
-                self.resolved_theme.typography.font = self.preferences.writing_font;
-                self.preserve_viewport_generation =
-                    Some(self.session.document.collaboration().generation());
-                return self.persist_preferences();
+                return self.apply_writing_preferences();
             }
             Message::WritingFont(font) => {
                 self.preferences.writing_font = font;
-                self.resolved_theme.typography.font = font;
-                self.preserve_viewport_generation =
-                    Some(self.session.document.collaboration().generation());
-                return self.persist_preferences();
+                return self.apply_writing_preferences();
             }
             Message::WritingMeasure(measure) => {
                 self.preferences.writing_measure = measure;
-                self.preserve_viewport_generation =
-                    Some(self.session.document.collaboration().generation());
-                return self.persist_preferences();
+                return self.apply_writing_preferences();
+            }
+            Message::WritingSpacing(spacing) => {
+                self.preferences.writing_spacing = spacing;
+                return self.apply_writing_preferences();
             }
             Message::LoadTheme => {
+                self.theme_request = self.theme_request.wrapping_add(1);
+                let request = self.theme_request;
                 return Task::perform(
                     async {
                         let Some(file) = rfd::AsyncFileDialog::new()
@@ -1524,33 +1529,32 @@ impl App {
                         else {
                             return Ok(None);
                         };
-                        let source = tokio::fs::read_to_string(file.path()).await?;
-                        if source.len() > 64 * 1024 {
-                            return Err(FileError::Io(
-                                "Theme files must be smaller than 64 KiB.".into(),
-                            ));
-                        }
-                        Ok(Some((file.path().to_path_buf(), source)))
+                        storage::load_theme(file.path().to_owned()).await.map(Some)
                     },
-                    Message::ThemeLoaded,
+                    move |result| Message::ThemeLoaded(request, result),
                 );
             }
-            Message::ThemeLoaded(result) => match result {
-                Ok(Some((path, source))) => match ResolvedTheme::from_toml(&source) {
-                    Ok(mut theme) => {
-                        self.preferences.theme = theme.name.clone();
-                        self.preferences.custom_theme = Some(path);
-                        theme.typography.font = self.preferences.writing_font;
-                        self.resolved_theme = theme;
-                        self.preserve_viewport_generation =
-                            Some(self.session.document.collaboration().generation());
-                        return self.persist_preferences();
-                    }
-                    Err(error) => self.notification = Some(error.to_string()),
-                },
-                Ok(None) => {}
-                Err(error) => self.notification = Some(error.to_string()),
-            },
+            Message::ThemeLoaded(request, result) if request == self.theme_request => {
+                let error = match result {
+                    Ok(Some((path, source))) => match ResolvedTheme::from_toml(&source) {
+                        Ok(theme) => {
+                            self.preferences.theme = theme.name.clone();
+                            self.preferences.custom_theme = Some(path);
+                            self.resolved_theme = theme;
+                            return self.apply_writing_preferences();
+                        }
+                        Err(error) => error.to_string(),
+                    },
+                    Ok(None) => return Task::none(),
+                    Err(error) => error.to_string(),
+                };
+                if request == 0 {
+                    self.preferences.custom_theme = None;
+                    self.preferences.theme = self.resolved_theme.name.clone();
+                }
+                self.notification = Some(error);
+            }
+            Message::ThemeLoaded(_, _) => {}
             Message::PreferencesSaved(result) => {
                 self.preferences_writing = false;
                 if let Err(error) = result {
@@ -1560,6 +1564,9 @@ impl App {
                 if self.preferences_pending {
                     self.preferences_pending = false;
                     return self.persist_preferences();
+                }
+                if let Some(id) = self.preferences_close.take() {
+                    return self.close_after_workspace_save(id);
                 }
             }
             Message::ToggleSearch => {
@@ -1687,7 +1694,13 @@ impl App {
                 }
             }
             Message::Dismiss => self.notification = None,
-            Message::Zoom(delta) => self.zoom = (self.zoom + delta).clamp(0.75, 1.5),
+            Message::Zoom(delta) => {
+                let zoom = (self.preferences.writing_zoom + delta).clamp(0.75, 1.5);
+                if zoom != self.preferences.writing_zoom {
+                    self.preferences.writing_zoom = zoom;
+                    return self.apply_writing_preferences();
+                }
+            }
         }
         Task::none()
     }
@@ -2653,6 +2666,10 @@ impl App {
                     return self.save(false);
                 }
                 self.recovery.retire();
+                if self.preferences_writing {
+                    self.preferences_close = Some(id);
+                    return Task::none();
+                }
                 return self.close_after_workspace_save(id);
             }
         }
@@ -2948,6 +2965,14 @@ impl App {
         )
     }
 
+    fn apply_writing_preferences(&mut self) -> Task<Message> {
+        self.resolved_theme.typography.font = self.preferences.writing_font;
+        self.resolved_theme.typography.spacing = self.preferences.writing_spacing;
+        self.preserve_viewport_generation =
+            Some(self.session.document.collaboration().generation());
+        self.persist_preferences()
+    }
+
     fn persist_preferences(&mut self) -> Task<Message> {
         if self.preferences_writing {
             self.preferences_pending = true;
@@ -3065,7 +3090,8 @@ impl App {
             Sidebar::Files => {
                 // With no place open the header still leads to the library.
                 let root = self.folder.root();
-                tooltip(
+                styles::hint(
+                    tokens,
                     button(
                         row![
                             container(
@@ -3089,11 +3115,10 @@ impl App {
                     .padding([5, styles::SIDEBAR_INSET as u16])
                     .width(Fill)
                     .style(styles::button_style(tokens, Button::Quiet)),
-                    text(root.map_or_else(
-                        || "No project is open".into(),
-                        |root| root.display().to_string(),
-                    ))
-                    .size(11),
+                    root.map_or_else(
+                        || "Project actions".into(),
+                        |root| format!("Project actions · {}", root.display()),
+                    ),
                     tooltip::Position::Bottom,
                 )
                 .into()
@@ -3107,32 +3132,31 @@ impl App {
             .width(Fill)
             .into(),
         };
-        let tool = |kind, label, message| {
-            tooltip(
-                button(icon::sized(kind, tokens.muted, 16.0))
-                    .padding(6)
-                    .on_press(message)
-                    .style(styles::button_style(tokens, Button::Quiet)),
-                text(label).size(11),
-                tooltip::Position::Bottom,
-            )
-        };
         let header = row![
             title,
             if side == Sidebar::Outline {
                 self.outline_tools()
             } else if self.folder.root().is_some() {
-                container(tool(
+                container(self.icon_button(
                     Icon::Search,
-                    "Find in folder",
+                    "Find in Folder",
                     Message::FolderSearch(folder_search::Message::Open),
+                    false,
                 ))
                 .id("workspace-find")
                 .into()
             } else {
                 space().width(0).into()
             },
-            tool(Icon::Close, "Close sidebar", Message::ToggleSidebar(side),),
+            self.icon_button(
+                Icon::Close,
+                match side {
+                    Sidebar::Files => "Hide Files",
+                    Sidebar::Outline => "Hide Outline",
+                },
+                Message::ToggleSidebar(side),
+                false,
+            ),
         ]
         .spacing(2)
         .height(styles::SIDEBAR_ROW_HEIGHT)
@@ -3165,28 +3189,41 @@ impl App {
     fn writing_surface(&self) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
         let width = self.writing_width();
-        if self.mode != EditorMode::Read {
-            return container(
-                column![self.editor_view(self.mode == EditorMode::Source)]
-                    .spacing(0)
-                    .max_width(width)
-                    .height(Fill),
-            )
-            .padding(WRITING_PAGE_PADDING)
-            .center_x(Fill)
-            .height(Fill)
-            .into();
+        match self.mode {
+            EditorMode::Live => {
+                return container(
+                    self.write_editor()
+                        .writing_column(width, WRITING_PAGE_PADDING.left),
+                )
+                .padding(WRITING_PAGE_PADDING.left(0.0).right(0.0))
+                .width(Fill)
+                .height(Fill)
+                .into();
+            }
+            EditorMode::Source => {
+                return container(
+                    column![self.editor_view(true)]
+                        .max_width(width)
+                        .height(Fill),
+                )
+                .padding(WRITING_PAGE_PADDING)
+                .center_x(Fill)
+                .height(Fill)
+                .into();
+            }
+            EditorMode::Read => {}
         }
         let mut blocks = column![].spacing(12);
         let mut settings = styles::markdown_settings(&self.resolved_theme);
-        settings.text_size = (settings.text_size.0 * self.zoom).into();
-        settings.h1_size = (settings.h1_size.0 * self.zoom).into();
-        settings.h2_size = (settings.h2_size.0 * self.zoom).into();
-        settings.h3_size = (settings.h3_size.0 * self.zoom).into();
-        settings.h4_size = (settings.h4_size.0 * self.zoom).into();
-        settings.h5_size = (settings.h5_size.0 * self.zoom).into();
-        settings.h6_size = (settings.h6_size.0 * self.zoom).into();
-        settings.code_size = (settings.code_size.0 * self.zoom).into();
+        let zoom = self.preferences.writing_zoom;
+        settings.text_size = (settings.text_size.0 * zoom).into();
+        settings.h1_size = (settings.h1_size.0 * zoom).into();
+        settings.h2_size = (settings.h2_size.0 * zoom).into();
+        settings.h3_size = (settings.h3_size.0 * zoom).into();
+        settings.h4_size = (settings.h4_size.0 * zoom).into();
+        settings.h5_size = (settings.h5_size.0 * zoom).into();
+        settings.h6_size = (settings.h6_size.0 * zoom).into();
+        settings.code_size = (settings.code_size.0 * zoom).into();
         for (index, _) in self.session.document.blocks().iter().enumerate() {
             let items = self
                 .session
@@ -3211,7 +3248,7 @@ impl App {
                             .as_deref()
                             .and_then(std::path::Path::parent)
                             .map(std::path::Path::to_path_buf),
-                        line_height: self.resolved_theme.typography.line_height,
+                        line_height: self.resolved_theme.typography.line_height(),
                         task: std::cell::Cell::new(0),
                     },
                 )
@@ -3237,51 +3274,54 @@ impl App {
             .into()
     }
 
+    fn write_editor(&self) -> RichEditor<'_> {
+        RichEditor::new(
+            self.editor.content(),
+            &self.projection,
+            self.session.document.source(),
+            &self.resolved_theme,
+            &self.images,
+            editor_binding,
+        )
+        .collaboration(self.session.document.collaboration())
+        .preserve_viewport(
+            self.preserve_viewport_generation
+                == Some(self.session.document.collaboration().generation()),
+        )
+        .base(
+            self.session
+                .path
+                .as_deref()
+                .and_then(std::path::Path::parent),
+        )
+        .zoom(self.preferences.writing_zoom)
+        .window_scale(self.chrome.window_scale)
+        .selection(self.session.selection)
+        .focused(self.editor_focused)
+        .section_folds(&self.section_folds.targets, &self.section_folds.hidden)
+        .table_grid(self.grid_view(), self.cell_editor())
+        .table_resume(self.grid_resume())
+    }
+
     fn editor_view(&self, source: bool) -> Element<'_, Message> {
         if !source {
-            return RichEditor::new(
-                self.editor.content(),
-                &self.projection,
-                self.session.document.source(),
-                &self.resolved_theme,
-                &self.images,
-                editor_binding,
-            )
-            .collaboration(self.session.document.collaboration())
-            .preserve_viewport(
-                self.preserve_viewport_generation
-                    == Some(self.session.document.collaboration().generation()),
-            )
-            .base(
-                self.session
-                    .path
-                    .as_deref()
-                    .and_then(std::path::Path::parent),
-            )
-            .zoom(self.zoom)
-            .window_scale(self.chrome.window_scale)
-            .selection(self.session.selection)
-            .focused(self.editor_focused)
-            .section_folds(&self.section_folds.targets, &self.section_folds.hidden)
-            .table_grid(self.grid_view(), self.cell_editor())
-            .table_resume(self.grid_resume())
-            .into();
+            return self.write_editor().into();
         }
         let tokens = self.resolved_theme.tokens;
-        let size = 14.5 * self.zoom;
+        let size = 14.5 * self.preferences.writing_zoom;
         let base = text_editor(self.editor.content())
             .id(EDITOR)
             .on_action(Message::Edit)
             .font(Font::MONOSPACE)
             .size(size)
             .line_height(iced::widget::text::LineHeight::Relative(
-                self.resolved_theme.typography.line_height,
+                self.resolved_theme.typography.line_height(),
             ))
             .padding([5, 0])
             .height(Fill)
             .min_height(36)
             .style(styles::editor(tokens))
-            .placeholder("Begin anywhere…")
+            .placeholder(crate::editor::WRITING_PLACEHOLDER)
             .key_binding(editor_binding);
         let base = base.highlight(
             "md",
@@ -3375,23 +3415,57 @@ impl App {
         ]
         .align_y(Alignment::Center);
         let mut tabs = row![].spacing(4);
-        for (section, label) in [
-            (SettingsSection::Writing, "Writing"),
-            (SettingsSection::Appearance, "Appearance"),
-            (SettingsSection::Shortcuts, "Shortcuts"),
+        for (section, id, label, kind) in [
+            (
+                SettingsSection::Writing,
+                "settings-writing",
+                "Writing",
+                Icon::Edit,
+            ),
+            (
+                SettingsSection::Appearance,
+                "settings-appearance",
+                "Appearance",
+                Icon::Appearance,
+            ),
+            (
+                SettingsSection::Shortcuts,
+                "settings-shortcuts",
+                "Shortcuts",
+                Icon::Keyboard,
+            ),
         ] {
+            let selected = self.settings_section == section;
             tabs = tabs.push(
-                button(text(label).size(13))
+                container(
+                    button(
+                        row![
+                            icon::sized(
+                                kind,
+                                if selected {
+                                    tokens.on_accent_soft
+                                } else {
+                                    tokens.muted
+                                },
+                                15.0,
+                            ),
+                            text(label).size(14),
+                        ]
+                        .spacing(7)
+                        .align_y(Alignment::Center),
+                    )
                     .on_press(Message::SettingsSection(section))
-                    .padding([7, 12])
+                    .padding([8, 12])
                     .style(styles::button_style(
                         tokens,
-                        if self.settings_section == section {
+                        if selected {
                             Button::Selected
                         } else {
                             Button::Quiet
                         },
                     )),
+                )
+                .id(id),
             );
         }
         let body = match self.settings_section {
@@ -3425,68 +3499,107 @@ impl App {
 
     fn appearance_settings(&self) -> iced::widget::Column<'_, Message> {
         let tokens = self.resolved_theme.tokens;
-        let mut themes = column![].spacing(8);
-        for (preset, preview) in Preset::ALL.into_iter().zip(&self.preset_themes) {
+        let theme_preview = |preset: Preset, preview: &ResolvedTheme| {
             let selected = self.preferences.custom_theme.is_none()
                 && self.resolved_theme.name == preset.name();
-            let swatch = container(
-                column![
-                    text("Aa")
-                        .font(styles::BODY_FONT)
-                        .size(25)
-                        .color(preview.tokens.text),
-                    container(space())
-                        .height(3)
-                        .width(28)
-                        .style(styles::panel(preview.tokens.brand_accent))
-                ]
-                .spacing(4),
-            )
-            .padding([7, 14])
-            .width(72)
-            .style(styles::inset(preview.tokens));
-            themes = themes.push(
-                button(
-                    row![
-                        swatch,
+            let colors = preview.tokens;
+            let palette = container(
+                row![
+                    container(
                         column![
-                            text(preset.name()).size(13),
-                            text(preset.description()).size(12)
+                            container(space())
+                                .width(22)
+                                .height(4)
+                                .style(styles::panel(colors.accent)),
+                            container(space())
+                                .width(32)
+                                .height(7)
+                                .style(styles::panel(colors.accent_soft)),
+                            container(space())
+                                .width(20)
+                                .height(3)
+                                .style(styles::panel(colors.muted.scale_alpha(0.55))),
                         ]
-                        .spacing(4),
-                        space::horizontal(),
+                        .spacing(5),
+                    )
+                    .center_x(48)
+                    .center_y(Fill)
+                    .style(styles::panel(colors.surface)),
+                    container(
+                        column![
+                            text("Aa")
+                                .font(styles::BODY_FONT)
+                                .size(26)
+                                .color(colors.text),
+                            container(space())
+                                .width(25)
+                                .height(3)
+                                .style(styles::panel(colors.accent)),
+                        ]
+                        .spacing(3),
+                    )
+                    .center_x(Fill)
+                    .center_y(Fill),
+                ]
+                .height(60),
+            )
+            .clip(true)
+            .style(styles::inset(colors));
+            button(
+                column![
+                    palette,
+                    row![
+                        column![
+                            text(preset.name()).size(15),
+                            text(preset.description()).size(12),
+                        ]
+                        .spacing(2)
+                        .width(Fill),
                         if selected {
                             icon::sized(Icon::Check, tokens.on_accent_soft, 16.0)
                         } else {
                             space().width(16).into()
-                        }
+                        },
                     ]
-                    .spacing(14)
+                    .spacing(4)
                     .align_y(Alignment::Center),
-                )
-                .width(Fill)
-                .padding(8)
-                .style(styles::button_style(
-                    tokens,
-                    if selected {
-                        Button::Selected
-                    } else {
-                        Button::Quiet
-                    },
-                ))
-                .on_press(Message::Theme(preset)),
+                ]
+                .spacing(7)
+                .width(Fill),
+            )
+            .width(Fill)
+            .padding(8)
+            .style(styles::button_style(
+                tokens,
+                if selected {
+                    Button::Selected
+                } else {
+                    Button::Quiet
+                },
+            ))
+            .on_press(Message::Theme(preset))
+        };
+        let mut themes = column![].spacing(5);
+        for (presets, previews) in Preset::ALL.chunks(2).zip(self.preset_themes.chunks(2)) {
+            let mut cards = row![].spacing(8);
+            for (preset, preview) in presets.iter().copied().zip(previews) {
+                cards = cards.push(theme_preview(preset, preview));
+            }
+            themes = themes.push(cards);
+        }
+        let mut settings = column![
+            themes,
+            self.action_row(Icon::Folder, "Load Custom Theme…", Message::LoadTheme),
+        ]
+        .spacing(12);
+        if self.preferences.custom_theme.is_some() {
+            settings = settings.push(
+                text(format!("Current theme · {}", self.resolved_theme.name))
+                    .size(12)
+                    .color(tokens.muted),
             );
         }
-        let custom = if self.preferences.custom_theme.is_some() {
-            format!("Custom theme · {}", self.resolved_theme.name)
-        } else {
-            "Load a custom theme (.toml)".to_owned()
-        };
-        column![
-            themes,
-            self.action_row(Icon::Folder, &custom, Message::LoadTheme),
-        ]
-        .spacing(12)
+        settings
     }
 
     fn writing_settings(&self) -> iced::widget::Column<'_, Message> {
@@ -3503,16 +3616,20 @@ impl App {
                 style: iced::font::Style::Italic,
                 ..writing_font
             }),
-            span(" across the page."),
+            span(" across the page. A little later, the room went quiet."),
         ]
         .font(writing_font)
-        .size(typography.body_size * self.zoom)
+        .size(typography.body_size * self.preferences.writing_zoom)
         .line_height(iced::widget::text::LineHeight::Relative(
-            typography.line_height,
+            typography.line_height(),
         ));
         column![
+            container(typeface_preview)
+                .padding([12, 14])
+                .width(Fill)
+                .style(styles::inset(tokens)),
             row![
-                text("Typeface").size(13),
+                text("Typeface").size(14),
                 space::horizontal(),
                 pick_list(
                     WritingFont::ALL,
@@ -3527,13 +3644,16 @@ impl App {
             .spacing(12)
             .align_y(Alignment::Center),
             row![
-                text("Text size").size(13),
+                text("Text size").size(14),
                 space::horizontal(),
                 self.small_button("−", Message::Zoom(-0.1), false),
                 container(
-                    text(format!("{}%", (self.zoom * 100.0).round() as u32))
-                        .size(12)
-                        .color(tokens.muted),
+                    text(format!(
+                        "{}%",
+                        (self.preferences.writing_zoom * 100.0).round() as u32
+                    ))
+                    .size(12)
+                    .color(tokens.muted),
                 )
                 .center_x(44),
                 self.small_button("+", Message::Zoom(0.1), false),
@@ -3541,7 +3661,7 @@ impl App {
             .spacing(8)
             .align_y(Alignment::Center),
             row![
-                text("Line width").size(13),
+                text("Line width").size(14),
                 space::horizontal(),
                 pick_list(
                     WritingMeasure::ALL,
@@ -3555,10 +3675,21 @@ impl App {
             ]
             .spacing(12)
             .align_y(Alignment::Center),
-            container(typeface_preview)
-                .padding([12, 14])
-                .width(Fill)
-                .style(styles::inset(tokens)),
+            row![
+                text("Line spacing").size(14),
+                space::horizontal(),
+                pick_list(
+                    WritingSpacing::ALL,
+                    Some(self.preferences.writing_spacing),
+                    Message::WritingSpacing,
+                )
+                .width(150)
+                .text_size(13)
+                .style(styles::preference_picker(tokens))
+                .menu_style(styles::preference_menu(tokens)),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
             checkbox(self.preferences.show_word_count)
                 .label("Show word count")
                 .on_toggle(|value| Message::Chrome(chrome::Message::Preference(
@@ -3586,7 +3717,20 @@ impl App {
         let mut shortcuts = column![].spacing(10);
         for (label, keys) in [
             ("New / Open / Save", "⌘/Ctrl N / O / S"),
-            ("Quick Open", "⌘/Ctrl P"),
+            ("Quick Open", chrome::platform_keys("⌘P", "Ctrl+P")),
+            (
+                "Previous / next document",
+                chrome::platform_keys("⌘[ / ⌘]", "Ctrl+[ / Ctrl+]"),
+            ),
+            ("Settings", chrome::platform_keys("⌘,", "Ctrl+,")),
+            (
+                "Show / hide Files",
+                chrome::platform_keys("⇧⌘B", "Ctrl+Shift+B"),
+            ),
+            (
+                "Show / hide Outline",
+                chrome::platform_keys("⌥⌘O", "Ctrl+Alt+O"),
+            ),
             ("Save as", "⌘/Ctrl Shift S"),
             ("Find & replace", "⌘/Ctrl F"),
             ("Bold / Italic", "⌘/Ctrl B / I"),
@@ -3598,7 +3742,10 @@ impl App {
             ("Write / Source", "⌘/Ctrl Shift M"),
             ("Hide / show sidebars", "⌘/Ctrl Shift F"),
             ("Previous / next block", "Alt ↑ / ↓"),
-            ("Filter outline", "⌘/Ctrl Shift J"),
+            (
+                "Filter headings",
+                chrome::platform_keys("⇧⌘J", "Ctrl+Shift+J"),
+            ),
             ("Move section up / down", "⌘/Ctrl Alt ↑ / ↓"),
             ("Collapse / expand section", "⌘/Ctrl Alt ← / →"),
             ("Close find or dialog", "Escape"),
@@ -3670,7 +3817,9 @@ impl App {
         selected: bool,
     ) -> Element<'a, Message> {
         let tokens = self.resolved_theme.tokens;
-        tooltip(
+        let hint = chrome::control_hint(label, &message);
+        styles::hint(
+            tokens,
             button(icon::view(
                 kind,
                 if selected {
@@ -3689,9 +3838,7 @@ impl App {
                 },
             ))
             .on_press(message),
-            container(text(label).size(11))
-                .padding([6, 9])
-                .style(styles::card(tokens)),
+            hint,
             tooltip::Position::Bottom,
         )
         .into()
@@ -3956,6 +4103,7 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 "p" if !modifiers.shift() && !modifiers.alt() => {
                     Some(Message::QuickOpen(quick_open::Message::Open))
                 }
+                "," if !modifiers.shift() && !modifiers.alt() => Some(Message::ShowSettings),
                 "s" => Some(if modifiers.shift() {
                     Message::SaveAs
                 } else {

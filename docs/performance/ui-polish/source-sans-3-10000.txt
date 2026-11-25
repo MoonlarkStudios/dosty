@@ -1,0 +1,24 @@
+running 1 test
+test app::application::performance::large_document_interactions ... typeface: Source Sans 3
+
+blocks=10000 bytes=910450 load=41.918375ms layout_counts=(49, 55)
+cold n=1 input=0.000/0.000/0.000ms update=0.000/0.000/0.000ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.000/0.000/0.000ms layout=22.289/22.289/22.289ms draw=0.015/0.015/0.015ms raster=4.164/4.164/4.164ms total=26.468/26.468/26.468ms (p50/p95/max)
+jump/distant n=10 input=0.000/0.000/0.000ms update=2.357/2.705/2.705ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=2.357/2.705/2.705ms layout=1.261/2.557/2.557ms draw=0.003/0.009/0.009ms raster=1.691/2.746/2.746ms total=5.340/7.836/7.836ms (p50/p95/max)
+typing/start n=60 input=0.003/0.011/0.034ms update=0.782/2.044/2.930ms crdt=0.013/0.044/0.364ms source=0.043/0.169/0.595ms adapters=0.727/1.871/2.436ms layout=0.227/0.505/7.658ms draw=0.003/0.009/0.029ms raster=1.388/2.790/3.462ms total=2.425/4.985/14.095ms (p50/p95/max)
+typing/middle n=60 input=0.002/0.004/0.006ms update=0.721/1.216/2.320ms crdt=0.009/0.016/0.722ms source=0.022/0.059/0.275ms adapters=0.691/1.189/1.527ms layout=0.212/0.258/0.326ms draw=0.002/0.005/0.006ms raster=1.378/1.473/1.538ms total=2.322/2.925/3.965ms (p50/p95/max)
+typing/end n=60 input=0.002/0.006/0.028ms update=0.681/0.793/18.261ms crdt=0.009/0.022/0.031ms source=0.003/0.008/4.117ms adapters=0.670/0.779/14.123ms layout=0.063/0.090/3.244ms draw=0.002/0.004/0.008ms raster=1.003/1.081/1.110ms total=1.746/1.895/22.545ms (p50/p95/max)
+disclosure n=60 input=0.000/0.000/0.000ms update=2.075/2.265/2.312ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=2.075/2.265/2.312ms layout=0.214/0.274/0.374ms draw=0.002/0.005/0.005ms raster=1.356/1.466/1.840ms total=3.656/3.976/4.339ms (p50/p95/max)
+selection/local n=60 input=0.000/0.000/0.000ms update=0.058/0.066/0.079ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.058/0.066/0.079ms layout=0.001/0.002/0.007ms draw=0.001/0.003/0.007ms raster=1.304/1.374/1.406ms total=1.363/1.441/1.473ms (p50/p95/max)
+selection/half-document n=60 input=0.000/0.000/0.000ms update=0.057/0.076/0.086ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.057/0.076/0.086ms layout=0.001/0.003/0.004ms draw=0.003/0.006/0.006ms raster=1.501/1.617/1.794ms total=1.562/1.695/1.851ms (p50/p95/max)
+scroll n=60 input=0.042/0.215/0.246ms update=0.000/0.000/0.000ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.000/0.000/0.000ms layout=0.001/0.001/0.001ms draw=0.003/0.006/0.008ms raster=1.652/2.198/2.359ms total=1.746/2.240/2.399ms (p50/p95/max)
+selection/keyboard n=60 input=0.002/0.006/0.014ms update=0.060/2.142/2.334ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.060/2.142/2.334ms layout=0.001/0.332/0.673ms draw=0.002/0.005/0.007ms raster=1.464/1.726/1.777ms total=1.691/4.145/4.476ms (p50/p95/max)
+selection/drag n=60 input=0.002/0.005/0.006ms update=0.051/0.063/0.074ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.051/0.063/0.074ms layout=0.001/0.001/0.005ms draw=0.001/0.002/0.005ms raster=1.735/1.820/1.837ms total=1.791/1.880/1.898ms (p50/p95/max)
+typing/syntax-fallback n=60 input=0.000/0.000/0.000ms update=0.721/1.479/1.747ms crdt=0.012/0.022/0.595ms source=0.027/0.101/0.206ms adapters=0.677/1.361/1.523ms layout=3.292/3.435/3.529ms draw=0.003/0.007/0.015ms raster=1.373/1.444/1.565ms total=5.400/6.224/6.527ms (p50/p95/max)
+ime/preedit n=1 input=0.013/0.013/0.013ms update=0.000/0.000/0.000ms crdt=0.000/0.000/0.000ms source=0.000/0.000/0.000ms adapters=0.000/0.000/0.000ms layout=0.001/0.001/0.001ms draw=0.001/0.001/0.001ms raster=1.281/1.281/1.281ms total=1.296/1.296/1.296ms (p50/p95/max)
+ime/commit n=1 input=0.002/0.002/0.002ms update=0.781/0.781/0.781ms crdt=0.013/0.013/0.013ms source=0.030/0.030/0.030ms adapters=0.738/0.738/0.738ms layout=3.950/3.950/3.950ms draw=0.003/0.003/0.003ms raster=1.802/1.802/1.802ms total=6.537/6.537/6.537ms (p50/p95/max)
+undo/ime n=1 input=0.000/0.000/0.000ms update=4.159/4.159/4.159ms crdt=0.016/0.016/0.016ms source=0.027/0.027/0.027ms adapters=4.116/4.116/4.116ms layout=0.001/0.001/0.001ms draw=0.003/0.003/0.003ms raster=1.351/1.351/1.351ms total=5.513/5.513/5.513ms (p50/p95/max)
+redo/ime n=1 input=0.000/0.000/0.000ms update=4.092/4.092/4.092ms crdt=0.012/0.012/0.012ms source=0.025/0.025/0.025ms adapters=4.055/4.055/4.055ms layout=0.001/0.001/0.001ms draw=0.002/0.002/0.002ms raster=1.435/1.435/1.435ms total=5.531/5.531/5.531ms (p50/p95/max)
+final_layout_counts=(68, 79)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 583 filtered out; finished in 1.71s

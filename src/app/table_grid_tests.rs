@@ -757,7 +757,7 @@ fn hover_chevrons_open_scoped_menus_without_moving_cells_or_changing_selection()
         for width in [320.0, 640.0] {
             for column in [false, true] {
                 let mut h = Harness::new(SOURCE);
-                h.app.zoom = zoom;
+                h.app.preferences.writing_zoom = zoom;
                 h.size.width = width;
                 h.size.height = 900.0;
                 h.frame();

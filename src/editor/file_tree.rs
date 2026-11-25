@@ -1,5 +1,6 @@
 //! Folder navigation owns transient pointer/focus geometry, never document state.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,34 @@ const INDENT: f32 = styles::SIDEBAR_INDENT;
 const LABEL_INSET: f32 = 18.0;
 const DRAG_THRESHOLD: f32 = 7.0;
 const HOVER_DELAY: Duration = Duration::from_millis(600);
+const ROOT_TARGET_HEIGHT: f32 = 28.0;
+
+pub(crate) fn select_moved<Message: Send + 'static>(paths: Vec<PathBuf>) -> iced::Task<Message> {
+    struct SelectMoved(Vec<PathBuf>);
+
+    impl<Message> widget::Operation<Message> for SelectMoved {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation<Message>)) {
+            operate(self);
+        }
+
+        fn custom(
+            &mut self,
+            id: Option<&widget::Id>,
+            _bounds: Rectangle,
+            state: &mut dyn std::any::Any,
+        ) {
+            if id == Some(&widget::Id::from(ID))
+                && let Some(state) = state.downcast_mut::<State>()
+            {
+                state.focus_path = self.0.first().cloned();
+                state.selection_anchor.clone_from(&state.focus_path);
+                state.selected = self.0.iter().cloned().collect();
+            }
+        }
+    }
+
+    widget::operate(SelectMoved(paths))
+}
 
 /// A visible row; callers omit the descendants of collapsed folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +79,14 @@ pub enum Action {
     Move {
         source: PathBuf,
         destination: PathBuf,
+    },
+    MoveSelection {
+        sources: Vec<PathBuf>,
+        destination: PathBuf,
+    },
+    SelectionMenu {
+        sources: Vec<PathBuf>,
+        position: Point,
     },
 }
 
@@ -114,8 +151,85 @@ impl<'a, Message> FileTree<'a, Message> {
         self
     }
 
-    fn valid_destination(&self, source: &Path, destination: &Path) -> bool {
-        valid_destination(source, destination, self.entries, self.root)
+    fn rows_bounds(&self, bounds: Rectangle) -> Rectangle {
+        Rectangle {
+            height: if self.root.is_some() {
+                (bounds.height - ROOT_TARGET_HEIGHT).max(0.0)
+            } else {
+                bounds.height
+            },
+            ..bounds
+        }
+    }
+
+    fn selected_paths(&self, state: &State, path: &Path) -> Vec<PathBuf> {
+        if !state.selected.contains(path) || state.selected.len() == 1 {
+            return vec![path.to_owned()];
+        }
+        let selected: HashSet<&Path> = self
+            .entries
+            .iter()
+            .filter(|entry| state.selected.contains(&entry.path))
+            .map(|entry| entry.path.as_path())
+            .collect();
+        // An expanded folder stands for its descendants in a move.
+        self.entries
+            .iter()
+            .filter(|entry| {
+                selected.contains(entry.path.as_path())
+                    && !entry
+                        .path
+                        .ancestors()
+                        .skip(1)
+                        .any(|parent| selected.contains(parent))
+            })
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+
+    fn menu(&self, state: &State, path: &Path, position: Point, shell: &mut Shell<'_, Message>) {
+        let sources = self.selected_paths(state, path);
+        self.publish(
+            shell,
+            if sources.len() > 1 {
+                Action::SelectionMenu { sources, position }
+            } else {
+                Action::Menu {
+                    path: path.to_owned(),
+                    position,
+                }
+            },
+        );
+    }
+
+    fn select(&self, state: &mut State, index: usize, modifiers: keyboard::Modifiers) {
+        let path = &self.entries[index].path;
+        if modifiers.shift() {
+            let anchor = state
+                .selection_anchor
+                .as_ref()
+                .and_then(|anchor| self.entries.iter().position(|entry| &entry.path == anchor))
+                .unwrap_or(index);
+            state.selection_anchor = Some(self.entries[anchor].path.clone());
+            if !modifiers.command() {
+                state.selected.clear();
+            }
+            state.selected.extend(
+                self.entries[anchor.min(index)..=anchor.max(index)]
+                    .iter()
+                    .map(|entry| entry.path.clone()),
+            );
+        } else if modifiers.command() {
+            if !state.selected.remove(path) {
+                state.selected.insert(path.clone());
+            }
+            state.selection_anchor = Some(path.clone());
+        } else {
+            state.selected.clear();
+            state.selected.insert(path.clone());
+            state.selection_anchor = Some(path.clone());
+        }
+        state.focus_path = Some(path.clone());
     }
 
     pub fn highlighted(mut self, path: Option<&'a Path>) -> Self {
@@ -173,7 +287,7 @@ impl<'a, Message> FileTree<'a, Message> {
         viewport: Rectangle,
         point: Point,
     ) -> Option<usize> {
-        if !bounds.contains(point) || !viewport.contains(point) {
+        if !self.rows_bounds(bounds).contains(point) || !viewport.contains(point) {
             return None;
         }
         row_at(point.y - bounds.y, state.scroll, self.entries.len())
@@ -200,6 +314,11 @@ impl<'a, Message> FileTree<'a, Message> {
                     .map(Path::to_owned)
             });
         if state.target != target {
+            state.target_valid = target.as_deref().is_some_and(|target| {
+                state.dragging().is_some_and(|press| {
+                    valid_group_destination(&press.sources, target, self.entries, self.root)
+                })
+            });
             state.target = target;
             state.target_since = Some(now);
             state.expansion_sent = false;
@@ -273,29 +392,31 @@ impl<'a, Message> FileTree<'a, Message> {
                 None
             }
             Key::Named(key::Named::ContextMenu) => {
-                self.publish(
+                self.menu(
+                    state,
+                    &entry.path,
+                    row_bounds(bounds, index, state.scroll).center(),
                     shell,
-                    Action::Menu {
-                        path: entry.path.clone(),
-                        position: row_bounds(bounds, index, state.scroll).center(),
-                    },
                 );
                 None
             }
             Key::Named(key::Named::F10) if modifiers.shift() => {
-                self.publish(
+                self.menu(
+                    state,
+                    &entry.path,
+                    row_bounds(bounds, index, state.scroll).center(),
                     shell,
-                    Action::Menu {
-                        path: entry.path.clone(),
-                        position: row_bounds(bounds, index, state.scroll).center(),
-                    },
                 );
                 None
             }
             _ => return false,
         };
         if let Some(next) = next {
-            state.focus_path = self.entries.get(next).map(|entry| entry.path.clone());
+            if modifiers.command() && !modifiers.shift() {
+                state.focus_path = Some(self.entries[next].path.clone());
+            } else {
+                self.select(state, next, modifiers);
+            }
             state.reveal(next, bounds.height, self.entries.len());
         }
         true
@@ -307,18 +428,23 @@ struct State {
     root: Option<PathBuf>,
     focused: bool,
     focus_path: Option<PathBuf>,
+    selected: HashSet<PathBuf>,
+    selection_anchor: Option<PathBuf>,
+    modifiers: keyboard::Modifiers,
     scroll: f32,
     pointer: Option<Point>,
     hovered: Option<PathBuf>,
     hover_since: Option<Instant>,
     press: Option<Press>,
     target: Option<PathBuf>,
+    target_valid: bool,
     target_since: Option<Instant>,
     expansion_sent: bool,
 }
 
 struct Press {
     path: PathBuf,
+    sources: Vec<PathBuf>,
     origin: Point,
     menu: bool,
     dragging: bool,
@@ -331,6 +457,7 @@ impl State {
     fn cancel_drag(&mut self) {
         self.press = None;
         self.target = None;
+        self.target_valid = false;
         self.target_since = None;
         self.expansion_sent = false;
     }
@@ -395,7 +522,10 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
         let state = tree.state.downcast_mut::<State>();
         self.reconcile(state);
         let size = limits.width(Length::Fill).height(Length::Fill).max();
-        state.clamp_scroll(size.height, self.entries.len());
+        state.clamp_scroll(
+            self.rows_bounds(Rectangle::with_size(size)).height,
+            self.entries.len(),
+        );
         layout::Node::new(size)
     }
     fn operate(
@@ -405,11 +535,10 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
         _renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
-        operation.focusable(
-            Some(&widget::Id::from(ID)),
-            layout.bounds(),
-            tree.state.downcast_mut::<State>(),
-        );
+        let id = widget::Id::from(ID);
+        let state = tree.state.downcast_mut::<State>();
+        operation.focusable(Some(&id), layout.bounds(), state);
+        operation.custom(Some(&id), layout.bounds(), state);
     }
     fn update(
         &mut self,
@@ -425,11 +554,15 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
         let state = tree.state.downcast_mut::<State>();
         self.reconcile(state);
         let bounds = layout.bounds();
+        let rows = self.rows_bounds(bounds);
         let now = Instant::now();
         if !self.enabled {
             return;
         }
         match event {
+            Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+                state.modifiers = *modifiers;
+            }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 state.move_pointer(*position);
                 if state.dragging().is_some() {
@@ -451,7 +584,9 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                 }
                 shell.request_redraw();
             }
-            Event::Mouse(mouse::Event::ButtonPressed(button)) => {
+            Event::Mouse(mouse::Event::ButtonPressed(
+                button @ (mouse::Button::Left | mouse::Button::Right),
+            )) => {
                 let hovered = cursor
                     .position()
                     .and_then(|point| self.hovered(state, bounds, *viewport, point));
@@ -461,24 +596,25 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                     state.focused = true;
                     state.focus_path = Some(entry.path.clone());
                     self.publish(shell, Action::Focus);
-                    match button {
-                        mouse::Button::Right => self.publish(
-                            shell,
-                            Action::Menu {
-                                path: entry.path.clone(),
-                                position: point,
-                            },
-                        ),
-                        mouse::Button::Left => {
-                            state.press = Some(Press {
-                                path: entry.path.clone(),
-                                origin: point,
-                                menu: menu_bounds(row_bounds(bounds, index, state.scroll))
-                                    .contains(point),
-                                dragging: false,
-                            })
+                    if *button == mouse::Button::Right {
+                        if !state.selected.contains(&entry.path) {
+                            self.select(state, index, keyboard::Modifiers::empty());
                         }
-                        _ => return,
+                        self.menu(state, &entry.path, point, shell);
+                    } else if state.modifiers.shift() || state.modifiers.command() {
+                        self.select(state, index, state.modifiers);
+                    } else {
+                        if !state.selected.contains(&entry.path) {
+                            self.select(state, index, keyboard::Modifiers::empty());
+                        }
+                        state.press = Some(Press {
+                            path: entry.path.clone(),
+                            sources: self.selected_paths(state, &entry.path),
+                            origin: point,
+                            menu: menu_bounds(row_bounds(rows, index, state.scroll))
+                                .contains(point),
+                            dragging: false,
+                        });
                     }
                     shell.capture_event();
                     shell.request_redraw();
@@ -489,38 +625,55 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                 if state.press.is_some() =>
             {
+                if state.dragging().is_some() {
+                    state.pointer = cursor.position();
+                    self.hover_target(state, bounds, *viewport, now);
+                }
                 let press = state.press.take().expect("press checked before release");
                 if press.dragging {
                     if let Some(destination) = state.target.take()
-                        && self.valid_destination(&press.path, &destination)
+                        && valid_group_destination(
+                            &press.sources,
+                            &destination,
+                            self.entries,
+                            self.root,
+                        )
                     {
-                        self.publish(shell, Action::Expand(destination.clone()));
+                        if self.root != Some(destination.as_path()) {
+                            self.publish(shell, Action::Expand(destination.clone()));
+                        }
                         self.publish(
                             shell,
-                            Action::Move {
-                                source: press.path,
-                                destination,
+                            if let [source] = press.sources.as_slice() {
+                                Action::Move {
+                                    source: source.clone(),
+                                    destination,
+                                }
+                            } else {
+                                Action::MoveSelection {
+                                    sources: press.sources,
+                                    destination,
+                                }
                             },
                         );
                     }
-                } else if cursor
+                } else if let Some(index) = cursor
                     .position()
                     .and_then(|point| self.hovered(state, bounds, *viewport, point))
-                    .is_some_and(|index| self.entries[index].path == press.path)
-                    && let Some(entry) = self.entries.iter().find(|entry| entry.path == press.path)
+                    .filter(|&index| self.entries[index].path == press.path)
                 {
                     if press.menu {
-                        self.publish(
+                        self.menu(
+                            state,
+                            &press.path,
+                            cursor.position().unwrap_or(bounds.center()),
                             shell,
-                            Action::Menu {
-                                path: press.path,
-                                position: cursor.position().unwrap_or(bounds.center()),
-                            },
                         );
                     } else {
+                        self.select(state, index, keyboard::Modifiers::empty());
                         self.publish(
                             shell,
-                            if entry.directory {
+                            if self.entries[index].directory {
                                 Action::Toggle(press.path)
                             } else {
                                 Action::Open(press.path)
@@ -540,7 +693,7 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                     mouse::ScrollDelta::Pixels { y, .. } => *y,
                 };
                 state.scroll -= delta;
-                state.clamp_scroll(bounds.height, self.entries.len());
+                state.clamp_scroll(rows.height, self.entries.len());
                 if state.dragging().is_some() {
                     self.hover_target(state, bounds, *viewport, now);
                 }
@@ -557,43 +710,47 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                 shell.request_redraw();
             }
             Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
-                if state.focused && self.keyboard(state, key, *modifiers, bounds, shell) =>
+                if state.focused && self.keyboard(state, key, *modifiers, rows, shell) =>
             {
                 shell.capture_event();
                 shell.request_redraw();
             }
             Event::Window(window::Event::Unfocused) | Event::Mouse(mouse::Event::CursorLeft) => {
+                if matches!(event, Event::Window(window::Event::Unfocused)) {
+                    state.modifiers = keyboard::Modifiers::empty();
+                }
                 state.cancel_drag();
                 state.pointer = None;
                 state.hovered = None;
                 shell.request_redraw();
             }
-            Event::Window(window::Event::RedrawRequested(now)) => {
-                if let Some(press) = state.dragging() {
-                    let source = press.path.clone();
-                    if let Some(point) = state.pointer {
-                        let speed = edge_scroll(point, bounds);
-                        if speed != 0.0 {
-                            state.scroll += speed;
-                            state.clamp_scroll(bounds.height, self.entries.len());
-                            self.hover_target(state, bounds, *viewport, *now);
-                        }
-                        shell.request_redraw_at(*now + Duration::from_millis(16));
+            Event::Window(window::Event::RedrawRequested(now)) if state.dragging().is_some() => {
+                if let Some(point) = state.pointer {
+                    let speed = if bounds.contains(point) && !rows.contains(point) {
+                        0.0
+                    } else {
+                        edge_scroll(point, rows)
+                    };
+                    if speed != 0.0 {
+                        state.scroll += speed;
+                        state.clamp_scroll(rows.height, self.entries.len());
+                        self.hover_target(state, bounds, *viewport, *now);
                     }
-                    if !state.expansion_sent
-                        && state.target_since.is_some_and(|since| {
-                            now.saturating_duration_since(since) >= HOVER_DELAY
-                        })
-                        && let Some(target) = &state.target
-                        && self.valid_destination(&source, target)
-                        && self
-                            .entries
-                            .iter()
-                            .any(|entry| entry.path == *target && !entry.expanded)
-                    {
-                        self.publish(shell, Action::Expand(target.clone()));
-                        state.expansion_sent = true;
-                    }
+                    shell.request_redraw_at(*now + Duration::from_millis(16));
+                }
+                if !state.expansion_sent
+                    && state
+                        .target_since
+                        .is_some_and(|since| now.saturating_duration_since(since) >= HOVER_DELAY)
+                    && let Some(target) = &state.target
+                    && state.target_valid
+                    && self
+                        .entries
+                        .iter()
+                        .any(|entry| entry.path == *target && !entry.expanded)
+                {
+                    self.publish(shell, Action::Expand(target.clone()));
+                    state.expansion_sent = true;
                 }
             }
             _ => {}
@@ -611,7 +768,8 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<State>();
-        let bounds = layout.bounds();
+        let pane = layout.bounds();
+        let bounds = self.rows_bounds(pane);
         let Some(clip) = bounds.intersection(viewport) else {
             return;
         };
@@ -627,14 +785,13 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
             let hovered = cursor.is_over(row) && cursor.is_over(clip);
             let focused =
                 state.focused && state.focus_path.as_deref() == Some(entry.path.as_path());
-            let selected = self.active == Some(entry.path.as_path());
-            let dragging = state
-                .dragging()
-                .is_some_and(|press| press.path == entry.path);
-            let target = state.dragging().is_some_and(|press| {
-                state.target.as_deref() == Some(entry.path.as_path())
-                    && self.valid_destination(&press.path, &entry.path)
+            let selected =
+                self.active == Some(entry.path.as_path()) || state.selected.contains(&entry.path);
+            let dragging = state.dragging().is_some_and(|press| {
+                press.path == entry.path || state.selected.contains(&entry.path)
             });
+            let target =
+                state.target_valid && state.target.as_deref() == Some(entry.path.as_path());
             let settled = if self.highlighted == Some(entry.path.as_path()) {
                 1.0
             } else {
@@ -740,24 +897,6 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                 }
             }
         }
-        if let Some(press) = state.dragging()
-            && state.target.as_deref() == self.root
-            && let Some(root) = self.root
-            && self.valid_destination(&press.path, root)
-        {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    border: Border {
-                        color: self.tokens.accent,
-                        width: 1.0,
-                        radius: styles::SIDEBAR_RADIUS.into(),
-                    },
-                    ..Default::default()
-                },
-                self.tokens.accent_soft.scale_alpha(0.15),
-            );
-        }
         renderer.with_translation(bounds.position() - Point::ORIGIN, |renderer| {
             renderer.draw_geometry(frame.into_geometry())
         });
@@ -783,6 +922,50 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
             );
         }
         renderer.end_layer();
+        if self.root.is_some() && state.dragging().is_some() {
+            let root_target = Rectangle {
+                y: bounds.y + bounds.height,
+                height: pane.height - bounds.height,
+                ..pane
+            };
+            if let Some(clip) = root_target.intersection(viewport) {
+                let target = state.target_valid && state.target.as_deref() == self.root;
+                renderer.start_layer(clip);
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: root_target,
+                        border: Border {
+                            color: if target {
+                                self.tokens.accent
+                            } else {
+                                self.tokens.border
+                            },
+                            width: 1.0,
+                            radius: styles::SIDEBAR_RADIUS.into(),
+                        },
+                        ..renderer::Quad::default()
+                    },
+                    if target {
+                        self.tokens.accent_soft
+                    } else {
+                        self.tokens.surface
+                    },
+                );
+                draw_label(
+                    renderer,
+                    "Project root",
+                    Rectangle {
+                        x: root_target.x + 10.0,
+                        ..root_target
+                    },
+                    styles::SIDEBAR_TEXT_SIZE,
+                    styles::BODY_FONT,
+                    self.tokens.text,
+                    clip,
+                );
+                renderer.end_layer();
+            }
+        }
     }
 
     fn mouse_interaction(
@@ -801,12 +984,8 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
                 mouse::Interaction::None
             };
         }
-        if let Some(press) = state.dragging() {
-            return if state
-                .target
-                .as_deref()
-                .is_some_and(|target| self.valid_destination(&press.path, target))
-            {
+        if state.dragging().is_some() {
+            return if state.target_valid {
                 mouse::Interaction::Grabbing
             } else {
                 mouse::Interaction::NoDrop
@@ -833,19 +1012,31 @@ impl<Message> Widget<Message, Theme, Renderer> for FileTree<'_, Message> {
         let state = tree.state.downcast_ref::<State>();
         let pointer = state.pointer?;
         let (label, detail) = if let Some(press) = state.dragging() {
-            let label = press.path.file_name().map_or_else(
-                || press.path.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            );
+            let label = if press.sources.len() > 1 {
+                format!("{} items", press.sources.len())
+            } else {
+                press.path.file_name().map_or_else(
+                    || press.path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            };
             let detail = match state.target.as_deref() {
-                Some(target) if self.valid_destination(&press.path, target) => format!(
+                Some(target) if state.target_valid && self.root == Some(target) => {
+                    "Move to project root".into()
+                }
+                Some(target) if state.target_valid => format!(
                     "Move to {}",
                     target
                         .file_name()
                         .unwrap_or(target.as_os_str())
                         .to_string_lossy()
                 ),
-                Some(target) if press.path.parent() == Some(target) => {
+                Some(target)
+                    if press
+                        .sources
+                        .iter()
+                        .all(|source| source.parent() == Some(target)) =>
+                {
                     "Already in this folder".into()
                 }
                 Some(_) => "Cannot move here".into(),
@@ -906,7 +1097,8 @@ fn valid_destination(
     {
         return false;
     }
-    if source == destination
+    if crate::io::assets::is_image(source)
+        || source == destination
         || destination.starts_with(source)
         || source.parent() == Some(destination)
     {
@@ -919,6 +1111,39 @@ fn valid_destination(
     !entries
         .iter()
         .any(|entry| entry.path == target && entry.path != source)
+}
+
+fn valid_group_destination(
+    sources: &[PathBuf],
+    destination: &Path,
+    entries: &[Entry],
+    root: Option<&Path>,
+) -> bool {
+    if let [source] = sources {
+        return valid_destination(source, destination, entries, root);
+    }
+    if root != Some(destination)
+        && !entries
+            .iter()
+            .any(|entry| entry.path == destination && entry.directory)
+    {
+        return false;
+    }
+    let mut taken: HashSet<_> = entries
+        .iter()
+        .filter(|entry| entry.path.parent() == Some(destination))
+        .filter_map(|entry| entry.path.file_name())
+        .collect();
+    let mut moves = sources
+        .iter()
+        .filter(|source| source.parent() != Some(destination))
+        .peekable();
+    moves.peek().is_some()
+        && moves.all(|source| {
+            !crate::io::assets::is_image(source)
+                && !destination.starts_with(source)
+                && source.file_name().is_some_and(|name| taken.insert(name))
+        })
 }
 fn edge_scroll(point: Point, bounds: Rectangle) -> f32 {
     if point.x < bounds.x
@@ -1223,6 +1448,7 @@ mod tests {
             root: Some("/notes".into()),
             press: Some(Press {
                 path: "/notes/Essay.md".into(),
+                sources: vec!["/notes/Essay.md".into()],
                 origin: Point::new(10.0, 10.0),
                 menu: false,
                 dragging: false,
@@ -1262,6 +1488,7 @@ mod tests {
                 root: Some("/notes".into()),
                 press: Some(Press {
                     path: path.into(),
+                    sources: vec![path.into()],
                     origin: Point::ORIGIN,
                     menu,
                     dragging: false,

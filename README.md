@@ -20,12 +20,12 @@ caret, expanded folders, and sidebars. Quick Open (Cmd/Ctrl+P) finds drafts,
 recent documents, and files across projects. Find in Folder (Cmd/Ctrl+Alt+F)
 searches Markdown text in the active project.
 
-The titlebar keeps navigation, editing mode, and save state visible and opens
-formatting on demand. Writing uses sans-serif text by default, with serif
-available in Settings. macOS uses native application menus. Configurable word
-count and reading time sit below the writing area. Preview project images and
-reference them from where they already live. Unsaved documents stay open in the
-background when you switch, and Back and Forward retrace your steps.
+The titlebar puts Welcome, Back, Forward, and Quick Open a click away. Files
+and Outline open on demand, and the current editing mode and save state stay in
+view. Source Sans 3 is the default. Open Settings to preview a typeface, adjust
+the size, width, and spacing of the writing column, or choose a color theme.
+Configurable word count and reading time sit below the writing area. Unsaved
+documents stay open in the background when you switch.
 
 See the [writing guide](assets/guide.md) for everyday editing and
 [table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.

@@ -40,6 +40,12 @@ pub struct MoveResult {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct MoveBatch {
+    pub moved: Vec<MoveResult>,
+    pub failure: Option<FileError>,
+}
+
 fn error(message: impl Into<String>) -> FileError {
     FileError::Io(message.into())
 }
@@ -268,6 +274,68 @@ pub async fn move_item(
     tokio::task::spawn_blocking(move || move_item_blocking(&from, &to, active.as_ref()))
         .await
         .map_err(|e| error(e.to_string()))?
+}
+
+pub async fn move_items(
+    root: PathBuf,
+    moves: Vec<(PathBuf, PathBuf)>,
+    active: Option<ActiveDocument>,
+) -> Result<MoveBatch, FileError> {
+    tokio::task::spawn_blocking(move || {
+        if moves.is_empty() {
+            return Err(error("Select an item to move."));
+        }
+        if moves.len() > MAX_MOVE_DOCUMENTS {
+            return Err(error("Select at most 128 items to move at once."));
+        }
+        let root = real_directory(&root)?;
+        let mut targets = BTreeSet::new();
+        for (from, to) in &moves {
+            let kind = fs::symlink_metadata(from)?.file_type();
+            let source = fs::canonicalize(from)?;
+            let parent = real_directory(
+                to.parent()
+                    .ok_or_else(|| error("Choose a destination folder."))?,
+            )?;
+            let filename = to
+                .file_name()
+                .ok_or_else(|| error("Choose a destination name."))?;
+            if (!kind.is_file() && !kind.is_dir())
+                || source == root
+                || !source.starts_with(&root)
+                || !parent.starts_with(&root)
+            {
+                return Err(error("Move real files and folders within this project."));
+            }
+            if parent.starts_with(&source) {
+                return Err(error("A folder cannot be moved into itself."));
+            }
+            let target = parent.join(filename);
+            if !targets.insert(target.clone()) {
+                return Err(error("Two selected items have the same destination name."));
+            }
+            destination_clear(&target, kind.is_file())?;
+        }
+        let mut moved = Vec::with_capacity(moves.len());
+        for (from, to) in moves {
+            match move_item_blocking(&from, &to, active.as_ref()) {
+                Ok(result) => moved.push(result),
+                Err(failure) if moved.is_empty() => return Err(failure),
+                Err(failure) => {
+                    return Ok(MoveBatch {
+                        moved,
+                        failure: Some(failure),
+                    });
+                }
+            }
+        }
+        Ok(MoveBatch {
+            moved,
+            failure: None,
+        })
+    })
+    .await
+    .map_err(|failure| error(failure.to_string()))?
 }
 
 fn move_item_blocking(
@@ -804,6 +872,35 @@ fn validate_folder_destination(
 mod tests {
     use super::*;
     use crate::document::Document;
+
+    #[tokio::test]
+    async fn batch_checks_collisions_before_moving_and_reports_completed_items_on_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let drafts = root.join("Drafts");
+        fs::create_dir(&drafts).unwrap();
+        let first = drafts.join("A.md");
+        let second = drafts.join("B.md");
+        fs::write(&first, "First draft").unwrap();
+        fs::write(&second, "[relative link](A.md)").unwrap();
+        let a = root.join("A.md");
+        let b = root.join("B.md");
+        let moves = vec![(first.clone(), a.clone()), (second.clone(), b.clone())];
+
+        fs::write(&b, "Keep me").unwrap();
+        assert!(move_items(root.clone(), moves.clone(), None).await.is_err());
+        assert!(first.is_file() && second.is_file() && !a.exists());
+        assert_eq!(fs::read_to_string(&b).unwrap(), "Keep me");
+        fs::remove_file(&b).unwrap();
+
+        let batch = move_items(root, moves, None).await.unwrap();
+        assert_eq!(batch.moved.len(), 1);
+        assert_eq!(batch.moved[0].from, first);
+        assert_eq!(batch.moved[0].to, a);
+        assert!(batch.failure.unwrap().to_string().contains("relative link"));
+        assert!(!first.exists() && second.is_file() && !b.exists());
+        assert_eq!(fs::read_to_string(a).unwrap(), "First draft");
+    }
 
     #[test]
     fn creation_never_overwrites_and_validates_visible_names() {

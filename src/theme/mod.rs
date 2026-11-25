@@ -4,7 +4,7 @@ mod definition;
 pub(crate) mod styles;
 
 pub(crate) use definition::{
-    Preset, ResolvedTheme, Tokens, Typography, WritingFont, WritingMeasure,
+    Preset, ResolvedTheme, Tokens, Typography, WritingFont, WritingMeasure, WritingSpacing,
 };
 
 pub(crate) const BUNDLED_WRITING_FONTS: [&[u8]; 8] = [

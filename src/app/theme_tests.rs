@@ -32,10 +32,10 @@ fn switching_appearance_preserves_the_document_and_reverse_selection() {
         );
     }
     let previous = app.resolved_theme.tokens;
-    drop(app.update_message(Message::ThemeLoaded(Ok(Some((
-        "invalid.toml".into(),
-        "this is not a theme".into(),
-    ))))));
+    drop(app.update_message(Message::ThemeLoaded(
+        app.theme_request,
+        Ok(Some(("invalid.toml".into(), "this is not a theme".into()))),
+    )));
     assert_eq!(app.resolved_theme.tokens, previous);
     assert_eq!(app.session.document.source(), source);
     assert_eq!(app.session.selection, selection);
@@ -246,7 +246,7 @@ fn write_placeholder_uses_the_same_position_as_typed_text() {
         app.resolved_theme = Preset::Paper.resolve();
         app.resolved_theme.typography.font = font;
         app.resolved_theme.tokens.faint = app.resolved_theme.tokens.text;
-        app.zoom = 1.15;
+        app.preferences.writing_zoom = 1.15;
         let mut render_text = |source: &str| {
             app.set_document(source.into(), None, "Untitled.md".into());
             render_pixels(
@@ -258,7 +258,7 @@ fn write_placeholder_uses_the_same_position_as_typed_text() {
             )
         };
         let placeholder = render_text("");
-        let typed = render_text("Begin anywhere…");
+        let typed = render_text(crate::editor::WRITING_PLACEHOLDER);
         let stride = placeholder.width() as usize * 4;
         let writing_band = 172 * stride..250 * stride;
         assert!(
@@ -274,12 +274,7 @@ fn table_clipboard_previews() {
     let mut fonts = iced_tiny_skia::graphics::text::font_system()
         .write()
         .unwrap();
-    for font in [
-        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
-    ] {
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
         fonts.load_font(std::borrow::Cow::Borrowed(font));
     }
     drop(fonts);
@@ -468,12 +463,7 @@ fn theme_ui_previews() {
     let mut fonts = iced_tiny_skia::graphics::text::font_system()
         .write()
         .unwrap();
-    for font in [
-        include_bytes!("../../assets/fonts/Newsreader-Regular.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Bold.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-Italic.ttf").as_slice(),
-        include_bytes!("../../assets/fonts/Newsreader-BoldItalic.ttf").as_slice(),
-    ] {
+    for font in crate::theme::BUNDLED_WRITING_FONTS {
         fonts.load_font(std::borrow::Cow::Borrowed(font));
     }
     drop(fonts);

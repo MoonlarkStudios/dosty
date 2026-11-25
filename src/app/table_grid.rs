@@ -1389,11 +1389,16 @@ impl App {
                 .on_action(|action| AppMessage::TableGrid(Message::Draft(action)))
                 .key_binding(draft_binding)
                 .font(self.resolved_theme.typography.font.font())
-                .size(self.resolved_theme.typography.body_size * self.zoom)
+                .size(self.resolved_theme.typography.body_size * self.preferences.writing_zoom)
                 .line_height(iced::widget::text::LineHeight::Relative(
-                    self.resolved_theme.typography.line_height,
+                    self.resolved_theme.typography.line_height(),
                 ))
-                .padding((self.resolved_theme.typography.body_size * self.zoom * 0.65).min(12.0))
+                .padding(
+                    (self.resolved_theme.typography.body_size
+                        * self.preferences.writing_zoom
+                        * 0.65)
+                        .min(12.0),
+                )
                 .height(iced::Shrink)
                 .style(styles::table_editor(self.resolved_theme.tokens))
                 .into(),
