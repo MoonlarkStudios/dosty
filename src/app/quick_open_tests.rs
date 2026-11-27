@@ -224,7 +224,7 @@ async fn unsaved_documents_lead_the_switcher_and_return_as_they_were_left() {
     settle(&mut app, task).await;
     assert!(app.overlay.is_none());
     assert_eq!(app.session.document.source(), draft);
-    assert!(app.session.dirty && app.session.document.can_undo());
+    assert!(app.session.is_dirty() && app.session.document.can_undo());
     assert_eq!(app.background.dirty().count(), 1, "the other draft is kept");
 }
 
@@ -396,7 +396,7 @@ async fn opening_keeps_unsaved_writing_open_and_back_returns_to_it() {
     let task = app.update_message(AppMessage::Step(Direction::Back));
     settle(&mut app, task).await;
     assert_eq!(app.session.document.source(), source);
-    assert!(app.session.dirty);
+    assert!(app.session.is_dirty());
     assert!(app.session.document.can_undo());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Target");
 }
@@ -461,7 +461,7 @@ fn cancelling_keeps_a_table_draft_and_window_close_still_uses_the_save_guard() {
             "pending café".into(),
         )))),
     );
-    assert!(!app.session.dirty);
+    assert!(!app.session.is_dirty());
     drop(app.update_quick_open(Message::Open));
     drop(app.update_message(AppMessage::CloseOverlay));
     assert_eq!(app.session.document.source(), source);

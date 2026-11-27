@@ -253,7 +253,7 @@ mod tests {
         let inserted = "![The old map](<../figures/The [old] map.png>)";
         assert_eq!(app.session.document.source(), format!("Before {inserted}"));
         assert_eq!(app.session.selection.head, "Before ".len() + inserted.len());
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
         drop(app.update(AppMessage::Undo));
         assert_eq!(app.session.document.source(), "Before after");
 

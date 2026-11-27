@@ -23,7 +23,9 @@ fn parked(path: Option<&str>, dirty: bool) -> Parked {
         path.map(PathBuf::from),
         path.unwrap_or("Untitled.md").into(),
     );
-    session.dirty = dirty;
+    if dirty {
+        session.require_save();
+    }
     Parked {
         session,
         references: References::default(),
@@ -63,7 +65,13 @@ fn only_clean_documents_are_released_and_the_least_recent_go_first() {
 fn a_clean_copy_returns_only_while_its_file_is_unchanged() {
     let mut background = Background::default();
     let mut clean = parked(Some("/note.md"), false);
-    clean.session.set_saved_version(Some("v1".into()));
+    clean.session.acknowledge_file_save(
+        "/note.md".into(),
+        "note.md".into(),
+        Some("v1".into()),
+        "text".into(),
+        0,
+    );
     background.park(clean);
     background.park(parked(Some("/note.md"), true));
     let path = Path::new("/note.md");
@@ -80,7 +88,7 @@ fn a_clean_copy_returns_only_while_its_file_is_unchanged() {
     );
     assert!(background.take_unchanged(path, "text", None).is_none());
     let returned = background.take_unchanged(path, "text", Some("v1")).unwrap();
-    assert!(!returned.session.dirty);
+    assert!(!returned.session.is_dirty());
     assert!(background.take_dirty(Some(path)).is_some());
     assert!(background.take_dirty(None).is_none());
 }
@@ -149,7 +157,7 @@ fn saved(app: &mut App, path: &str) {
             generation: app.session.document.collaboration().generation(),
         },
     );
-    assert!(!app.session.dirty);
+    assert!(!app.session.is_dirty());
 }
 
 fn loaded(path: &str, source: &str) -> Message {
@@ -220,7 +228,7 @@ fn choosing_the_file_of_an_unsaved_page_keeps_the_writing() {
     );
     assert!(!app.loading);
     assert_eq!(app.session.document.source(), "Unsaved Saved");
-    assert!(app.session.dirty && app.session.document.can_undo());
+    assert!(app.session.is_dirty() && app.session.document.can_undo());
 }
 
 #[test]
@@ -295,7 +303,7 @@ fn an_unsaved_background_document_returns_by_its_session() {
     send(&mut app, Message::Resume(first));
     assert_eq!(app.session.id(), first);
     assert_eq!(app.session.document.source(), "First");
-    assert!(app.session.dirty && app.session.document.can_undo());
+    assert!(app.session.is_dirty() && app.session.document.can_undo());
     assert_eq!(app.background.dirty().count(), 1);
 
     send(&mut app, Message::Resume(first));

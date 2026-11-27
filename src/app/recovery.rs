@@ -10,8 +10,6 @@ use uuid::Uuid;
 use super::session::Session;
 use super::{App, Message as AppMessage, Overlay, Pending};
 use crate::document::Document;
-use crate::document::selection::Selection;
-use crate::io::workspace_document::WorkspaceDocument;
 use crate::io::{recovery, storage};
 
 type Version = (u64, u64);
@@ -170,7 +168,7 @@ fn snapshot(session: &Session) -> recovery::Snapshot {
         state: session.document.collaboration().state(),
         path: session.path().cloned(),
         name: session.display_name.clone(),
-        baseline: session.saved_source.clone(),
+        baseline: session.saved_source().to_owned(),
         baseline_version: session.saved_version().cloned(),
         hosted: session.hosted().cloned().map(Box::new),
         anchor: session.selection.anchor,
@@ -274,7 +272,7 @@ impl App {
                     });
                 let write = parked.or_else(|| {
                     let generation = self.session.recovery_version();
-                    let due = self.session.dirty
+                    let due = self.session.is_dirty()
                         && !self.loading
                         && self.recovery.checkpoint_due(generation, Instant::now());
                     due.then(|| {
@@ -327,7 +325,7 @@ impl App {
                 }
                 let copies = self
                     .session
-                    .dirty
+                    .is_dirty()
                     .then(|| (self.recovery.id, snapshot(&self.session)))
                     .into_iter()
                     .chain(
@@ -424,18 +422,10 @@ impl App {
     pub(super) fn restore_draft(&mut self, snapshot: recovery::Snapshot) -> Task<AppMessage> {
         match Document::from_state(&snapshot.state) {
             Ok(document) => {
-                self.install_document(document, snapshot.path, snapshot.name);
-                if let Some(hosted) = snapshot.hosted {
-                    self.session.backing = WorkspaceDocument::Hosted(*hosted);
-                }
-                self.session.saved_source = snapshot.baseline;
-                self.session.set_saved_version(snapshot.baseline_version);
-                self.session.selection = Selection {
-                    anchor: snapshot.anchor,
-                    head: snapshot.head,
-                }
-                .clamp(self.session.document.source());
-                self.session.dirty = true;
+                let session = Session::recovered(document, snapshot);
+                let selection = session.selection;
+                self.install_session(session);
+                self.session.selection = selection;
                 self.sync_editor();
                 self.notification = Some(if self.session.hosted().is_some() {
                     "Hosted draft recovered. Save checks its last saved workspace revision."
@@ -506,6 +496,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::selection::Selection;
     #[test]
     fn old_path_write_cannot_suppress_or_remove_new_path_recovery() {
         let mut state = State::default();
@@ -615,8 +606,13 @@ mod tests {
             "note.md".into(),
         );
         let state = app.session.document.collaboration().state();
-        app.session
-            .set_saved_version(Some(collaboration_store::version(&state)));
+        app.session.acknowledge_file_save(
+            path.clone(),
+            "note.md".into(),
+            Some(collaboration_store::version(&state)),
+            app.session.saved_source().to_owned(),
+            app.session.document.collaboration().generation(),
+        );
         collaboration_store::save_document(
             path.clone(),
             app.session.document.source().into(),
@@ -641,7 +637,7 @@ mod tests {
             state: app.session.document.collaboration().state(),
             path: app.session.path().cloned(),
             name: app.session.display_name.clone(),
-            baseline: app.session.saved_source.clone(),
+            baseline: app.session.saved_source().to_owned(),
             baseline_version: app.session.saved_version().cloned(),
             hosted: None,
             anchor: 10,
@@ -661,12 +657,12 @@ mod tests {
         assert_eq!(app.editor.snapshot(), app.projection.text);
         assert!(app.session.selection.anchor > app.session.selection.head);
         assert_ne!(app.session.document.collaboration().replica_id(), writer);
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
         let result = collaboration_store::save_document(
             path.clone(),
             app.session.document.source().into(),
             app.session.document.collaboration().state(),
-            Some(app.session.saved_source.clone()),
+            Some(app.session.saved_source().to_owned()),
             app.session.saved_version().cloned(),
         )
         .await;

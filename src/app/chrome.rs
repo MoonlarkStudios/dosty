@@ -588,7 +588,7 @@ impl App {
             SaveState::Failed
         } else if self.session.is_unbound() {
             SaveState::Unsaved
-        } else if self.session.dirty {
+        } else if self.session.is_dirty() {
             SaveState::Modified
         } else {
             SaveState::Saved

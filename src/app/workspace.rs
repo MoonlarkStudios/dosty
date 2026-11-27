@@ -242,7 +242,7 @@ impl App {
                         && !self.workspace.is_opening()
                         && !self.busy
                         && self.session.is_unbound()
-                        && !self.session.dirty
+                        && !self.session.is_dirty()
                 });
                 let save = if std::mem::take(&mut self.workspace.pending) {
                     self.persist_workspace()
@@ -416,7 +416,7 @@ impl App {
         // the workspace being left.
         let replaceable = (purpose != OpenPurpose::Restore
             || self.page == super::home::Page::Startup)
-            && !self.session.dirty
+            && !self.session.is_dirty()
             && !self.busy
             && match self.session.path() {
                 None => self.session.is_unbound() && self.session.document.source().is_empty(),
@@ -451,7 +451,7 @@ impl App {
             if reopen.is_none()
                 && !self.is_home()
                 && self.session.is_unbound()
-                && !self.session.dirty
+                && !self.session.is_dirty()
                 && self.session.document.source().is_empty()
             {
                 self.session.folder = Some(root.to_owned());
@@ -742,7 +742,7 @@ mod tests {
     fn unsaved_writing_is_never_displaced_by_a_restored_document() {
         let (mut app, _) = App::new();
         app.set_document("Unsaved thought".into(), None, "Untitled.md".into());
-        app.session.dirty = true;
+        app.session.require_save();
         let mut remembered = Workspace::new("/writing".into());
         remembered.visited(Path::new("Notes.md"), 0, 0);
         opened(&mut app, remembered);
@@ -987,7 +987,7 @@ mod tests {
         let parent = std::fs::canonicalize(folder.path()).unwrap();
         let mut app = launched(data.path());
         app.set_document("Keep this text".into(), None, "Draft.md".into());
-        app.session.dirty = true;
+        app.session.require_save();
 
         drop(app.update_message(AppMessage::Project(projects::Message::New)));
         drop(

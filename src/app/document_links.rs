@@ -806,7 +806,7 @@ mod tests {
         settle(&mut app, open).await;
         assert_eq!(app.session.path(), Some(&methods));
         assert_eq!(app.session.document.source(), format!("{added}{target}"));
-        assert!(app.session.dirty && app.session.document.can_undo());
+        assert!(app.session.is_dirty() && app.session.document.can_undo());
         assert_eq!(
             app.session.selection,
             Selection::caret(added.len() + target.rfind("## Methods").unwrap())
@@ -882,7 +882,7 @@ mod tests {
         assert_eq!(app.session.path(), Some(&notes));
         assert_eq!(app.session.document.source(), source);
         assert_eq!(app.session.selection, selection);
-        assert!(app.session.dirty && app.session.document.can_undo());
+        assert!(app.session.is_dirty() && app.session.document.can_undo());
     }
 
     #[tokio::test]

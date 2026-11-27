@@ -60,7 +60,7 @@ fn launch_starts_with_one_blank_document_and_closed_navigation() {
     assert!(app.folder.root().is_none());
     assert!(!app.chrome.files.open);
     assert!(!app.chrome.sidebars_hidden);
-    assert!(!app.session.dirty);
+    assert!(!app.session.is_dirty());
     assert!(app.overlay.is_none());
     assert!(!app.session.document.can_undo());
 }
@@ -140,7 +140,7 @@ fn typing_keeps_navigation_visible_with_legacy_fade_preferences() {
         let mut after = Controls::default();
         harness.operate(&mut after);
         assert_eq!(before.0, after.0);
-        assert!(harness.app.session.dirty);
+        assert!(harness.app.session.is_dirty());
         assert!(harness.app.chrome.files.open && harness.app.chrome.outline.open);
     }
 }
@@ -210,7 +210,7 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
 fn saved_snapshot_completion_keeps_later_edits_and_failed_saves_visible() {
     let mut app = app("café and 🦀");
     assert_eq!(app.save_state(), SaveState::Unsaved);
-    app.session.set_path("/tmp/quiet.md".into());
+    app.session.assume_saved_file("/tmp/quiet.md".into());
     assert_eq!(app.save_state(), SaveState::Saved);
     let source = Arc::new(app.session.document.source().to_owned());
     let generation = app.session.document.collaboration().generation();
@@ -316,7 +316,7 @@ fn hide_sidebars_preserves_reverse_utf8_selection_native_buffer_and_history() {
                 assert_eq!(collaboration.generation(), generation);
                 assert_eq!(collaboration.state().update, state);
                 assert_eq!(app.preserve_viewport_generation, Some(generation));
-                assert!(app.session.dirty);
+                assert!(app.session.is_dirty());
                 assert!(app.session.document.can_undo());
                 assert!(!app.session.document.can_redo());
             }
@@ -344,7 +344,7 @@ fn titlebar_commands_keep_unsaved_writing_without_asking() {
         let mut app = app(source);
         app.session.selection = reverse_selection(source);
         app.sync_editor();
-        app.session.dirty = true;
+        app.session.require_save();
         let selection = app.session.selection;
         send(&mut app, AppMessage::Chrome(Message::Menu(Menu::File)));
         assert_eq!(app.overlay, Some(Overlay::Chrome));
@@ -366,7 +366,7 @@ fn titlebar_commands_keep_unsaved_writing_without_asking() {
         };
         assert_eq!(held.document.source(), source);
         assert_eq!(held.selection, selection);
-        assert!(held.dirty);
+        assert!(held.is_dirty());
     }
 }
 
@@ -408,7 +408,7 @@ fn opening_and_saving_files_never_adds_document_paths_to_preferences() {
             },
         );
         assert_eq!(toml::to_string(&app.preferences).unwrap(), appearance);
-        assert!(!app.session.dirty);
+        assert!(!app.session.is_dirty());
     }
 }
 
@@ -874,7 +874,7 @@ fn returning_from_welcome_preserves_the_open_draft_and_its_viewport() {
     let mut harness = Harness::new(&source, EditorMode::Live, Size::new(1180.0, 820.0));
     harness.app.workspace.remember_for_preview(&[]);
     harness.message(AppMessage::Format(Format::Bold));
-    assert!(harness.app.session.dirty);
+    assert!(harness.app.session.is_dirty());
     let draft = harness.app.session.document.source().to_owned();
     let selection = harness.app.session.selection;
     let session = harness.app.session.id();
@@ -909,7 +909,7 @@ fn returning_from_welcome_preserves_the_open_draft_and_its_viewport() {
     assert!(harness.editor().1);
     assert_eq!(harness.app.session.id(), session);
     assert_eq!(harness.app.session.selection, selection);
-    assert!(harness.app.session.dirty);
+    assert!(harness.app.session.is_dirty());
     let after = RichEditor::intent_stats(editor_tree(&harness.tree, tag).unwrap()).0;
     assert!((after - scroll).abs() < 0.01);
     harness.message(AppMessage::Undo);
@@ -1481,7 +1481,7 @@ async fn rapid_native_undo_then_save_captures_the_restored_document() {
         let path = directory.path().join("Draft.md");
         std::fs::write(&path, source).unwrap();
         let mut harness = Harness::new(source, mode, Size::new(760.0, 520.0));
-        harness.app.session.set_path(path.clone());
+        harness.app.session.assume_saved_file(path.clone());
         harness.focus(EDITOR);
         harness.message(AppMessage::Edit(Action::Edit(Edit::Insert('A'))));
         harness.app.session.document.break_history_group();
@@ -1506,7 +1506,7 @@ async fn rapid_native_undo_then_save_captures_the_restored_document() {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
         assert_eq!(harness.app.session.document.source(), source);
         assert_eq!(harness.app.mode, EditorMode::Read);
-        assert!(!harness.app.session.dirty);
+        assert!(!harness.app.session.is_dirty());
         assert!(harness.app.menu_input.is_empty());
         assert!(harness.app.native_menu_queue.is_empty());
     }
@@ -1612,7 +1612,7 @@ fn native_escape_dismisses_a_folder_name_field_without_changing_the_document() {
         assert_eq!(harness.app.session.document.source(), source);
         assert_eq!(harness.app.session.selection, selection);
         assert_eq!(harness.app.session.document.collaboration().id(), identity);
-        assert!(!harness.app.session.dirty);
+        assert!(!harness.app.session.is_dirty());
         assert!(!harness.app.session.document.can_undo());
     }
 }
@@ -1813,7 +1813,7 @@ async fn file_tree_moves_a_selection_to_root_and_folder_and_undoes_the_group() {
     .await
     .unwrap();
     let mut harness = Harness::new(source, EditorMode::Live, Size::new(760.0, 520.0));
-    harness.app.session.set_path(drafts.join(files[0]));
+    harness.app.session.assume_saved_file(drafts.join(files[0]));
     harness.app.chrome.files.open = true;
     harness.message(AppMessage::Folder(folder::Message::Scanned {
         generation: 0,
@@ -1936,7 +1936,7 @@ async fn file_tree_moves_a_selection_to_root_and_folder_and_undoes_the_group() {
     assert_eq!(harness.app.session.selection, selection);
     assert_eq!(harness.app.session.document.collaboration().id(), identity);
     assert_eq!(harness.app.session.document.source(), dirty);
-    assert!(harness.app.session.dirty);
+    assert!(harness.app.session.is_dirty());
     assert_eq!(std::fs::read_to_string(root.join("A.md")).unwrap(), source);
 }
 
@@ -2030,7 +2030,7 @@ async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_
         .await
         .unwrap();
         let mut harness = Harness::new(source, mode, Size::new(1180.0, 820.0));
-        harness.app.session.set_path(from.clone());
+        harness.app.session.assume_saved_file(from.clone());
         harness.app.session.display_name = "The quiet hour.md".into();
         harness.app.chrome.files.open = true;
         harness.message(AppMessage::Folder(folder::Message::Scanned {
@@ -2092,7 +2092,7 @@ async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_
         let edited = harness.app.session.document.source().to_owned();
         let selection = harness.app.session.selection;
         let generation = harness.app.session.document.collaboration().generation();
-        assert!(harness.app.session.dirty);
+        assert!(harness.app.session.is_dirty());
         harness.key(Key::Character("n".into()), keyboard::Modifiers::COMMAND);
         assert!(harness.app.overlay.is_none());
         assert_eq!(harness.app.session.document.source(), "");
@@ -2112,7 +2112,7 @@ async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_
             harness.app.session.document.collaboration().generation(),
             generation
         );
-        assert!(harness.app.session.dirty);
+        assert!(harness.app.session.is_dirty());
         assert!(harness.app.session.document.can_undo());
         assert_eq!(std::fs::read_to_string(&to).unwrap(), source);
         harness.message(AppMessage::Undo);

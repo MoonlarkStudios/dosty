@@ -161,6 +161,9 @@ confirmed window close.
 
 `app/session.rs` holds what must survive when a document leaves the page: its
 text and history, selection, save destination, and saved baseline.
+Session methods update the destination, metadata, and save baseline together
+with the dirty flag and recovery version. A save acknowledgment advances the
+baseline while preserving edits made after the submitted snapshot.
 `io/workspace_document.rs` represents an unsaved document, a file with its
 checkpoint version, or a hosted draft with its origin, post ID, saved revision,
 and editable details. Files and hosted drafts use the same editor session and
@@ -173,8 +176,11 @@ session is installed. `app/background.rs` keeps outgoing sessions with their ima
 reference ledger and recovery identity; unsaved ones are never released, clean
 ones are bounded. Each unsaved background session gets a recovery copy on the next
 scheduler tick, ahead of the page's own, with one write in flight at a time.
-`app/trail.rs` records visited documents for Back and Forward; a step moves the
-trail only when its document arrives, since opening may be asynchronous or fail.
+`app/trail.rs` records visited documents with their file paths or hosted addresses
+for Back and Forward. A step moves the trail only when its document arrives.
+A clean hosted session is reused after the server confirms its saved revision
+and content. Hosted job completions are matched to the connection and job
+that started the poll.
 A never-saved session also carries the folder its first save writes into and
 whether the writer named it; that save claims a unique empty file through the
 ordinary guarded creation path and then saves over it with an empty expected

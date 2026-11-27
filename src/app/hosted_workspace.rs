@@ -7,12 +7,10 @@ use iced::{Element, Fill, Task};
 
 use crate::document::Document;
 use crate::io::hosted_workspace::{self, Client, Job, JobState, Post, RequestError, Workspace};
-use crate::io::workspace_document::{
-    Cover, Details, HostedAddress, HostedDraft, WorkspaceDocument,
-};
+use crate::io::workspace_document::{Cover, Details, HostedAddress};
 use crate::theme::styles::{self, Button};
 
-use super::session::Session;
+use super::session::{Session, post_name};
 use super::{App, EDITOR, Message as AppMessage, Overlay};
 
 #[derive(Default)]
@@ -20,6 +18,8 @@ pub(super) struct State {
     origin: String,
     key: String,
     client: Option<Client>,
+    connection: u64,
+    open_after_connect: Option<HostedAddress>,
     workspace: Option<Workspace>,
     posts: Vec<Post>,
     issue: Option<String>,
@@ -75,11 +75,15 @@ pub enum Message {
         post: Result<Box<Post>, RequestError>,
         address: HostedAddress,
         copy: bool,
-        generation: u64,
+        version: (u64, u64),
         action: Option<String>,
     },
-    JobStarted(Result<Job, String>),
-    JobFinished(String, Result<Job, String>),
+    JobStarted(u64, Result<Job, String>),
+    JobFinished {
+        connection: u64,
+        id: uuid::Uuid,
+        result: Result<Job, String>,
+    },
     OpenResult(String),
 }
 
@@ -98,6 +102,7 @@ impl State {
     }
 
     fn disconnect(&mut self) {
+        self.connection = self.connection.wrapping_add(1);
         self.client = None;
         self.workspace = None;
         self.posts.clear();
@@ -123,6 +128,9 @@ impl App {
             Message::Show if !self.busy => {
                 self.chrome.menu = None;
                 self.overlay = Some(Overlay::Hosted);
+                if self.hosted.open_after_connect.is_some() {
+                    return operation::focus("hosted-workspace-origin");
+                }
                 if let Some(origin) = self
                     .session
                     .hosted()
@@ -138,10 +146,11 @@ impl App {
             }
             Message::Origin(value) => self.hosted.origin = value,
             Message::Key(value) => self.hosted.key = value.0,
-            Message::Connect if !self.busy => {
+            Message::Connect if !self.busy && self.hosted.client.is_none() => {
                 match Client::new(self.hosted.origin.trim(), self.hosted.key.trim().to_owned()) {
                     Ok(client) => {
                         self.hosted.key.clear();
+                        self.hosted.connection = self.hosted.connection.wrapping_add(1);
                         self.hosted.client = Some(client.clone());
                         self.hosted.issue = None;
                         self.busy = true;
@@ -163,6 +172,12 @@ impl App {
                     Ok((workspace, posts)) => {
                         self.hosted.workspace = Some(workspace);
                         self.hosted.posts = posts;
+                        if let Some(address) = self.hosted.open_after_connect.take() {
+                            if self.hosted.connected_to(&address.origin) {
+                                return self.open_hosted(address);
+                            }
+                            self.trail.cancel_step();
+                        }
                     }
                     Err(error) => {
                         self.hosted.client = None;
@@ -171,6 +186,7 @@ impl App {
                 }
             }
             Message::Disconnect if !self.busy => {
+                self.cancel_hosted_open();
                 self.hosted.disconnect();
                 return operation::focus("hosted-workspace-origin");
             }
@@ -191,27 +207,10 @@ impl App {
                 }
             }
             Message::Open(id) if !self.busy && self.commit_cell() => {
-                if let Some(client) = self.hosted.client.clone() {
-                    let address = HostedAddress {
+                if let Some(client) = &self.hosted.client {
+                    return self.open_hosted(HostedAddress {
                         origin: client.origin().to_owned(),
                         id,
-                    };
-                    if self.session.dirty
-                        && self
-                            .session
-                            .hosted()
-                            .is_some_and(|draft| draft.address == address)
-                    {
-                        self.overlay = None;
-                        return operation::focus(EDITOR);
-                    }
-                    if let Some(parked) = self.background.take_hosted(&address) {
-                        return self.resume_at(parked, None, false);
-                    }
-                    self.busy = true;
-                    self.hosted.issue = None;
-                    return Task::perform(async move { client.post(id).await }, |result| {
-                        AppMessage::Hosted(Message::Opened(result.map(Box::new)))
                     });
                 }
             }
@@ -226,39 +225,17 @@ impl App {
             }
             Message::Opened(result) => {
                 self.busy = false;
+                self.loading = false;
                 match result {
-                    Ok(mut post) => {
-                        let Some(client) = &self.hosted.client else {
-                            return Task::none();
-                        };
-                        let source = std::mem::take(&mut post.body);
-                        let mut session = Session::new(
-                            Document::new(source),
-                            None,
-                            post_name(&post.details.title),
-                        );
-                        session.backing = WorkspaceDocument::Hosted(HostedDraft {
-                            address: HostedAddress {
-                                origin: client.origin().to_owned(),
-                                id: post.id,
-                            },
-                            revision: post.revision,
-                            saved_details: post.details.clone(),
-                            details: post.details.clone(),
-                        });
-                        let job = [&post.publish, &post.preview]
-                            .into_iter()
-                            .flatten()
-                            .find(|job| job.active())
-                            .cloned();
-                        self.hosted.remember_post(*post);
-                        self.install_session(session);
-                        return Task::batch([
-                            operation::focus(EDITOR),
-                            job.map_or_else(Task::none, |job| self.watch_hosted_job(job)),
-                        ]);
+                    Ok(post) => return self.complete_hosted_open(*post),
+                    Err(error) => {
+                        self.trail.cancel_step();
+                        if self.overlay == Some(Overlay::Hosted) {
+                            self.hosted.issue = Some(error);
+                        } else {
+                            self.notification = Some(error);
+                        }
                     }
-                    Err(error) => self.hosted.issue = Some(error),
                 }
             }
             Message::Title(value) => self.hosted_details(|details| details.title = value),
@@ -296,7 +273,7 @@ impl App {
                 post,
                 address,
                 copy,
-                generation,
+                version,
                 action,
             } => {
                 self.busy = false;
@@ -310,20 +287,20 @@ impl App {
                 }
                 match post {
                     Ok(mut post) => {
-                        let source = std::mem::take(&mut post.body);
-                        if let Some(active) = self.session.hosted_mut() {
-                            active.address.id = post.id;
-                            active.revision = post.revision;
-                            active.saved_details = post.details.clone();
-                            active.details = post.details.clone();
-                        }
-                        self.session.display_name = post_name(&post.details.title);
+                        self.session.acknowledge_hosted_save(
+                            &address,
+                            post.id,
+                            post.revision,
+                            post.details.clone(),
+                            std::mem::take(&mut post.body),
+                            version,
+                        );
                         self.hosted.remember_post(*post);
-                        self.session.mark_hosted_saved(source, generation);
+                        self.page_settled();
                         self.chrome.save_error = None;
                         self.hosted.issue = None;
                         self.hosted.conflict = None;
-                        if !self.session.dirty {
+                        if !self.session.is_dirty() {
                             self.recovery.retire();
                             if let Some(pending) = self.pending.take() {
                                 self.overlay = None;
@@ -351,41 +328,24 @@ impl App {
                     }
                 }
             }
-            Message::JobStarted(result) => {
+            Message::JobStarted(connection, result)
+                if self.hosted.connection == connection && self.hosted.client.is_some() =>
+            {
                 self.busy = false;
                 match result {
-                    Ok(job) => return self.watch_hosted_job(job),
+                    Ok(job) => {
+                        self.hosted.issue = None;
+                        return self.watch_hosted_job(job);
+                    }
                     Err(error) => self.hosted.issue = Some(error),
                 }
             }
-            Message::JobFinished(origin, result) if self.hosted.connected_to(&origin) => {
-                match result {
-                    Ok(job) => {
-                        if let Some(post) = self.hosted.active_post.as_mut()
-                            && post.id == job.post_id
-                        {
-                            if job.mode == "preview" {
-                                post.preview = Some(job.clone());
-                            } else {
-                                if job.state == JobState::Succeeded {
-                                    post.published_revision = Some(job.revision);
-                                }
-                                post.publish = Some(job.clone());
-                            }
-                        }
-                        if self.session.hosted().is_some_and(|draft| {
-                            draft.address.origin == origin && draft.address.id == job.post_id
-                        }) && self.overlay.is_none()
-                        {
-                            self.notification = Some(job.label().to_owned());
-                        }
-                        self.hosted.job = Some(job);
-                    }
-                    Err(error) => {
-                        self.hosted.job = None;
-                        self.hosted.issue = Some(error);
-                    }
-                }
+            Message::JobFinished {
+                connection,
+                id,
+                result,
+            } if self.hosted.connection == connection && self.hosted.client.is_some() => {
+                self.complete_hosted_job(id, result);
             }
             Message::OpenResult(url) => {
                 if let Err(error) = hosted_workspace::open_result(&url) {
@@ -397,20 +357,110 @@ impl App {
         Task::none()
     }
 
+    pub(super) fn open_hosted(&mut self, address: HostedAddress) -> Task<AppMessage> {
+        if self.session.is_dirty()
+            && self
+                .session
+                .hosted()
+                .is_some_and(|draft| draft.address == address)
+        {
+            self.overlay = None;
+            self.page_settled();
+            return operation::focus(EDITOR);
+        }
+        if let Some(parked) = self.background.take_hosted(&address) {
+            return self.resume_at(parked, None, false);
+        }
+        let Some(client) = self
+            .hosted
+            .client
+            .as_ref()
+            .filter(|client| client.origin() == address.origin)
+            .cloned()
+        else {
+            let connect = self.connect_hosted_draft(address.origin.clone());
+            self.hosted.open_after_connect = Some(address);
+            return connect;
+        };
+        let id = address.id;
+        self.busy = true;
+        self.loading = true;
+        self.hosted.issue = None;
+        Task::perform(
+            async move {
+                let post = client.post(id).await?;
+                if post.id != id {
+                    return Err("The workspace returned a different draft.".into());
+                }
+                Ok(post)
+            },
+            |result| AppMessage::Hosted(Message::Opened(result.map(Box::new))),
+        )
+    }
+
+    fn complete_hosted_open(&mut self, mut post: Post) -> Task<AppMessage> {
+        let Some(client) = &self.hosted.client else {
+            self.trail.cancel_step();
+            return Task::none();
+        };
+        let address = HostedAddress {
+            origin: client.origin().to_owned(),
+            id: post.id,
+        };
+        let source = std::mem::take(&mut post.body);
+        let job = [&post.publish, &post.preview]
+            .into_iter()
+            .flatten()
+            .find(|job| job.active())
+            .cloned();
+        let reopen =
+            if self
+                .session
+                .matches_hosted_snapshot(&address, post.revision, &source, &post.details)
+            {
+                self.overlay = None;
+                self.return_to_document();
+                self.page_settled();
+                operation::focus(EDITOR)
+            } else if let Some(parked) = self.background.take_unchanged_hosted(
+                &address,
+                post.revision,
+                &source,
+                &post.details,
+            ) {
+                self.resume_at(parked, None, false)
+            } else {
+                self.install_session(Session::open_hosted(
+                    Document::new(source),
+                    address,
+                    post.revision,
+                    post.details.clone(),
+                ));
+                operation::focus(EDITOR)
+            };
+        self.hosted.remember_post(post);
+        Task::batch([
+            reopen,
+            job.map_or_else(Task::none, |job| self.watch_hosted_job(job)),
+        ])
+    }
+
     fn connect_hosted_draft(&mut self, origin: String) -> Task<AppMessage> {
+        self.cancel_hosted_open();
         self.hosted.disconnect();
         self.hosted.origin = origin;
         self.overlay = Some(Overlay::Hosted);
         operation::focus("hosted-workspace-origin")
     }
 
+    pub(super) fn cancel_hosted_open(&mut self) {
+        if self.hosted.open_after_connect.take().is_some() {
+            self.trail.cancel_step();
+        }
+    }
+
     fn hosted_details(&mut self, update: impl FnOnce(&mut Details)) {
-        if !self.busy
-            && let Some(active) = self.session.hosted_mut()
-        {
-            update(&mut active.details);
-            self.session.display_name = post_name(&active.details.title);
-            self.session.workspace_changed();
+        if !self.busy && self.session.edit_hosted_details(update) {
             self.recovery.edited();
         }
     }
@@ -432,7 +482,7 @@ impl App {
         if copy && self.hosted.conflict.as_ref() != Some(&active.address) {
             return Task::none();
         }
-        if !self.session.dirty && !copy {
+        if !self.session.is_dirty() && !copy {
             return action.map_or_else(Task::none, |action| self.run_hosted_action(action));
         }
         let address = active.address.clone();
@@ -440,7 +490,7 @@ impl App {
         let revision = active.revision;
         let details = active.details.clone();
         let source = self.session.document.source().to_owned();
-        let generation = self.session.document.collaboration().generation();
+        let version = self.session.recovery_version();
         self.busy = true;
         self.chrome.saving = true;
         self.hosted.issue = None;
@@ -457,7 +507,7 @@ impl App {
                     post: post.map(Box::new),
                     address: address.clone(),
                     copy,
-                    generation,
+                    version,
                     action: action.clone(),
                 })
             },
@@ -473,30 +523,89 @@ impl App {
         };
         let id = active.address.id;
         let revision = active.revision;
+        let connection = self.hosted.connection;
         self.hosted.issue = None;
         self.busy = true;
         Task::perform(
             async move { client.action(id, revision, &action).await },
-            |result| AppMessage::Hosted(Message::JobStarted(result)),
+            move |result| AppMessage::Hosted(Message::JobStarted(connection, result)),
         )
     }
 
     fn watch_hosted_job(&mut self, mut job: Job) -> Task<AppMessage> {
-        self.hosted.job = Some(job.clone());
         let Some(client) = self.hosted.client.clone() else {
             return Task::none();
         };
-        let origin = client.origin().to_owned();
+        let connection = self.hosted.connection;
+        let id = job.id;
+        if self
+            .hosted
+            .job
+            .as_ref()
+            .is_some_and(|current| current.id == id && current.active())
+        {
+            return Task::none();
+        }
+        self.hosted.job = Some(job.clone());
         Task::perform(
             async move {
                 while job.active() {
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    job = client.job(job.id).await?;
+                    let status = client.job(id).await?;
+                    if status.id != id || status.post_id != job.post_id {
+                        return Err("The workspace returned a different job.".into());
+                    }
+                    job = status;
                 }
                 Ok(job)
             },
-            move |result| AppMessage::Hosted(Message::JobFinished(origin.clone(), result)),
+            move |result| {
+                AppMessage::Hosted(Message::JobFinished {
+                    connection,
+                    id,
+                    result,
+                })
+            },
         )
+    }
+
+    fn complete_hosted_job(&mut self, id: uuid::Uuid, result: Result<Job, String>) {
+        let (Some(client), Some(current)) = (&self.hosted.client, &self.hosted.job) else {
+            return;
+        };
+        if current.id != id {
+            return;
+        }
+        let on_page = self.session.hosted().is_some_and(|draft| {
+            draft.address.origin == client.origin() && draft.address.id == current.post_id
+        });
+        match result {
+            Ok(job) if job.id == id && job.post_id == current.post_id => {
+                if let Some(post) = self.hosted.active_post.as_mut()
+                    && post.id == job.post_id
+                {
+                    if job.mode == "preview" {
+                        post.preview = Some(job.clone());
+                    } else {
+                        if job.state == JobState::Succeeded {
+                            post.published_revision = Some(job.revision);
+                        }
+                        post.publish = Some(job.clone());
+                    }
+                }
+                if on_page && self.overlay.is_none() {
+                    self.notification = Some(job.label().to_owned());
+                }
+                self.hosted.job = Some(job);
+            }
+            Err(error) => {
+                self.hosted.job = None;
+                if on_page {
+                    self.hosted.issue = Some(error);
+                }
+            }
+            Ok(_) => {}
+        }
     }
 
     pub(super) fn hosted_view(&self) -> Element<'_, AppMessage> {
@@ -704,14 +813,6 @@ impl App {
             .padding(20)
             .style(styles::panel(tokens.surface))
             .into()
-    }
-}
-
-fn post_name(title: &str) -> String {
-    if title.trim().is_empty() {
-        "Untitled post".into()
-    } else {
-        title.trim().into()
     }
 }
 

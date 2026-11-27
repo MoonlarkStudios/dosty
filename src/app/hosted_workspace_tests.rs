@@ -3,11 +3,15 @@ use std::path::{Path, PathBuf};
 use iced::futures::StreamExt;
 use iced::window;
 
-use super::{AccessKey, App, AppMessage, Client, Details, HostedAddress, HostedDraft, Message};
-use crate::app::application::{Overlay, recovery};
+use super::{
+    AccessKey, App, AppMessage, Client, Details, HostedAddress, Job, JobState, Message, Post,
+    Session, Workspace,
+};
+use crate::app::application::trail::Direction;
+use crate::app::application::{EditorMode, Overlay, Pending, recovery, table_grid};
 use crate::document::Document;
 use crate::document::selection::Selection;
-use crate::io::{recovery as store, workspace_document::WorkspaceDocument};
+use crate::io::recovery as store;
 
 async fn send(app: &mut App, message: AppMessage) {
     let mut pending = vec![app.update(message)];
@@ -52,11 +56,6 @@ async fn closing_and_recovering_retains_metadata_only_edits_and_their_saved_base
     let directory = tempfile::tempdir().unwrap();
     let (mut app, _) = App::new();
     app.use_recovery_directory(directory.path().to_owned());
-    app.install_document(
-        Document::new("Saved body.".into()),
-        None,
-        "Saved title".into(),
-    );
     let address = HostedAddress {
         origin: "https://workspace.example.invalid/".into(),
         id: uuid::Uuid::new_v4(),
@@ -66,12 +65,12 @@ async fn closing_and_recovering_retains_metadata_only_edits_and_their_saved_base
         section: "essays".into(),
         cover: None,
     };
-    app.session.backing = WorkspaceDocument::Hosted(HostedDraft {
-        address: address.clone(),
-        revision: 7,
-        saved_details: details.clone(),
-        details: details.clone(),
-    });
+    app.install_session(Session::open_hosted(
+        Document::new("Saved body.".into()),
+        address.clone(),
+        7,
+        details.clone(),
+    ));
     let initial = app.session.recovery_version();
     send(
         &mut app,
@@ -80,7 +79,7 @@ async fn closing_and_recovering_retains_metadata_only_edits_and_their_saved_base
     .await;
     assert_eq!(app.session.recovery_version().0, initial.0);
     assert_ne!(app.session.recovery_version(), initial);
-    assert!(app.session.dirty);
+    assert!(app.session.is_dirty());
     keep_and_close(&mut app).await;
 
     let mut reopened = recover(directory.path()).await;
@@ -90,7 +89,7 @@ async fn closing_and_recovering_retains_metadata_only_edits_and_their_saved_base
     assert_eq!(draft.saved_details, details);
     assert_eq!(draft.details.title, "Unsaved title");
     assert_eq!(reopened.session.document.source(), "Saved body.");
-    assert!(reopened.session.dirty);
+    assert!(reopened.session.is_dirty());
     assert!(reopened.hosted.client.is_none());
     send(&mut reopened, AppMessage::Save).await;
     assert_eq!(reopened.hosted.origin, address.origin);
@@ -178,7 +177,7 @@ async fn hosted_browser_conflict_survives_process_restart() {
             );
             assert_eq!(app.session.document.source(), LOCAL_BODY);
             assert_eq!(app.session.hosted().unwrap().revision, original.revision);
-            assert!(app.session.dirty);
+            assert!(app.session.is_dirty());
             keep_and_close(&mut app).await;
             let entries = store::list(&directory.join("recovery")).unwrap();
             let bytes = std::fs::read(
@@ -215,7 +214,7 @@ async fn hosted_browser_conflict_survives_process_restart() {
             send(&mut app, AppMessage::Save).await;
             assert!(app.hosted.conflict.is_some());
             send(&mut app, AppMessage::Hosted(Message::SaveCopy)).await;
-            assert!(!app.session.dirty, "{:?}", app.hosted.issue);
+            assert!(!app.session.is_dirty(), "{:?}", app.hosted.issue);
             let copy = app.session.hosted().unwrap();
             assert_ne!(copy.address.id, post);
             let saved_copy = client.post(copy.address.id).await.unwrap();
@@ -229,4 +228,198 @@ async fn hosted_browser_conflict_survives_process_restart() {
         }
         phase => panic!("Unknown workspace test phase: {phase}"),
     }
+}
+
+#[test]
+fn closing_the_hosted_overlay_commits_a_pending_table_edit_before_the_save_guard() {
+    let (mut app, _) = App::new();
+    let source = "| A | B |\n|---|---|\n| old | value |\n";
+    app.set_document(source.into(), None, "Table.md".into());
+    drop(app.update(AppMessage::SetMode(EditorMode::Live)));
+    drop(
+        app.update(AppMessage::TableGrid(table_grid::Message::Select {
+            revision: app.projection.source_id.clone(),
+            table: 0,
+            row: 1,
+            column: 0,
+            extend: false,
+            extent: table_grid::Extent::Cell,
+        })),
+    );
+    drop(
+        app.update(AppMessage::TableGrid(table_grid::Message::Begin(Some(
+            "pending café".into(),
+        )))),
+    );
+    assert!(!app.session.is_dirty());
+    drop(app.update(AppMessage::Hosted(Message::Show)));
+    assert_eq!(app.overlay, Some(Overlay::Hosted));
+    assert_eq!(app.session.document.source(), source);
+
+    drop(app.update(AppMessage::CloseRequested(window::Id::unique())));
+    assert!(app.session.document.source().contains("pending café"));
+    assert!(app.session.is_dirty());
+    assert!(app.grid.draft.is_none());
+    assert_eq!(app.overlay, Some(Overlay::Unsaved));
+    assert!(matches!(app.pending, Some(Pending::Close(_))));
+}
+
+const ORIGIN: &str = "https://workspace.example.invalid/";
+
+fn connected_app() -> App {
+    let (mut app, _) = App::new();
+    app.hosted.client = Some(Client::new(ORIGIN, "test".into()).unwrap());
+    app
+}
+
+fn post(id: uuid::Uuid, revision: u64, body: &str) -> Post {
+    Post {
+        id,
+        revision,
+        published_revision: None,
+        actions: Vec::new(),
+        details: Details {
+            title: "Saved title".into(),
+            section: "essays".into(),
+            cover: None,
+        },
+        body: body.into(),
+        publish: None,
+        preview: None,
+    }
+}
+
+fn deliver_opened(app: &mut App, post: Post) {
+    drop(app.update(AppMessage::Hosted(Message::Opened(Ok(Box::new(post))))));
+}
+
+#[test]
+fn back_and_forward_reopen_saved_hosted_drafts_and_reuse_only_the_unchanged_session() {
+    let mut app = connected_app();
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    let address = HostedAddress {
+        origin: ORIGIN.into(),
+        id: first,
+    };
+
+    deliver_opened(&mut app, post(first, 1, "Original"));
+    let first_session = app.session.id();
+    app.session.document.replace(0..8, "Local saved").unwrap();
+    app.changed();
+    let version = app.session.recovery_version();
+    drop(app.update(AppMessage::Hosted(Message::Saved {
+        post: Ok(Box::new(post(first, 2, "Local saved"))),
+        address: address.clone(),
+        version,
+        action: None,
+        copy: false,
+    })));
+    assert!(!app.session.is_dirty());
+    assert!(app.session.document.can_undo());
+    drop(app.update(AppMessage::Hosted(Message::Open(second))));
+    deliver_opened(&mut app, post(second, 1, "Second"));
+    let second_session = app.session.id();
+
+    drop(app.update(AppMessage::Step(Direction::Back)));
+    assert!(app.loading);
+    assert_eq!(app.session.id(), second_session);
+    deliver_opened(&mut app, post(first, 2, "Local saved"));
+    assert_eq!(app.session.id(), first_session);
+    assert!(app.session.document.can_undo());
+
+    drop(app.update(AppMessage::Step(Direction::Forward)));
+    assert!(app.loading);
+    deliver_opened(&mut app, post(second, 1, "Second"));
+    assert_eq!(app.session.id(), second_session);
+
+    drop(app.update(AppMessage::Hosted(Message::Disconnect)));
+    drop(app.update(AppMessage::Step(Direction::Back)));
+    assert_eq!(app.hosted.open_after_connect.as_ref(), Some(&address));
+    assert_eq!(app.overlay, Some(Overlay::Hosted));
+    assert_eq!(app.hosted.origin, ORIGIN);
+    app.hosted.client = Some(Client::new(ORIGIN, "test".into()).unwrap());
+    drop(app.update(AppMessage::Hosted(Message::Connected(Ok((
+        Workspace {
+            version: 1,
+            name: "Writing".into(),
+            sections: Default::default(),
+            actions: Vec::new(),
+        },
+        Vec::new(),
+    ))))));
+    assert!(app.loading);
+    deliver_opened(&mut app, post(first, 3, "Browser saved"));
+    assert_ne!(app.session.id(), first_session);
+    assert_eq!(app.session.document.source(), "Browser saved");
+    assert!(!app.session.document.can_undo());
+    assert!(app.trail.can_step(Direction::Forward));
+}
+
+#[test]
+fn older_job_completions_cannot_replace_the_tracked_job_or_report_its_error() {
+    let mut app = connected_app();
+    let post_id = uuid::Uuid::new_v4();
+    deliver_opened(&mut app, post(post_id, 2, "Draft"));
+    let job = |mode: &str| Job {
+        id: uuid::Uuid::new_v4(),
+        post_id,
+        mode: mode.into(),
+        state: JobState::Building,
+        revision: 2,
+        url: None,
+        error: None,
+    };
+    let preview = job("preview");
+    let publish = job("publish");
+    let connection = app.hosted.connection;
+    drop(app.watch_hosted_job(preview.clone()));
+    drop(app.watch_hosted_job(publish.clone()));
+    let finish = |connection, id, result| {
+        AppMessage::Hosted(Message::JobFinished {
+            connection,
+            id,
+            result,
+        })
+    };
+    drop(app.update(finish(
+        connection,
+        preview.id,
+        Err("Old poll failed".into()),
+    )));
+    let completed_preview = Job {
+        state: JobState::Succeeded,
+        ..preview
+    };
+    drop(app.update(finish(
+        connection,
+        completed_preview.id,
+        Ok(completed_preview),
+    )));
+    assert_eq!(app.hosted.job.as_ref().unwrap().id, publish.id);
+    assert!(app.hosted.issue.is_none());
+    assert!(app.hosted.active_post.as_ref().unwrap().preview.is_none());
+
+    // Even a response for the same job ID belongs to the connection that sent it.
+    drop(app.update(AppMessage::Hosted(Message::Disconnect)));
+    app.hosted.client = Some(Client::new(ORIGIN, "test".into()).unwrap());
+    drop(app.watch_hosted_job(publish.clone()));
+    drop(app.update(finish(
+        connection,
+        publish.id,
+        Err("Old connection failed".into()),
+    )));
+    assert_eq!(app.hosted.job.as_ref().unwrap().id, publish.id);
+    assert!(app.hosted.issue.is_none());
+
+    let completed_publish = Job {
+        state: JobState::Succeeded,
+        ..publish
+    };
+    drop(app.update(finish(
+        app.hosted.connection,
+        completed_publish.id,
+        Ok(completed_publish),
+    )));
+    assert_eq!(app.hosted.job.as_ref().unwrap().state, JobState::Succeeded);
 }

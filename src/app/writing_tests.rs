@@ -51,7 +51,7 @@ async fn dropped_image_import_keeps_later_reverse_selection_remote_edits_and_und
     let bytes = std::fs::read(&image).unwrap();
     let original = "# Heading\r\n\r\nParagraph.\n\n| A | B |\n|---|---|\n| one | two |\n\n![alt](missing.png)\n\nTail.";
     let mut app = app(original);
-    app.session.set_path(path.clone());
+    app.session.assume_saved_file(path.clone());
     let gap = original.find("Paragraph").unwrap();
     select(&mut app, Selection::caret(gap));
     // Schedule the actual import without executing native dialogs or image tasks.
@@ -146,7 +146,7 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
     );
     assert!(!app.busy);
     assert!(app.session.path().is_none());
-    assert!(app.session.dirty);
+    assert!(app.session.is_dirty());
     assert!(app.writing.pending_media.is_none());
     assert_eq!(app.session.document.source(), source);
     assert_eq!(app.session.selection, selection);
@@ -194,7 +194,7 @@ async fn document_drop_keeps_unsaved_writing_reverse_selection_and_undo_for_back
     assert!(app.pending.is_none());
     assert_eq!(app.session.document.source(), "Another document.");
     send(&mut app, AppMessage::Step(Direction::Back));
-    assert!(app.session.dirty);
+    assert!(app.session.is_dirty());
     assert_eq!(app.session.document.source(), source);
     assert_eq!(app.session.selection, selection);
     send(&mut app, AppMessage::Undo);
@@ -213,7 +213,7 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     let source = include_str!("../../assets/writing/the-quiet-hour.md")
         .replace("the-quiet-hour.assets/coast.png", &destination);
     let mut app = app(&source);
-    app.session.set_path(path.clone());
+    app.session.assume_saved_file(path.clone());
     let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     let start = source.find("CommonMark reference").unwrap();
     let before = Selection {
@@ -601,7 +601,7 @@ fn focusing_details_reconciles_editor_focus_and_settles_the_native_redraw_loop()
 fn local_link_navigation_closes_details_and_keeps_unsaved_writing() {
     let mut app = app("# A heading\n\nA [heading](#a-heading) and [file](other.md).\n");
     let dir = tempfile::tempdir().unwrap();
-    app.session.set_path(dir.path().join("current.md"));
+    app.session.assume_saved_file(dir.path().join("current.md"));
     let link = app.session.document.source().find("[heading]").unwrap();
     select(&mut app, Selection::caret(link));
     tool(&mut app, Message::Details(Kind::Link));
@@ -609,7 +609,7 @@ fn local_link_navigation_closes_details_and_keeps_unsaved_writing() {
     assert!(app.overlay.is_none());
     assert_eq!(app.session.selection.head, 0);
     let original = app.session.document.source().to_owned();
-    app.session.dirty = true;
+    app.session.require_save();
     let link = app.session.document.source().find("[file]").unwrap();
     select(&mut app, Selection::caret(link));
     tool(&mut app, Message::Details(Kind::Link));
@@ -649,7 +649,7 @@ async fn save_as_keeps_images_referenced_only_by_undo_history() {
     }
     let source = format!("![A photograph](<{}>)\n\n*Caption.*\n", references[0]);
     let mut app = app(&source);
-    app.session.set_path(path.clone());
+    app.session.assume_saved_file(path.clone());
     select(&mut app, Selection::caret(1));
     tool(&mut app, Message::Details(Kind::Image));
     tool(

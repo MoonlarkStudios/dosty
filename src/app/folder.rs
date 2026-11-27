@@ -1049,7 +1049,7 @@ impl App {
             .cloned()
             .map(|path| file_ops::ActiveDocument {
                 path,
-                saved_source: self.session.saved_source.clone(),
+                saved_source: self.session.saved_source().to_owned(),
                 saved_version: self.session.saved_version().cloned(),
                 source: self.session.document.source().to_owned(),
                 history: self.images.history(),
@@ -1233,8 +1233,7 @@ impl App {
                 && self.session.document.collaboration().replica_id() == inflight.replica
                 && let Some(path) = &result.active_path
             {
-                self.session.display_name = name(path);
-                self.session.set_path(path.clone());
+                self.session.move_file(path.clone(), name(path));
                 self.recovery.path_changed();
                 self.page_settled();
             }
@@ -1302,7 +1301,7 @@ impl App {
     /// have never been saved, and documents outside the open place.
     fn unsaved_elsewhere(&self) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
-        let page = self.session.dirty.then_some((&self.session, true));
+        let page = self.session.is_dirty().then_some((&self.session, true));
         let sessions = page
             .into_iter()
             .chain(self.background.dirty().map(|session| (session, false)))
@@ -1390,7 +1389,7 @@ impl App {
         };
         let unsaved = self
             .session
-            .dirty
+            .is_dirty()
             .then_some(&self.session)
             .into_iter()
             .chain(self.background.dirty())
@@ -2010,7 +2009,7 @@ mod tests {
         assert_eq!(app.session.document.source(), source);
         assert_eq!(app.session.selection, selection);
         assert_eq!(app.session.document.collaboration().id(), id);
-        assert!(!app.session.dirty);
+        assert!(!app.session.is_dirty());
         assert!(
             app.folder
                 .visible
@@ -2036,7 +2035,7 @@ mod tests {
     #[test]
     fn file_switch_loads_without_asking_and_leaves_active_row_until_success() {
         let mut app = app();
-        app.session.dirty = true;
+        app.session.require_save();
         let selection = app.session.selection;
         drop(app.update_folder(Message::Tree(file_tree::Action::Open(
             "/writing/other.md".into(),
@@ -2048,7 +2047,7 @@ mod tests {
             Some(Path::new("/writing/note.md"))
         );
         assert_eq!(app.session.selection, selection);
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
     }
 
     #[test]
@@ -2166,7 +2165,7 @@ mod tests {
     fn a_file_with_unsaved_background_writing_cannot_be_moved_from_under_it() {
         let mut app = app();
         app.folder.root = Some("/".into());
-        app.session.dirty = true;
+        app.session.require_save();
         app.set_document(
             "Elsewhere".into(),
             Some("/elsewhere/other.md".into()),
@@ -2200,7 +2199,7 @@ mod tests {
         let replica = app.session.document.collaboration().replica_id();
         let source = app.session.document.source().to_owned();
         let selection = app.session.selection;
-        app.session.dirty = true;
+        app.session.require_save();
         app.folder.root = Some("/writing".into());
         app.folder.next_operation = 1;
         app.folder.inflight = Some(InFlight {
@@ -2228,7 +2227,7 @@ mod tests {
         assert_eq!(app.session.document.source(), source);
         assert_eq!(app.session.selection, selection);
         assert_eq!(app.session.document.collaboration().replica_id(), replica);
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
         assert!(!app.busy);
         assert!(!app.loading);
         assert!(app.folder.can_undo());

@@ -523,7 +523,7 @@ fn theme_ui_previews() {
     drop(app.update_message(Message::ToggleReading));
     render(&app, Size::new(1180.0, 820.0), "read");
     drop(app.update_message(Message::ToggleReading));
-    app.session.dirty = true;
+    app.session.require_save();
     app.overlay = Some(Overlay::Unsaved);
     render(&app, Size::new(760.0, 520.0), "unsaved-narrow");
     app.overlay = None;
@@ -589,13 +589,13 @@ fn native_quiet_previews() {
         );
     }
     app.resolved_theme = Preset::Paper.resolve();
-    app.session.dirty = true;
+    app.session.require_save();
     render(&app, Size::new(1180.0, 820.0), "native-quiet-typing");
     app.chrome.outline.open = true;
     render(&app, Size::new(1180.0, 820.0), "native-quiet-navigation");
     render(&app, Size::new(760.0, 520.0), "native-quiet-outline-narrow");
     app.session
-        .set_path("/writing/Field notes/The quiet hour.md".into());
+        .assume_saved_file("/writing/Field notes/The quiet hour.md".into());
     drop(
         app.update_folder(folder::Message::Scanned {
             generation: 0,
@@ -716,7 +716,7 @@ fn sidebar_unsaved_previews() {
         None,
         "A thought.md".into(),
     );
-    app.session.dirty = true;
+    app.session.require_save();
     drop(app.update(Message::New));
     app.chrome.files.open = true;
     render(&app, Size::new(1180.0, 820.0), "sidebar-library-empty");
@@ -756,7 +756,7 @@ fn sidebar_unsaved_previews() {
             Some(root.join(name)),
             name.rsplit('/').next().unwrap().into(),
         );
-        app.session.dirty = true;
+        app.session.require_save();
     }
     app.notification = None;
     app.chrome.files.open = true;

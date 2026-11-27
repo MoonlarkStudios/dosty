@@ -1034,10 +1034,10 @@ fn every_table_command_has_one_undo_step_and_restores_reverse_source_selection()
             assert!(app.overlay.is_none());
             if app.session.document.source() == source {
                 assert!(!app.session.document.can_undo());
-                assert!(!app.session.dirty);
+                assert!(!app.session.is_dirty());
                 continue;
             }
-            assert!(app.session.dirty);
+            assert!(app.session.is_dirty());
             assert_synced(&app);
             assert_mappings(&app);
             let changed = app.session.document.source().to_owned();

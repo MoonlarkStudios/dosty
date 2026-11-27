@@ -562,7 +562,7 @@ mod tests {
             head: 0,
         };
         app.sync_editor();
-        app.session.dirty = true;
+        app.session.require_save();
         app.overlay = Some(Overlay::Chrome);
         app.chrome.menu = Some(chrome::Menu::Document);
         drop(app.native_menu_command(Command::New));

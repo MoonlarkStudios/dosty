@@ -44,7 +44,7 @@ fn task_toggle_preserves_reverse_source_selection_and_one_step_history() {
         expected.replace_range(start..start + 3, "[ ]");
         assert_eq!(app.session.document.source(), expected);
         assert_eq!(app.session.selection, selection);
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
         assert_eq!(
             app.editor.snapshot(),
             if mode == EditorMode::Source {

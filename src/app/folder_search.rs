@@ -641,8 +641,13 @@ mod tests {
         std::fs::write(&target, "disk only").unwrap();
         let mut app = app(&root, &[&active, &target]);
         app.set_document("active 🦀".into(), Some(active.clone()), "Active.md".into());
-        app.session.saved_source = "old file".into();
-        app.session.dirty = true;
+        app.session.acknowledge_file_save(
+            active.clone(),
+            "Active.md".into(),
+            None,
+            "old file".into(),
+            0,
+        );
 
         query(&mut app, "🦀").await;
         drop(app.update_folder_search(Message::Accept));
@@ -654,7 +659,7 @@ mod tests {
             &app.session.document.source()[app.session.selection.range()],
             "🦀"
         );
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
 
         query(&mut app, "disk").await;
         std::fs::write(&target, "different disk text").unwrap();
@@ -700,7 +705,7 @@ mod tests {
             &app.session.document.source()[app.session.selection.range()],
             "🦀"
         );
-        assert!(app.session.dirty && app.session.document.can_undo());
+        assert!(app.session.is_dirty() && app.session.document.can_undo());
         assert_eq!(std::fs::read_to_string(target).unwrap(), "target disk text");
     }
 

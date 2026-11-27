@@ -261,7 +261,7 @@ mod tests {
             assert_eq!(app.session.document.source(), source);
             assert!(app.projection.text.contains("Body"));
             assert_eq!(app.editor.snapshot(), app.projection.text);
-            assert!(!app.session.dirty && !app.session.document.can_undo());
+            assert!(!app.session.is_dirty() && !app.session.document.can_undo());
             send(&mut app, Message::ToggleSectionFold(None));
             assert!(app.section_folds.hidden.is_empty());
         }

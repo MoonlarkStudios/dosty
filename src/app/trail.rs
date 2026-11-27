@@ -2,7 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::session::SessionId;
+use super::session::{Session, SessionId};
+use crate::io::workspace_document::HostedAddress;
 
 const MAX_STOPS: usize = 64;
 
@@ -12,17 +13,24 @@ pub enum Direction {
     Forward,
 }
 
-/// One visited document. It is reached through its background session while
-/// that exists, and otherwise by reopening `path`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Destination {
+    File(PathBuf),
+    Hosted(HostedAddress),
+}
+
+/// One visited document. Unsaved sessions live in the background and saved
+/// documents can be reopened at their destination even after eviction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Stop {
     pub(super) session: SessionId,
-    pub(super) path: Option<PathBuf>,
+    pub(super) destination: Option<Destination>,
 }
 
 impl Stop {
-    fn is(&self, session: SessionId, path: Option<&Path>) -> bool {
-        self.session == session || (path.is_some() && self.path.as_deref() == path)
+    fn is(&self, arrival: &Self) -> bool {
+        self.session == arrival.session
+            || (self.destination.is_some() && self.destination == arrival.destination)
     }
 }
 
@@ -41,10 +49,14 @@ impl Trail {
     ///
     /// Arriving where a step was heading moves along the trail. Any other
     /// arrival is a new visit and replaces everything forward of the page.
-    pub(super) fn visit(&mut self, session: SessionId, path: Option<&Path>) {
+    pub(super) fn visit(&mut self, session: &Session) {
         let stop = Stop {
-            session,
-            path: path.map(Path::to_owned),
+            session: session.id(),
+            destination: session.path().cloned().map(Destination::File).or_else(|| {
+                session
+                    .hosted()
+                    .map(|draft| Destination::Hosted(draft.address.clone()))
+            }),
         };
         let arrived = self
             .heading
@@ -54,7 +66,7 @@ impl Trail {
             .find(|&index| {
                 self.stops
                     .get(index)
-                    .is_some_and(|stop| stop.is(session, path))
+                    .is_some_and(|previous| previous.is(&stop))
             });
         if let Some(index) = arrived {
             self.stops[index] = stop;
@@ -89,11 +101,15 @@ impl Trail {
         Some(self.stops[target].clone())
     }
 
-    /// Removes a session that was dropped without a file to reopen it from.
+    pub(super) fn cancel_step(&mut self) {
+        self.heading = None;
+    }
+
+    /// Removes a session without a destination to reopen it from.
     pub(super) fn forget(&mut self, session: SessionId) {
         let mut index = 0;
         while index < self.stops.len() {
-            if self.stops[index].session != session || self.stops[index].path.is_some() {
+            if self.stops[index].session != session || self.stops[index].destination.is_some() {
                 index += 1;
                 continue;
             }
@@ -113,16 +129,14 @@ impl Trail {
     /// moved folder.
     pub(super) fn moved(&mut self, from: &Path, to: &Path) {
         for stop in &mut self.stops {
-            if let Some(relative) = stop
-                .path
-                .as_deref()
-                .and_then(|path| path.strip_prefix(from).ok())
+            if let Some(Destination::File(path)) = &mut stop.destination
+                && let Ok(relative) = path.strip_prefix(from)
             {
-                stop.path = Some(if relative.as_os_str().is_empty() {
+                *path = if relative.as_os_str().is_empty() {
                     to.to_owned()
                 } else {
                     to.join(relative)
-                });
+                };
             }
         }
     }
@@ -132,7 +146,7 @@ impl Trail {
 mod tests {
     use std::path::Path;
 
-    use super::{Direction, Trail};
+    use super::{Destination, Direction, Trail};
     use crate::app::application::session::Session;
     use crate::document::Document;
 
@@ -145,7 +159,7 @@ mod tests {
     }
 
     fn visit(trail: &mut Trail, session: &Session) {
-        trail.visit(session.id(), session.path().map(|value| value.as_path()));
+        trail.visit(session);
     }
 
     #[test]
@@ -190,7 +204,7 @@ mod tests {
         let mut document = session(None);
         let mut trail = Trail::default();
         visit(&mut trail, &document);
-        document.set_path("/saved.md".into());
+        document.assume_saved_file("/saved.md".into());
         visit(&mut trail, &document);
         assert!(!trail.can_step(Direction::Back));
     }
@@ -211,12 +225,15 @@ mod tests {
         trail.moved(Path::new("/notes"), Path::new("/archive"));
 
         let stop = trail.step(Direction::Back).unwrap();
-        assert_eq!(stop.path.as_deref(), Some(Path::new("/archive/one.md")));
+        assert_eq!(
+            stop.destination,
+            Some(Destination::File("/archive/one.md".into()))
+        );
         visit(&mut trail, &first);
         let stop = trail.step(Direction::Forward).unwrap();
         assert_eq!(
-            stop.path.as_deref(),
-            Some(Path::new("/archive/deep/three.md"))
+            stop.destination,
+            Some(Destination::File("/archive/deep/three.md".into()))
         );
     }
 

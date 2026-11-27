@@ -583,7 +583,7 @@ mod tests {
             generation
         );
         assert!(!app.session.document.can_undo());
-        assert!(!app.session.dirty);
+        assert!(!app.session.is_dirty());
 
         let request = select(
             &app,

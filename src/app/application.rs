@@ -480,7 +480,7 @@ impl App {
         };
         app.sync_editor();
         app.session.selection = app.projection.normalize_caret(app.session.selection);
-        app.trail.visit(app.session.id(), None);
+        app.trail.visit(&app.session);
         let theme_task = if let Some(path) = app.preferences.custom_theme.clone() {
             Task::perform(
                 async move { storage::load_theme(path).await.map(Some) },
@@ -522,7 +522,7 @@ impl App {
         }
         format!(
             "{}{} — Dosty",
-            if self.session.dirty { "● " } else { "" },
+            if self.session.is_dirty() { "● " } else { "" },
             self.session.display_name
         )
     }
@@ -542,7 +542,7 @@ impl App {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             if self.background.needing_checkpoint().is_some()
-                || (self.session.dirty
+                || (self.session.is_dirty()
                     && !self.loading
                     && self
                         .recovery
@@ -960,7 +960,7 @@ impl App {
                 }) {
                     Ok(document) => {
                         self.install_document(document, None, "Offline copy.md".into());
-                        self.session.dirty = true;
+                        self.session.require_save();
                         self.notification = Some("Compatible offline replica opened. Save a Markdown copy to keep its state.".into());
                     }
                     Err(error) => self.notification = Some(error.to_string()),
@@ -1266,7 +1266,7 @@ impl App {
                 return self.save(save_as);
             }
             Message::ConfirmSave => {
-                if self.session.dirty {
+                if self.session.is_dirty() {
                     return self.save(false);
                 }
                 // The page is clean, so the guard is about background documents.
@@ -1313,16 +1313,19 @@ impl App {
                 match result {
                     Ok(path) => {
                         self.chrome.save_error = None;
-                        self.session.set_path(path.clone());
-                        self.session.display_name = filename(&path);
-                        self.session
-                            .mark_saved((*source).clone(), version, generation);
+                        self.session.acknowledge_file_save(
+                            path.clone(),
+                            filename(&path),
+                            Some(version),
+                            (*source).clone(),
+                            generation,
+                        );
                         self.page_settled();
                         let folder_task = self.folder_document_changed();
-                        if !self.session.dirty {
+                        if !self.session.is_dirty() {
                             self.recovery.retire();
                         }
-                        if !self.session.dirty
+                        if !self.session.is_dirty()
                             && let Some(pending) = self.pending.take()
                         {
                             self.overlay = None;
@@ -1472,8 +1475,10 @@ impl App {
                 if self.overlay == Some(Overlay::Chrome) {
                     self.chrome.menu = None;
                 }
-                let restore_focus =
-                    matches!(self.overlay, Some(Overlay::Chrome | Overlay::Backlinks));
+                let restore_focus = matches!(
+                    self.overlay,
+                    Some(Overlay::Chrome | Overlay::Backlinks | Overlay::Hosted)
+                );
                 let table = matches!(self.overlay, Some(Overlay::Table));
                 if !self.busy {
                     if self.overlay.is_none() {
@@ -1482,6 +1487,9 @@ impl App {
                         } else {
                             self.session.document.break_history_group();
                         }
+                    }
+                    if self.overlay == Some(Overlay::Hosted) {
+                        self.cancel_hosted_open();
                     }
                     self.overlay = None;
                     self.writing.close_details();
@@ -1683,17 +1691,17 @@ impl App {
                 }
             }
             Message::CloseRequested(id) => {
-                if self.overlay == Some(Overlay::FolderSearch) {
-                    drop(self.cancel_folder_search());
-                    return self.update_message(Message::CloseRequested(id));
+                match self.overlay {
+                    Some(Overlay::FolderSearch) => drop(self.cancel_folder_search()),
+                    Some(Overlay::QuickOpen) => drop(self.cancel_quick_open()),
+                    Some(Overlay::Hosted) if !self.busy => {
+                        drop(self.update_message(Message::CloseOverlay));
+                    }
+                    _ => return self.request(Pending::Close(id)),
                 }
-                if self.overlay == Some(Overlay::QuickOpen) {
-                    // Re-enter the ordinary close path after dismissing the
-                    // picker so a pending table draft reaches the save guard.
-                    drop(self.cancel_quick_open());
-                    return self.update_message(Message::CloseRequested(id));
-                }
-                return self.request(Pending::Close(id));
+                // Re-enter the ordinary close path so a pending table edit
+                // is committed before the unsaved guard examines the session.
+                return self.update_message(Message::CloseRequested(id));
             }
             Message::Link(url) => return self.open_destination(url),
             Message::LinkOpened(result) => {
@@ -2530,7 +2538,7 @@ impl App {
     /// Display names of every document with unsaved changes, the page first.
     fn unsaved(&self) -> impl Iterator<Item = &str> {
         self.session
-            .dirty
+            .is_dirty()
             .then_some(&self.session)
             .into_iter()
             .chain(self.background.dirty())
@@ -2547,10 +2555,11 @@ impl App {
         if let Some(parked) = self.background.take_unsaved(stop.session) {
             return self.resume(parked);
         }
-        // Every other stop kept a path: clean sessions without one are dropped,
-        // and `Trail::forget` removes their stops.
-        stop.path
-            .map_or_else(Task::none, |path| self.execute(Pending::Open(Some(path))))
+        match stop.destination {
+            Some(trail::Destination::File(path)) => self.execute(Pending::Open(Some(path))),
+            Some(trail::Destination::Hosted(address)) => self.open_hosted(address),
+            None => Task::none(),
+        }
     }
 
     /// Brings a background document back to the page as it was left.
@@ -2696,7 +2705,7 @@ impl App {
     ) -> Task<Message> {
         // Reading the page's own file would replace its unsaved writing
         // with the saved copy. A clean page is reread as it always was.
-        if self.session.dirty && self.session.path() == Some(&path) {
+        if self.session.is_dirty() && self.session.path() == Some(&path) {
             if self.return_to_document() {
                 return Task::none();
             }
@@ -2760,8 +2769,12 @@ impl App {
         {
             Some(parked) => self.install_parked(parked),
             None => {
-                self.install_document(document, Some(file.path.clone()), filename(&file.path));
-                self.session.set_saved_version(version);
+                self.install_session(Session::open_file(
+                    document,
+                    file.path.clone(),
+                    version,
+                    filename(&file.path),
+                ));
             }
         }
         let folder_task = self.folder_document_changed();
@@ -2812,14 +2825,14 @@ impl App {
     ///
     /// Returns the name of a document kept with unsaved changes.
     fn leave(&mut self, outgoing: Session) -> Option<String> {
-        let reloaded = outgoing.path().is_some() && outgoing.path() == self.session.path();
-        if !outgoing.dirty && (outgoing.path().is_none() || reloaded) {
+        let reloaded = outgoing.same_destination(&self.session);
+        if !outgoing.is_dirty() && (outgoing.is_unbound() || reloaded) {
             self.recovery.retire();
             self.images.clear_history();
             self.trail.forget(outgoing.id());
             return None;
         }
-        let kept_unsaved = outgoing.dirty.then(|| outgoing.display_name.clone());
+        let kept_unsaved = outgoing.is_dirty().then(|| outgoing.display_name.clone());
         let released = self.background.park(Parked {
             session: outgoing,
             references: self.images.take_references(),
@@ -2831,12 +2844,10 @@ impl App {
         kept_unsaved
     }
 
-    /// Records the page on the trail under its current path, and drops clean
-    /// background copies of that file: the page now speaks for it.
+    /// Records the page on the trail and drops clean copies of its destination.
     pub(super) fn page_settled(&mut self) {
-        let path = self.session.path().cloned();
-        self.trail.visit(self.session.id(), path.as_deref());
-        let stale = path.map_or_else(Vec::new, |path| self.background.release_clean_under(&path));
+        self.trail.visit(&self.session);
+        let stale = self.background.release_replaced(&self.session);
         for parked in stale {
             self.recovery.discard(parked.checkpoint);
         }
@@ -2904,7 +2915,9 @@ impl App {
         let draft_folder = (!save_as && path.is_none())
             .then(|| self.session.folder.clone())
             .flatten();
-        let expected = path.as_ref().map(|_| self.session.saved_source.clone());
+        let expected = path
+            .as_ref()
+            .map(|_| self.session.saved_source().to_owned());
         let source = Arc::new(self.session.document.source().to_owned());
         let result_source = Arc::clone(&source);
         let state = self.session.document.collaboration().state();
@@ -4269,7 +4282,7 @@ mod tests {
             assert_eq!(app.session.selection, selection);
             assert_eq!(app.editor.content().text(), app.projection.text);
             assert_eq!(app.session.document.source(), source);
-            assert!(!app.session.dirty);
+            assert!(!app.session.is_dirty());
             let change = app.projection.change.as_ref().unwrap();
             assert!(change.regions.iter().map(|r| r.old.len()).sum::<usize>() < 100);
             assert_eq!(
@@ -4597,7 +4610,7 @@ mod tests {
                 generation: 0,
             },
         );
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
         assert_eq!(app.session.document.source(), "Before!");
         send(&mut app, Message::New);
         assert!(app.overlay.is_none());
@@ -4605,7 +4618,7 @@ mod tests {
         assert_eq!(app.session.document.source(), "?");
         send(&mut app, Message::Step(Direction::Back));
         assert_eq!(app.session.document.source(), "Before!");
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
     }
     #[test]
     fn initial_caret_edits_heading_and_formatted_content_without_touching_prefixes() {
@@ -4667,7 +4680,7 @@ mod tests {
         assert_eq!(app.editor.content().text(), "### 日本語\n\nNext");
         assert_eq!(app.editor.content().cursor().position.column, 1);
         assert_eq!(app.session.document.revision(), revision);
-        assert!(!app.session.dirty);
+        assert!(!app.session.is_dirty());
         send(&mut app, Message::Undo);
         assert_eq!(app.session.document.revision(), revision);
         assert_eq!(app.session.selection, Selection::caret(1));
