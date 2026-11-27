@@ -594,7 +594,8 @@ fn native_quiet_previews() {
     app.chrome.outline.open = true;
     render(&app, Size::new(1180.0, 820.0), "native-quiet-navigation");
     render(&app, Size::new(760.0, 520.0), "native-quiet-outline-narrow");
-    app.session.path = Some("/writing/Field notes/The quiet hour.md".into());
+    app.session
+        .set_path("/writing/Field notes/The quiet hour.md".into());
     drop(
         app.update_folder(folder::Message::Scanned {
             generation: 0,

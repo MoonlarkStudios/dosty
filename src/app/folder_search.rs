@@ -218,7 +218,7 @@ impl App {
         let open_sources = std::iter::once(&self.session)
             .chain(self.background.dirty())
             .filter_map(|session| {
-                let path = session.path.as_deref()?;
+                let path = session.path().map(|value| value.as_path())?;
                 if !known.remove(path) {
                     return None;
                 }
@@ -287,7 +287,7 @@ impl App {
             self.folder_search.error = Some(folder_search::changed().to_string());
             return Task::none();
         }
-        let active = self.session.path.as_ref() == Some(&target.path);
+        let active = self.session.path() == Some(&target.path);
         let stable = if active {
             let Some(range) = target.range_in(self.session.document.source()) else {
                 self.folder_search.error = Some(folder_search::changed().to_string());
@@ -334,7 +334,7 @@ impl App {
         let dirty_session = self
             .background
             .dirty()
-            .find(|session| session.path.as_ref() == Some(&target.path))
+            .find(|session| session.path() == Some(&target.path))
             .map(|session| (session.id(), target.range_in(session.document.source())));
         if let Some((id, range)) = dirty_session {
             let Some(range) = range else {
@@ -620,7 +620,10 @@ mod tests {
                 .source(),
             unsaved
         );
-        assert_eq!(app.session.path.as_deref(), Some(target.as_path()));
+        assert_eq!(
+            app.session.path().map(|value| value.as_path()),
+            Some(target.as_path())
+        );
         assert_eq!(
             &app.session.document.source()[app.session.selection.range()],
             "🦀 café"
@@ -643,7 +646,10 @@ mod tests {
 
         query(&mut app, "🦀").await;
         drop(app.update_folder_search(Message::Accept));
-        assert_eq!(app.session.path.as_deref(), Some(active.as_path()));
+        assert_eq!(
+            app.session.path().map(|value| value.as_path()),
+            Some(active.as_path())
+        );
         assert_eq!(
             &app.session.document.source()[app.session.selection.range()],
             "🦀"
@@ -654,7 +660,10 @@ mod tests {
         std::fs::write(&target, "different disk text").unwrap();
         let open = app.update_folder_search(Message::Accept);
         settle(&mut app, open).await;
-        assert_eq!(app.session.path.as_deref(), Some(active.as_path()));
+        assert_eq!(
+            app.session.path().map(|value| value.as_path()),
+            Some(active.as_path())
+        );
         assert_eq!(app.session.document.source(), "active 🦀");
         assert!(
             app.notification

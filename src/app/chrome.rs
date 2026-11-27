@@ -260,6 +260,7 @@ pub(super) fn shortcut_label(action: &AppMessage) -> Option<&'static str> {
         AppMessage::Save => ("⌘S", "Ctrl+S"),
         AppMessage::SaveAs => ("⇧⌘S", "Ctrl+Shift+S"),
         AppMessage::QuickOpen(super::quick_open::Message::Open) => ("⌘P", "Ctrl+P"),
+        AppMessage::Hosted(super::hosted_workspace::Message::Show) => ("⇧⌘P", "Ctrl+Shift+P"),
         AppMessage::Step(Direction::Back) => ("⌘[", "Ctrl+["),
         AppMessage::Step(Direction::Forward) => ("⌘]", "Ctrl+]"),
         AppMessage::ShowSettings => ("⌘,", "Ctrl+,"),
@@ -585,7 +586,7 @@ impl App {
             SaveState::Saving
         } else if self.chrome.save_error.is_some() {
             SaveState::Failed
-        } else if self.session.path.is_none() {
+        } else if self.session.is_unbound() {
             SaveState::Unsaved
         } else if self.session.dirty {
             SaveState::Modified
@@ -826,9 +827,13 @@ impl App {
                     .align_y(Alignment::Center),
                 )
                 .padding([5, 6])
-                .on_press_maybe(ready.then_some(AppMessage::Chrome(Message::Menu(Menu::Document))))
+                .on_press_maybe(ready.then_some(if self.session.hosted().is_some() {
+                    AppMessage::Hosted(super::hosted_workspace::Message::Show)
+                } else {
+                    AppMessage::Chrome(Message::Menu(Menu::Document))
+                }))
                 .style(styles::button_style(tokens, Button::Quiet)),
-                self.session.path.as_ref().map_or_else(
+                self.session.path().map_or_else(
                     || "Document actions".into(),
                     |path| format!("Document actions · {}", path.display()),
                 ),
@@ -1013,6 +1018,14 @@ impl App {
                     content,
                     space::horizontal(),
                     self.titlebar_icon(
+                        Icon::Folder,
+                        "Hosted workspace",
+                        AppMessage::Hosted(super::hosted_workspace::Message::Show),
+                        !self.busy,
+                        self.overlay == Some(Overlay::Hosted),
+                        Some("Hosted workspace"),
+                    ),
+                    self.titlebar_icon(
                         Icon::Settings,
                         "Settings",
                         AppMessage::ShowSettings,
@@ -1169,7 +1182,7 @@ impl App {
                     Command::action("Save", Icon::Save, AppMessage::Save, ready),
                     Command::action("Save as…", Icon::Save, AppMessage::SaveAs, ready),
                 ];
-                if self.session.path.is_none() {
+                if self.session.is_unbound() {
                     commands.push(Command::action(
                         "Name…",
                         Icon::Document,
@@ -1177,7 +1190,7 @@ impl App {
                         ready,
                     ));
                 }
-                if let Some(path) = &self.session.path {
+                if let Some(path) = self.session.path() {
                     commands.extend([
                         Command::action(
                             "Rename…",
@@ -1301,6 +1314,12 @@ impl App {
                     })
                     .collect();
                 commands.extend([
+                    Command::action(
+                        "Hosted Workspace…",
+                        Icon::Folder,
+                        AppMessage::Hosted(super::hosted_workspace::Message::Show),
+                        ready,
+                    ),
                     Command::action(
                         "Open Project…",
                         Icon::Folder,

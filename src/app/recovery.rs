@@ -11,7 +11,10 @@ use super::session::Session;
 use super::{App, Message as AppMessage, Overlay, Pending};
 use crate::document::Document;
 use crate::document::selection::Selection;
+use crate::io::workspace_document::WorkspaceDocument;
 use crate::io::{recovery, storage};
+
+type Version = (u64, u64);
 use crate::theme::styles;
 
 #[derive(Debug, Clone)]
@@ -23,18 +26,21 @@ pub enum Message {
     Listed(Result<Vec<recovery::Entry>, storage::FileError>),
     Restore(Uuid),
     Loaded(Result<recovery::Snapshot, storage::FileError>),
+    KeepAndClose,
+    Kept(iced::window::Id, Result<(), storage::FileError>),
     Written {
         id: Uuid,
-        generation: u64,
+        generation: Version,
         result: Result<(), storage::FileError>,
     },
     Removed(Result<(), storage::FileError>),
 }
 pub(super) struct State {
     id: Uuid,
+    directory: Option<std::path::PathBuf>,
     edited: Instant,
     last_checkpoint: Instant,
-    saved: Option<u64>,
+    saved: Option<Version>,
     inflight: Option<Uuid>,
     retired: HashSet<Uuid>,
     prior_paths: Vec<Uuid>,
@@ -45,6 +51,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             id: Uuid::new_v4(),
+            directory: if cfg!(test) { None } else { root() },
             edited: Instant::now(),
             last_checkpoint: Instant::now(),
             saved: None,
@@ -62,18 +69,18 @@ impl Default for State {
 /// own and which generation that copy holds.
 pub(super) struct Checkpoint {
     id: Uuid,
-    saved: Option<u64>,
+    saved: Option<Version>,
     prior_paths: Vec<Uuid>,
 }
 impl Checkpoint {
     pub(super) fn id(&self) -> Uuid {
         self.id
     }
-    pub(super) fn needs_write(&self, generation: u64) -> bool {
+    pub(super) fn needs_write(&self, generation: Version) -> bool {
         self.saved != Some(generation)
     }
     /// Records a completed write and returns the superseded copies to remove.
-    fn written(&mut self, generation: u64) -> Vec<Uuid> {
+    fn written(&mut self, generation: Version) -> Vec<Uuid> {
         self.saved = Some(generation);
         std::mem::take(&mut self.prior_paths)
     }
@@ -126,10 +133,10 @@ impl State {
         self.edited = Instant::now();
     }
 
-    pub fn needs_checkpoint(&self, generation: u64) -> bool {
+    pub fn needs_checkpoint(&self, generation: Version) -> bool {
         self.saved != Some(generation) && self.inflight.is_none()
     }
-    fn checkpoint_due(&self, generation: u64, now: Instant) -> bool {
+    fn checkpoint_due(&self, generation: Version, now: Instant) -> bool {
         self.needs_checkpoint(generation)
             && (now.saturating_duration_since(self.edited) >= Duration::from_secs(2)
                 || now.saturating_duration_since(self.last_checkpoint) >= Duration::from_secs(30))
@@ -146,7 +153,7 @@ impl State {
         retired.push(id);
         self.release(retired);
     }
-    fn written(&mut self, id: Uuid, generation: u64, success: bool) {
+    fn written(&mut self, id: Uuid, generation: Version, success: bool) {
         if self.inflight == Some(id) {
             self.inflight = None;
         }
@@ -161,10 +168,11 @@ impl State {
 fn snapshot(session: &Session) -> recovery::Snapshot {
     recovery::Snapshot {
         state: session.document.collaboration().state(),
-        path: session.path.clone(),
+        path: session.path().cloned(),
         name: session.display_name.clone(),
         baseline: session.saved_source.clone(),
-        baseline_version: session.saved_version.clone(),
+        baseline_version: session.saved_version().cloned(),
+        hosted: session.hosted().cloned().map(Box::new),
         anchor: session.selection.anchor,
         head: session.selection.head,
     }
@@ -173,8 +181,17 @@ fn root() -> Option<std::path::PathBuf> {
     storage::preferences_path().and_then(|path| path.parent().map(|p| p.join("recovery")))
 }
 impl App {
+    pub(super) fn can_keep_recovery_on_close(&self) -> bool {
+        !self.busy && self.recovery.inflight.is_none() && self.recovery.directory.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn use_recovery_directory(&mut self, directory: std::path::PathBuf) {
+        self.recovery.directory = Some(directory);
+    }
+
     pub(super) fn recovery_discovery(&self) -> Task<AppMessage> {
-        let Some(root) = root() else {
+        let Some(root) = self.recovery.directory.clone() else {
             return Task::none();
         };
         Task::perform(
@@ -193,7 +210,7 @@ impl App {
         if ids.is_empty() {
             return Task::none();
         }
-        let Some(root) = root() else {
+        let Some(root) = self.recovery.directory.clone() else {
             return Task::none();
         };
         Task::perform(
@@ -211,7 +228,7 @@ impl App {
         )
     }
     pub(super) fn update_recovery(&mut self, message: Message) -> Task<AppMessage> {
-        let Some(root) = root() else {
+        let Some(root) = self.recovery.directory.clone() else {
             return Task::none();
         };
         match message {
@@ -237,6 +254,9 @@ impl App {
                 );
             }
             Message::Tick => {
+                if self.busy && self.overlay == Some(Overlay::Unsaved) {
+                    return Task::none();
+                }
                 // One write runs at a time. A document that just left the page
                 // goes first: it has no later tick of its own to rely on.
                 let parked = self
@@ -248,12 +268,12 @@ impl App {
                     .map(|parked| {
                         (
                             parked.checkpoint.id(),
-                            parked.session.document.collaboration().generation(),
+                            parked.session.recovery_version(),
                             snapshot(&parked.session),
                         )
                     });
                 let write = parked.or_else(|| {
-                    let generation = self.session.document.collaboration().generation();
+                    let generation = self.session.recovery_version();
                     let due = self.session.dirty
                         && !self.loading
                         && self.recovery.checkpoint_due(generation, Instant::now());
@@ -296,6 +316,53 @@ impl App {
                 }
                 if let Err(error) = result {
                     self.notification = Some(format!("Recovery copy could not be saved: {error}"));
+                }
+            }
+            Message::KeepAndClose if self.can_keep_recovery_on_close() => {
+                let Some(Pending::Close(window)) = self.pending else {
+                    return Task::none();
+                };
+                if self.overlay != Some(Overlay::Unsaved) || !self.commit_cell() {
+                    return Task::none();
+                }
+                let copies = self
+                    .session
+                    .dirty
+                    .then(|| (self.recovery.id, snapshot(&self.session)))
+                    .into_iter()
+                    .chain(
+                        self.background
+                            .dirty_checkpoints()
+                            .map(|parked| (parked.checkpoint.id(), snapshot(&parked.session))),
+                    )
+                    .collect::<Vec<_>>();
+                self.busy = true;
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            for (id, snapshot) in copies {
+                                recovery::write(&root, id, &snapshot)?;
+                            }
+                            Ok(())
+                        })
+                        .await
+                        .map_err(|error| storage::FileError::Io(error.to_string()))?
+                    },
+                    move |result| AppMessage::Recovery(Message::Kept(window, result)),
+                );
+            }
+            Message::KeepAndClose => {}
+            Message::Kept(window, result) => {
+                self.busy = false;
+                match result {
+                    Ok(()) => {
+                        self.pending = None;
+                        return self.finish_close(window);
+                    }
+                    Err(error) => {
+                        self.chrome.save_error =
+                            Some(format!("Recovery copy could not be saved: {error}"));
+                    }
                 }
             }
             Message::Show => {
@@ -354,12 +421,15 @@ impl App {
         }
         Task::none()
     }
-    pub(super) fn restore_draft(&mut self, snapshot: recovery::Snapshot) {
+    pub(super) fn restore_draft(&mut self, snapshot: recovery::Snapshot) -> Task<AppMessage> {
         match Document::from_state(&snapshot.state) {
             Ok(document) => {
                 self.install_document(document, snapshot.path, snapshot.name);
+                if let Some(hosted) = snapshot.hosted {
+                    self.session.backing = WorkspaceDocument::Hosted(*hosted);
+                }
                 self.session.saved_source = snapshot.baseline;
-                self.session.saved_version = snapshot.baseline_version;
+                self.session.set_saved_version(snapshot.baseline_version);
                 self.session.selection = Selection {
                     anchor: snapshot.anchor,
                     head: snapshot.head,
@@ -367,10 +437,15 @@ impl App {
                 .clamp(self.session.document.source());
                 self.session.dirty = true;
                 self.sync_editor();
-                self.notification = Some("Recovery copy opened. Save checks the last disk version; Save As keeps both. The original recovery copy is retained.".into());
+                self.notification = Some(if self.session.hosted().is_some() {
+                    "Hosted draft recovered. Save checks its last saved workspace revision."
+                } else {
+                    "Recovery copy opened. Save checks the last disk version; Save As keeps both. The original recovery copy is retained."
+                }.into());
             }
             Err(error) => self.notification = Some(error.to_string()),
         }
+        iced::widget::operation::focus(super::EDITOR)
     }
     pub(super) fn recovery_view(&self) -> Element<'_, AppMessage> {
         let tokens = self.resolved_theme.tokens;
@@ -435,25 +510,25 @@ mod tests {
     fn old_path_write_cannot_suppress_or_remove_new_path_recovery() {
         let mut state = State::default();
         let previous = state.id;
-        state.saved = Some(4);
+        state.saved = Some((4, 0));
         state.inflight = Some(previous);
         state.path_changed();
         let current = state.id;
         assert_ne!(previous, current);
         assert!(state.cleanup.is_empty());
-        state.written(previous, 4, true);
+        state.written(previous, (4, 0), true);
         assert_eq!(state.saved, None);
-        assert!(state.needs_checkpoint(4));
+        assert!(state.needs_checkpoint((4, 0)));
         assert!(
             state.cleanup.is_empty(),
             "old copy survives until replacement"
         );
         state.inflight = Some(current);
-        state.written(current, 4, false);
+        state.written(current, (4, 0), false);
         assert!(state.cleanup.is_empty());
         state.inflight = Some(current);
-        state.written(current, 4, true);
-        assert_eq!(state.saved, Some(4));
+        state.written(current, (4, 0), true);
+        assert_eq!(state.saved, Some((4, 0)));
         assert_eq!(state.cleanup, vec![previous]);
     }
 
@@ -466,7 +541,7 @@ mod tests {
         state.retire();
         assert!(state.retired.contains(&old));
         assert!(!state.cleanup.contains(&old));
-        state.written(old, 8, true);
+        state.written(old, (8, 0), true);
         assert!(state.cleanup.contains(&old));
         assert_eq!(state.saved, None);
     }
@@ -478,21 +553,21 @@ mod tests {
         state.retire();
         assert!(state.cleanup.is_empty());
         assert_ne!(old, state.id);
-        state.written(old, 4, true);
+        state.written(old, (4, 0), true);
         assert_eq!(state.cleanup, vec![old]);
         assert_eq!(state.saved, None);
-        state.written(state.id, 9, true);
-        assert_eq!(state.saved, Some(9));
-        assert!(!state.needs_checkpoint(9));
-        assert!(state.needs_checkpoint(10));
+        state.written(state.id, (9, 0), true);
+        assert_eq!(state.saved, Some((9, 0)));
+        assert!(!state.needs_checkpoint((9, 0)));
+        assert!(state.needs_checkpoint((10, 0)));
         let start = Instant::now();
         state.last_checkpoint = start;
         state.edited = start;
-        assert!(!state.checkpoint_due(10, start + Duration::from_secs(1)));
-        assert!(state.checkpoint_due(10, start + Duration::from_secs(2)));
+        assert!(!state.checkpoint_due((10, 0), start + Duration::from_secs(1)));
+        assert!(state.checkpoint_due((10, 0), start + Duration::from_secs(2)));
         state.edited = start + Duration::from_secs(29);
         assert!(
-            state.checkpoint_due(10, start + Duration::from_secs(30)),
+            state.checkpoint_due((10, 0), start + Duration::from_secs(30)),
             "continuous typing must still be checkpointed"
         );
     }
@@ -500,29 +575,29 @@ mod tests {
     fn a_parked_identity_keeps_its_copy_until_resumed_or_discarded() {
         let mut state = State::default();
         let parked_id = state.id;
-        state.saved = Some(3);
+        state.saved = Some((3, 0));
         let mut checkpoint = state.park();
         assert_ne!(state.id, parked_id);
         assert_eq!(state.saved, None);
         assert!(state.cleanup.is_empty(), "parking removes nothing");
         assert_eq!(checkpoint.id(), parked_id);
-        assert!(!checkpoint.needs_write(3));
-        assert!(checkpoint.needs_write(4));
-        assert!(checkpoint.written(4).is_empty());
-        assert!(!checkpoint.needs_write(4));
+        assert!(!checkpoint.needs_write((3, 0)));
+        assert!(checkpoint.needs_write((4, 0)));
+        assert!(checkpoint.written((4, 0)).is_empty());
+        assert!(!checkpoint.needs_write((4, 0)));
 
         state.retire();
         state.cleanup.clear();
         state.resume(checkpoint);
         assert_eq!(state.id, parked_id);
-        assert!(!state.needs_checkpoint(4));
+        assert!(!state.needs_checkpoint((4, 0)));
 
         // A write still in flight must finish before its copy is removed.
         state.inflight = Some(parked_id);
         let checkpoint = state.park();
         state.discard(checkpoint);
         assert!(state.cleanup.is_empty());
-        state.written(parked_id, 4, true);
+        state.written(parked_id, (4, 0), true);
         assert_eq!(state.cleanup, vec![parked_id]);
     }
 
@@ -540,7 +615,8 @@ mod tests {
             "note.md".into(),
         );
         let state = app.session.document.collaboration().state();
-        app.session.saved_version = Some(collaboration_store::version(&state));
+        app.session
+            .set_saved_version(Some(collaboration_store::version(&state)));
         collaboration_store::save_document(
             path.clone(),
             app.session.document.source().into(),
@@ -563,10 +639,11 @@ mod tests {
         );
         let snapshot = recovery::Snapshot {
             state: app.session.document.collaboration().state(),
-            path: app.session.path.clone(),
+            path: app.session.path().cloned(),
             name: app.session.display_name.clone(),
             baseline: app.session.saved_source.clone(),
-            baseline_version: app.session.saved_version.clone(),
+            baseline_version: app.session.saved_version().cloned(),
+            hosted: None,
             anchor: 10,
             head: 2,
         };
@@ -575,7 +652,7 @@ mod tests {
         let id = Uuid::new_v4();
         recovery::write(dir.path(), id, &snapshot).unwrap();
         std::fs::write(&path, "External work must survive.").unwrap();
-        app.restore_draft(recovery::read(dir.path(), id).unwrap());
+        drop(app.restore_draft(recovery::read(dir.path(), id).unwrap()));
         assert_eq!(app.session.document.source(), expected);
         assert_eq!(
             app.session.document.source(),
@@ -590,7 +667,7 @@ mod tests {
             app.session.document.source().into(),
             app.session.document.collaboration().state(),
             Some(app.session.saved_source.clone()),
-            app.session.saved_version.clone(),
+            app.session.saved_version().cloned(),
         )
         .await;
         assert!(matches!(result, Err(storage::FileError::Conflict)));

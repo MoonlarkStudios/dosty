@@ -480,20 +480,26 @@ impl App {
     /// Derive everything the switcher shows from the application as it stands.
     fn index_quick_open(&mut self) {
         let root = self.folder.root().map(Path::to_owned);
-        self.quick_open.active = self.session.path.clone();
+        self.quick_open.active = self.session.path().cloned();
         self.quick_open.unsaved = self
             .background
             .dirty()
             .map(|session| Unsaved {
                 session: session.id(),
-                title: session.path.as_deref().map_or_else(
+                title: session.path().map(|value| value.as_path()).map_or_else(
                     || super::folder::title(Path::new(&session.display_name)),
                     super::folder::title,
                 ),
-                location: match (session.path.as_deref(), session.folder.as_deref()) {
+                location: match (
+                    session.path().map(|value| value.as_path()),
+                    session.folder.as_deref(),
+                ) {
                     (Some(path), _) => path.parent().map(super::folder::name).unwrap_or_default(),
                     (None, Some(folder)) => format!("Draft in {}", super::folder::name(folder)),
-                    (None, None) => "Not saved yet".into(),
+                    (None, None) => session.hosted().map_or_else(
+                        || "Not saved yet".into(),
+                        |draft| draft.address.origin.clone(),
+                    ),
                 },
             })
             .collect();
@@ -777,7 +783,7 @@ impl App {
                     return Task::none();
                 }
                 let focus = self.cancel_quick_open();
-                if self.session.path.as_ref() == Some(&path) {
+                if self.session.path() == Some(&path) {
                     self.return_to_document();
                     return focus;
                 }

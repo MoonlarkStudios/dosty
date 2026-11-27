@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::document::Document;
 use crate::document::collaboration::StableSelection;
 use crate::document::selection::Selection;
+use crate::io::workspace_document::{HostedDraft, WorkspaceDocument};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -15,7 +16,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionId(u64);
 
-/// One open document and its relationship to the file it was loaded from.
+/// One open document and its relationship to its workspace.
 ///
 /// Everything here must survive when another document takes the page. View
 /// state derived from it (the projection, the editor buffer, table drafts)
@@ -23,22 +24,19 @@ pub struct SessionId(u64);
 pub(super) struct Session {
     id: SessionId,
     pub(super) document: Document,
+    pub(super) backing: WorkspaceDocument,
     /// UTF-8 byte offsets into the document source, with anchor/head direction.
     pub(super) selection: Selection,
     /// User-toggled Write folds travel with an open document. The layout
     /// ranges derived from these stable headings belong to the active page.
     pub(super) fold_anchors: Vec<StableSelection>,
-    /// `None` until the document is first saved.
-    pub(super) path: Option<PathBuf>,
     pub(super) display_name: String,
-    /// Source last read from or written to `path`. Saving checks the file
-    /// against it to detect external changes.
+    /// Source last read from or written to the save destination.
     pub(super) saved_source: String,
-    /// Checkpoint version paired with `saved_source`, when one exists.
-    pub(super) saved_version: Option<String>,
     /// Collaboration generation at the last save. A document whose source
     /// matches the baseline is still modified if its history has moved on.
     saved_generation: u64,
+    workspace_generation: u64,
     pub(super) dirty: bool,
     /// Where the first save of a never-saved document writes it without
     /// asking. `None` asks, as does any document opened from elsewhere.
@@ -85,13 +83,16 @@ impl Session {
         Self {
             id: SessionId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
             document,
+            backing: path.map_or(WorkspaceDocument::Unsaved, |path| WorkspaceDocument::File {
+                path,
+                checkpoint: None,
+            }),
             selection: Selection::default(),
             fold_anchors: Vec::new(),
-            path,
             display_name,
             saved_source,
-            saved_version: None,
             saved_generation: 0,
+            workspace_generation: 0,
             dirty: false,
             folder: None,
             named: true,
@@ -110,7 +111,7 @@ impl Session {
 
     /// Keeps an unnamed draft titled after its first line.
     pub(super) fn retitle(&mut self) {
-        if self.path.is_none() && !self.named {
+        if matches!(self.backing, WorkspaceDocument::Unsaved) && !self.named {
             self.display_name = draft_name(self.document.source());
         }
     }
@@ -125,10 +126,81 @@ impl Session {
         self.id
     }
 
+    pub(super) fn is_unbound(&self) -> bool {
+        matches!(self.backing, WorkspaceDocument::Unsaved)
+    }
+
+    pub(super) fn path(&self) -> Option<&PathBuf> {
+        match &self.backing {
+            WorkspaceDocument::File { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    pub(super) fn set_path(&mut self, path: PathBuf) {
+        match &mut self.backing {
+            WorkspaceDocument::File { path: current, .. } => *current = path,
+            _ => {
+                self.backing = WorkspaceDocument::File {
+                    path,
+                    checkpoint: None,
+                }
+            }
+        }
+    }
+
+    pub(super) fn saved_version(&self) -> Option<&String> {
+        match &self.backing {
+            WorkspaceDocument::File { checkpoint, .. } => checkpoint.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn set_saved_version(&mut self, version: Option<String>) {
+        if let WorkspaceDocument::File { checkpoint, .. } = &mut self.backing {
+            *checkpoint = version;
+        }
+    }
+
+    pub(super) fn hosted(&self) -> Option<&HostedDraft> {
+        match &self.backing {
+            WorkspaceDocument::Hosted(draft) => Some(draft),
+            _ => None,
+        }
+    }
+
+    pub(super) fn hosted_mut(&mut self) -> Option<&mut HostedDraft> {
+        match &mut self.backing {
+            WorkspaceDocument::Hosted(draft) => Some(draft),
+            _ => None,
+        }
+    }
+
+    pub(super) fn workspace_changed(&mut self) {
+        self.workspace_generation += 1;
+        self.refresh_dirty();
+    }
+
+    pub(super) fn recovery_version(&self) -> (u64, u64) {
+        (
+            self.document.collaboration().generation(),
+            self.workspace_generation,
+        )
+    }
+
     /// Recomputes `dirty` by comparing the document with its saved baseline.
     pub(super) fn refresh_dirty(&mut self) {
         self.dirty = self.document.source() != self.saved_source
-            || self.document.collaboration().generation() != self.saved_generation;
+            || self.document.collaboration().generation() != self.saved_generation
+            || self
+                .hosted()
+                .is_some_and(|draft| draft.details != draft.saved_details);
+    }
+
+    pub(super) fn mark_hosted_saved(&mut self, source: String, generation: u64) {
+        self.saved_source = source;
+        self.saved_generation = generation;
+        self.workspace_changed();
     }
 
     /// Records a completed save of `source` as the new baseline.
@@ -139,7 +211,7 @@ impl Session {
         self.folder = None;
         self.named = true;
         self.saved_source = source;
-        self.saved_version = Some(version);
+        self.set_saved_version(Some(version));
         self.saved_generation = generation;
         self.refresh_dirty();
     }
@@ -176,7 +248,7 @@ mod tests {
         let mut session = session("Quiet.");
         assert!(!session.dirty);
         assert_eq!(session.saved_source, "Quiet.");
-        assert_eq!(session.saved_version, None);
+        assert_eq!(session.saved_version(), None);
 
         session.refresh_dirty();
         assert!(!session.dirty);
@@ -191,10 +263,11 @@ mod tests {
 
         let source = session.document.source().to_owned();
         let generation = session.document.collaboration().generation();
+        session.set_path("Test.md".into());
         session.mark_saved(source, "v1".into(), generation);
         assert!(!session.dirty);
         assert_eq!(session.saved_source, "Quiet. Still.");
-        assert_eq!(session.saved_version.as_deref(), Some("v1"));
+        assert_eq!(session.saved_version().map(String::as_str), Some("v1"));
     }
 
     #[test]
@@ -204,6 +277,7 @@ mod tests {
         let generation = session.document.collaboration().generation();
         append(&mut session, " Later.");
 
+        session.set_path("Test.md".into());
         session.mark_saved(source, "v1".into(), generation);
         assert!(session.dirty);
         assert_eq!(session.saved_source, "Quiet.");

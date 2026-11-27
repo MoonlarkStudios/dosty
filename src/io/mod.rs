@@ -7,11 +7,13 @@ pub(crate) mod export;
 pub(crate) mod file_ops;
 pub(crate) mod folder;
 pub(crate) mod folder_search;
+pub(crate) mod hosted_workspace;
 pub(crate) mod image_store;
 pub(crate) mod project;
 pub(crate) mod recovery;
 pub(crate) mod storage;
 pub(crate) mod table_clipboard;
+pub(crate) mod workspace_document;
 pub(crate) mod workspace_state;
 
 pub(crate) mod writing_sample;

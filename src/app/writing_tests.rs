@@ -51,7 +51,7 @@ async fn dropped_image_import_keeps_later_reverse_selection_remote_edits_and_und
     let bytes = std::fs::read(&image).unwrap();
     let original = "# Heading\r\n\r\nParagraph.\n\n| A | B |\n|---|---|\n| one | two |\n\n![alt](missing.png)\n\nTail.";
     let mut app = app(original);
-    app.session.path = Some(path.clone());
+    app.session.set_path(path.clone());
     let gap = original.find("Paragraph").unwrap();
     select(&mut app, Selection::caret(gap));
     // Schedule the actual import without executing native dialogs or image tasks.
@@ -145,7 +145,7 @@ fn canceling_first_save_after_image_drop_preserves_unsaved_source_selection_and_
         },
     );
     assert!(!app.busy);
-    assert!(app.session.path.is_none());
+    assert!(app.session.path().is_none());
     assert!(app.session.dirty);
     assert!(app.writing.pending_media.is_none());
     assert_eq!(app.session.document.source(), source);
@@ -213,7 +213,7 @@ async fn representative_document_edits_undo_merge_save_reopen_and_export() {
     let source = include_str!("../../assets/writing/the-quiet-hour.md")
         .replace("the-quiet-hour.assets/coast.png", &destination);
     let mut app = app(&source);
-    app.session.path = Some(path.clone());
+    app.session.set_path(path.clone());
     let mut peer = Document::from_state(&app.session.document.collaboration().state()).unwrap();
     let start = source.find("CommonMark reference").unwrap();
     let before = Selection {
@@ -601,7 +601,7 @@ fn focusing_details_reconciles_editor_focus_and_settles_the_native_redraw_loop()
 fn local_link_navigation_closes_details_and_keeps_unsaved_writing() {
     let mut app = app("# A heading\n\nA [heading](#a-heading) and [file](other.md).\n");
     let dir = tempfile::tempdir().unwrap();
-    app.session.path = Some(dir.path().join("current.md"));
+    app.session.set_path(dir.path().join("current.md"));
     let link = app.session.document.source().find("[heading]").unwrap();
     select(&mut app, Selection::caret(link));
     tool(&mut app, Message::Details(Kind::Link));
@@ -649,7 +649,7 @@ async fn save_as_keeps_images_referenced_only_by_undo_history() {
     }
     let source = format!("![A photograph](<{}>)\n\n*Caption.*\n", references[0]);
     let mut app = app(&source);
-    app.session.path = Some(path.clone());
+    app.session.set_path(path.clone());
     select(&mut app, Selection::caret(1));
     tool(&mut app, Message::Details(Kind::Image));
     tool(

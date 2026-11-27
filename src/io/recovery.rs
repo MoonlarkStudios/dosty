@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::document::collaboration::{MAX_STATE_BYTES, ReplicaState};
 use crate::io::storage::{FileError, MAX_FILE_BYTES, atomic_write};
+use crate::io::workspace_document::HostedDraft;
 
 const MAGIC: &[u8; 8] = b"STILDR01";
 const LIMIT: u64 = 112 * 1024 * 1024;
@@ -22,8 +23,16 @@ pub struct Snapshot {
     pub name: String,
     pub baseline: String,
     pub baseline_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) hosted: Option<Box<HostedDraft>>,
     pub anchor: usize,
     pub head: usize,
+}
+
+impl Snapshot {
+    fn valid_destination(&self) -> bool {
+        self.hosted.is_none() || (self.path.is_none() && self.baseline_version.is_none())
+    }
 }
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -40,6 +49,9 @@ fn invalid(message: &str) -> FileError {
 }
 
 pub fn write(root: &Path, id: Uuid, snapshot: &Snapshot) -> Result<(), FileError> {
+    if !snapshot.valid_destination() {
+        return Err(invalid("Invalid recovery destination."));
+    }
     if snapshot.state.update.len() > MAX_STATE_BYTES
         || snapshot.baseline.len() as u64 > MAX_FILE_BYTES
         || snapshot.name.len() > 1024
@@ -115,6 +127,7 @@ pub fn read(root: &Path, id: Uuid) -> Result<Snapshot, FileError> {
     if snapshot.name != name
         || snapshot.state.update.len() > MAX_STATE_BYTES
         || snapshot.baseline.len() as u64 > MAX_FILE_BYTES
+        || !snapshot.valid_destination()
     {
         return Err(invalid("Invalid recovery copy."));
     }
@@ -183,6 +196,7 @@ mod tests {
             name: "note.md".into(),
             baseline: "on disk".into(),
             baseline_version: Some("digest".into()),
+            hosted: None,
             anchor: 12,
             head: 4,
         };

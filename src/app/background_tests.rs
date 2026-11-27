@@ -34,7 +34,7 @@ fn parked(path: Option<&str>, dirty: bool) -> Parked {
 fn paths(parked: &[Parked]) -> Vec<&Path> {
     parked
         .iter()
-        .filter_map(|parked| parked.session.path.as_deref())
+        .filter_map(|parked| parked.session.path().map(|value| value.as_path()))
         .collect()
 }
 
@@ -63,7 +63,7 @@ fn only_clean_documents_are_released_and_the_least_recent_go_first() {
 fn a_clean_copy_returns_only_while_its_file_is_unchanged() {
     let mut background = Background::default();
     let mut clean = parked(Some("/note.md"), false);
-    clean.session.saved_version = Some("v1".into());
+    clean.session.set_saved_version(Some("v1".into()));
     background.park(clean);
     background.park(parked(Some("/note.md"), true));
     let path = Path::new("/note.md");
@@ -100,8 +100,8 @@ fn moved_paths_release_clean_copies_below_them_and_report_unsaved_ones() {
         background
             .dirty_under(Path::new("/notes"))
             .unwrap()
-            .path
-            .as_deref(),
+            .path()
+            .map(|path| path.as_path()),
         Some(Path::new("/notes/deep/c.md"))
     );
     assert!(background.dirty_under(Path::new("/notes/a.md")).is_none());
@@ -259,7 +259,10 @@ fn saving_on_close_brings_each_unsaved_background_document_to_the_page() {
     assert_eq!(app.overlay, Some(Overlay::Unsaved));
     for path in ["/writing/b.md", "/writing/a.md"] {
         send(&mut app, Message::ConfirmSave);
-        assert_eq!(app.session.path.as_deref(), Some(Path::new(path)));
+        assert_eq!(
+            app.session.path().map(|value| value.as_path()),
+            Some(Path::new(path))
+        );
         assert!(app.busy, "the document on the page is being saved");
         assert_eq!(app.overlay, Some(Overlay::Unsaved));
         assert!(matches!(app.pending, Some(Pending::Close(pending)) if pending == id));

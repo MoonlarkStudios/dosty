@@ -145,7 +145,7 @@ mod tests {
     }
 
     fn visit(trail: &mut Trail, session: &Session) {
-        trail.visit(session.id(), session.path.as_deref());
+        trail.visit(session.id(), session.path().map(|value| value.as_path()));
     }
 
     #[test]
@@ -190,7 +190,7 @@ mod tests {
         let mut document = session(None);
         let mut trail = Trail::default();
         visit(&mut trail, &document);
-        document.path = Some("/saved.md".into());
+        document.set_path("/saved.md".into());
         visit(&mut trail, &document);
         assert!(!trail.can_step(Direction::Back));
     }

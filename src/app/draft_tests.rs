@@ -86,7 +86,7 @@ async fn the_first_save_writes_a_draft_into_its_folder_without_replacing_anythin
     let task = app.update(Message::Save);
     settle(&mut app, task).await;
     let saved = root.join("First thoughts 2.md");
-    assert_eq!(app.session.path.as_ref(), Some(&saved));
+    assert_eq!(app.session.path(), Some(&saved));
     assert_eq!(app.session.display_name, "First thoughts 2.md");
     assert!(!app.session.dirty && app.session.folder.is_none());
     assert_eq!(
@@ -115,10 +115,7 @@ async fn the_first_save_writes_a_draft_into_its_folder_without_replacing_anythin
     assert_eq!(app.session.display_name, "configure_runners.md");
     let task = app.update(Message::Save);
     settle(&mut app, task).await;
-    assert_eq!(
-        app.session.path.as_ref(),
-        Some(&root.join("configure_runners.md"))
-    );
+    assert_eq!(app.session.path(), Some(&root.join("configure_runners.md")));
 }
 
 #[tokio::test]
@@ -131,7 +128,7 @@ async fn a_draft_whose_folder_is_gone_reports_it_and_keeps_the_writing() {
     paste(&mut app, "Kept");
     let task = app.update(Message::Save);
     settle(&mut app, task).await;
-    assert!(app.session.path.is_none() && app.session.dirty);
+    assert!(app.session.path().is_none() && app.session.dirty);
     assert!(app.notification.is_some());
     assert_eq!(app.session.document.source(), "Kept");
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);

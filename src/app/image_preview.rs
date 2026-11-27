@@ -108,8 +108,8 @@ impl App {
         // A draft is read from the folder its first save will write it into.
         let base = self
             .session
-            .path
-            .as_deref()
+            .path()
+            .map(|value| value.as_path())
             .and_then(Path::parent)
             .or(self.session.folder.as_deref());
         let Some(base) = base else {

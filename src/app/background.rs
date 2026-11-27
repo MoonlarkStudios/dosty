@@ -8,6 +8,7 @@ use uuid::Uuid;
 use super::recovery::Checkpoint;
 use super::session::{Session, SessionId};
 use crate::io::image_store::References;
+use crate::io::workspace_document::HostedAddress;
 
 /// Clean documents are a convenience and are bounded. Unsaved documents are the
 /// writer's work and are kept until saved or explicitly discarded.
@@ -57,6 +58,15 @@ impl Background {
         self.take_last(|session| session.dirty && session.id() == id)
     }
 
+    pub(super) fn take_hosted(&mut self, address: &HostedAddress) -> Option<Parked> {
+        self.take_last(|session| {
+            session.dirty
+                && session
+                    .hosted()
+                    .is_some_and(|active| active.address == *address)
+        })
+    }
+
     fn take_last(&mut self, matches: impl Fn(&Session) -> bool) -> Option<Parked> {
         let index = self
             .parked
@@ -68,7 +78,8 @@ impl Background {
     /// Takes the most recent unsaved document, optionally only one saved at `path`.
     pub(super) fn take_dirty(&mut self, path: Option<&Path>) -> Option<Parked> {
         self.take_last(|session| {
-            session.dirty && path.is_none_or(|path| session.path.as_deref() == Some(path))
+            session.dirty
+                && path.is_none_or(|path| session.path().map(|value| value.as_path()) == Some(path))
         })
     }
 
@@ -82,9 +93,9 @@ impl Background {
     ) -> Option<Parked> {
         self.take_last(|session| {
             !session.dirty
-                && session.path.as_deref() == Some(path)
+                && session.path().map(|value| value.as_path()) == Some(path)
                 && session.saved_source == source
-                && session.saved_version.as_deref() == version
+                && session.saved_version().map(|value| value.as_str()) == version
         })
     }
 
@@ -127,8 +138,12 @@ impl Background {
             parked.session.dirty
                 && parked
                     .checkpoint
-                    .needs_write(parked.session.document.collaboration().generation())
+                    .needs_write(parked.session.recovery_version())
         })
+    }
+
+    pub(super) fn dirty_checkpoints(&self) -> impl Iterator<Item = &Parked> {
+        self.parked.iter().filter(|parked| parked.session.dirty)
     }
 
     pub(super) fn checkpoint_mut(&mut self, id: Uuid) -> Option<&mut Checkpoint> {
@@ -141,8 +156,8 @@ impl Background {
 
 fn is_under(session: &Session, root: &Path) -> bool {
     session
-        .path
-        .as_deref()
+        .path()
+        .map(|value| value.as_path())
         .is_some_and(|path| path.starts_with(root))
 }
 

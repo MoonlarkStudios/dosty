@@ -56,7 +56,7 @@ fn launch_starts_with_one_blank_document_and_closed_navigation() {
     drop(initial_tasks);
     assert!(app.session.document.source().is_empty());
     assert!(app.editor.snapshot().is_empty());
-    assert!(app.session.path.is_none());
+    assert!(app.session.path().is_none());
     assert!(app.folder.root().is_none());
     assert!(!app.chrome.files.open);
     assert!(!app.chrome.sidebars_hidden);
@@ -210,7 +210,7 @@ fn typeface_preference_survives_themes_without_changing_source_selection_or_hist
 fn saved_snapshot_completion_keeps_later_edits_and_failed_saves_visible() {
     let mut app = app("café and 🦀");
     assert_eq!(app.save_state(), SaveState::Unsaved);
-    app.session.path = Some("/tmp/quiet.md".into());
+    app.session.set_path("/tmp/quiet.md".into());
     assert_eq!(app.save_state(), SaveState::Saved);
     let source = Arc::new(app.session.document.source().to_owned());
     let generation = app.session.document.collaboration().generation();
@@ -392,7 +392,7 @@ fn opening_and_saving_files_never_adds_document_paths_to_preferences() {
                 collaboration: None,
             })),
         );
-        assert_eq!(app.session.path.as_ref(), Some(&path));
+        assert_eq!(app.session.path(), Some(&path));
         assert_eq!(toml::to_string(&app.preferences).unwrap(), appearance);
         let source = std::sync::Arc::new(app.session.document.source().to_owned());
         let version =
@@ -1481,7 +1481,7 @@ async fn rapid_native_undo_then_save_captures_the_restored_document() {
         let path = directory.path().join("Draft.md");
         std::fs::write(&path, source).unwrap();
         let mut harness = Harness::new(source, mode, Size::new(760.0, 520.0));
-        harness.app.session.path = Some(path.clone());
+        harness.app.session.set_path(path.clone());
         harness.focus(EDITOR);
         harness.message(AppMessage::Edit(Action::Edit(Edit::Insert('A'))));
         harness.app.session.document.break_history_group();
@@ -1813,7 +1813,7 @@ async fn file_tree_moves_a_selection_to_root_and_folder_and_undoes_the_group() {
     .await
     .unwrap();
     let mut harness = Harness::new(source, EditorMode::Live, Size::new(760.0, 520.0));
-    harness.app.session.path = Some(drafts.join(files[0]));
+    harness.app.session.set_path(drafts.join(files[0]));
     harness.app.chrome.files.open = true;
     harness.message(AppMessage::Folder(folder::Message::Scanned {
         generation: 0,
@@ -1913,7 +1913,7 @@ async fn file_tree_moves_a_selection_to_root_and_folder_and_undoes_the_group() {
     for file in files {
         assert!(root.join(file).is_file() && !drafts.join(file).exists());
     }
-    assert_eq!(harness.app.session.path, Some(root.join("A.md")));
+    assert_eq!(harness.app.session.path(), Some(&root.join("A.md")));
     assert_eq!(harness.app.session.selection, selection);
 
     let bounds = tree_bounds(&mut harness);
@@ -1932,7 +1932,7 @@ async fn file_tree_moves_a_selection_to_root_and_folder_and_undoes_the_group() {
     for file in files {
         assert!(root.join(file).is_file() && !archive.join(file).exists());
     }
-    assert_eq!(harness.app.session.path, Some(root.join("A.md")));
+    assert_eq!(harness.app.session.path(), Some(&root.join("A.md")));
     assert_eq!(harness.app.session.selection, selection);
     assert_eq!(harness.app.session.document.collaboration().id(), identity);
     assert_eq!(harness.app.session.document.source(), dirty);
@@ -2030,7 +2030,7 @@ async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_
         .await
         .unwrap();
         let mut harness = Harness::new(source, mode, Size::new(1180.0, 820.0));
-        harness.app.session.path = Some(from.clone());
+        harness.app.session.set_path(from.clone());
         harness.app.session.display_name = "The quiet hour.md".into();
         harness.app.chrome.files.open = true;
         harness.message(AppMessage::Folder(folder::Message::Scanned {
@@ -2042,7 +2042,7 @@ async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_
         drag(&mut harness, &from, &archive).await;
         assert!(!from.exists());
         assert!(to.exists());
-        assert_eq!(harness.app.session.path.as_ref(), Some(&to));
+        assert_eq!(harness.app.session.path(), Some(&to));
         assert_eq!(harness.app.session.document.source(), source);
         assert_eq!(harness.app.session.selection, selection);
         assert!(harness.app.folder.can_undo());
@@ -2051,7 +2051,7 @@ async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_
             .await;
         assert!(from.exists());
         assert!(!to.exists());
-        assert_eq!(harness.app.session.path.as_ref(), Some(&from));
+        assert_eq!(harness.app.session.path(), Some(&from));
 
         // Close Archive through its actual row gesture before the second drag.
         let archive_point = row_point(tree_bounds(&mut harness), 0);
@@ -2103,7 +2103,7 @@ async fn native_file_drag_survives_undo_editing_and_leaving_for_a_new_page_with_
         drag(&mut harness, &from, &archive).await;
         assert!(!from.exists());
         assert!(to.exists());
-        assert_eq!(harness.app.session.path.as_ref(), Some(&to));
+        assert_eq!(harness.app.session.path(), Some(&to));
         assert_eq!(harness.app.session.document.source(), edited);
         assert_eq!(harness.app.editor.snapshot(), edited);
         assert_eq!(harness.app.session.selection, selection);

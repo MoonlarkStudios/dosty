@@ -160,7 +160,14 @@ replace a later appearance choice, and preference writes coalesce before a
 confirmed window close.
 
 `app/session.rs` holds what must survive when a document leaves the page: its
-text and history, selection, path, and saved baseline. `App` keeps one session on
+text and history, selection, save destination, and saved baseline.
+`io/workspace_document.rs` represents an unsaved document, a file with its
+checkpoint version, or a hosted draft with its origin, post ID, saved revision,
+and editable details. Files and hosted drafts use the same editor session and
+recovery scheduler. File storage and the hosted HTTP client apply their own
+save preconditions. Hosted discovery supplies section labels and actions.
+Access keys belong to the active connection and stay out of checkpoints.
+`App` keeps one session on
 the page and rebuilds view state (projection, editor buffer, table drafts) when a
 session is installed. `app/background.rs` keeps outgoing sessions with their image
 reference ledger and recovery identity; unsaved ones are never released, clean

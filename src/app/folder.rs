@@ -395,7 +395,7 @@ impl App {
                         self.folder.limited = snapshot.limited;
                         self.folder.warnings = snapshot.warnings;
                         self.folder.error = None;
-                        if let Some(path) = &self.session.path {
+                        if let Some(path) = self.session.path() {
                             self.folder.reveal(path);
                         }
                         self.folder.refresh_visible();
@@ -449,7 +449,7 @@ impl App {
                 match result {
                     Ok(PathKind::Directory) => return self.open_workspace(path),
                     Ok(PathKind::File) if !self.busy => {
-                        if self.session.path.as_ref() == Some(&path) {
+                        if self.session.path() == Some(&path) {
                             self.return_to_document();
                             return Task::none();
                         }
@@ -635,7 +635,7 @@ impl App {
                     "Images stay where they are: documents that use them are not updated.".into(),
                 );
             }
-            Message::NameDraft if !self.busy && self.session.path.is_none() => {
+            Message::NameDraft if !self.busy && self.session.is_unbound() => {
                 return self.folder_name(NameAction::Draft);
             }
             Message::NewFolder(parent) if !self.busy => {
@@ -790,7 +790,7 @@ impl App {
                 return self.update_image_preview(super::image_preview::Message::Show(path));
             }
             file_tree::Action::Open(path) => {
-                if self.session.path.as_ref() == Some(&path) {
+                if self.session.path() == Some(&path) {
                     return Task::none();
                 }
                 if !self.commit_cell() {
@@ -864,7 +864,7 @@ impl App {
     }
 
     pub(super) fn folder_document_changed(&mut self) -> Task<AppMessage> {
-        if let Some(path) = &self.session.path {
+        if let Some(path) = self.session.path() {
             self.folder.reveal(path);
         }
         self.folder.refresh_visible();
@@ -873,7 +873,7 @@ impl App {
                 .folder
                 .root
                 .as_ref()
-                .zip(self.session.path.as_ref())
+                .zip(self.session.path())
                 .is_some_and(|(root, path)| path.starts_with(root))
         {
             self.folder_refresh()
@@ -983,7 +983,7 @@ impl App {
             .root
             .as_ref()
             .is_some_and(|root| from.starts_with(root) && to.starts_with(root));
-        let active = self.session.path.as_ref() == Some(&from);
+        let active = self.session.path() == Some(&from);
         let active_rename = active && from.parent() == to.parent();
         let authorized_undo = undoing
             && self
@@ -1045,12 +1045,12 @@ impl App {
 
     fn active_move_snapshot(&self) -> Option<file_ops::ActiveDocument> {
         self.session
-            .path
-            .clone()
+            .path()
+            .cloned()
             .map(|path| file_ops::ActiveDocument {
                 path,
                 saved_source: self.session.saved_source.clone(),
-                saved_version: self.session.saved_version.clone(),
+                saved_version: self.session.saved_version().cloned(),
                 source: self.session.document.source().to_owned(),
                 history: self.images.history(),
             })
@@ -1234,7 +1234,7 @@ impl App {
                 && let Some(path) = &result.active_path
             {
                 self.session.display_name = name(path);
-                self.session.path = Some(path.clone());
+                self.session.set_path(path.clone());
                 self.recovery.path_changed();
                 self.page_settled();
             }
@@ -1308,8 +1308,8 @@ impl App {
             .chain(self.background.dirty().map(|session| (session, false)))
             .filter(|(session, _)| {
                 session
-                    .path
-                    .as_deref()
+                    .path()
+                    .map(|value| value.as_path())
                     .is_none_or(|path| !self.folder.has_file(path))
             });
         let mut group = column![].spacing(2);
@@ -1321,8 +1321,8 @@ impl App {
                 );
             }
             let location = session
-                .path
-                .as_deref()
+                .path()
+                .map(|value| value.as_path())
                 .and_then(Path::parent)
                 .or(session.folder.as_deref())
                 .map(name)
@@ -1394,12 +1394,12 @@ impl App {
             .then_some(&self.session)
             .into_iter()
             .chain(self.background.dirty())
-            .filter_map(|session| session.path.clone())
+            .filter_map(|session| session.path().cloned())
             .collect();
         content = content.push(
             FileTree::new(
                 &self.folder.visible,
-                self.session.path.as_deref(),
+                self.session.path().map(|value| value.as_path()),
                 tokens,
                 |action| AppMessage::Folder(Message::Tree(action)),
             )
@@ -1620,7 +1620,7 @@ impl App {
     }
 
     fn pick_move_destination(&mut self, source: PathBuf) -> Task<AppMessage> {
-        let known = self.session.path.as_ref() == Some(&source)
+        let known = self.session.path() == Some(&source)
             || self
                 .folder
                 .root
@@ -2044,7 +2044,7 @@ mod tests {
         assert!(app.overlay.is_none());
         assert!(app.loading);
         assert_eq!(
-            app.session.path.as_deref(),
+            app.session.path().map(|value| value.as_path()),
             Some(Path::new("/writing/note.md"))
         );
         assert_eq!(app.session.selection, selection);
@@ -2146,7 +2146,7 @@ mod tests {
         assert_eq!(app.overlay, Some(Overlay::Image));
         assert_eq!(app.session.document.source(), source);
         assert_eq!(
-            app.session.path.as_deref(),
+            app.session.path().map(|value| value.as_path()),
             Some(Path::new("/writing/note.md")),
             "previewing is not opening"
         );
@@ -2183,7 +2183,12 @@ mod tests {
             assert!(!app.busy && app.folder.inflight.is_none());
         }
         assert_eq!(
-            app.background.dirty().next().unwrap().path.as_deref(),
+            app.background
+                .dirty()
+                .next()
+                .unwrap()
+                .path()
+                .map(|path| path.as_path()),
             Some(Path::new("/writing/note.md"))
         );
     }
@@ -2217,7 +2222,7 @@ mod tests {
             })),
         }));
         assert_eq!(
-            app.session.path.as_deref(),
+            app.session.path().map(|value| value.as_path()),
             Some(Path::new("/writing/drafts/note.md"))
         );
         assert_eq!(app.session.document.source(), source);
@@ -2270,7 +2275,7 @@ mod tests {
         }));
         assert!(!app.busy && !app.loading);
         assert_eq!(
-            app.session.path.as_deref(),
+            app.session.path().map(|value| value.as_path()),
             Some(Path::new("/writing/note.md"))
         );
         assert_eq!(app.session.document.source(), source);
@@ -2303,7 +2308,7 @@ mod tests {
         assert_eq!(app.session.document.source(), source);
         assert_eq!(app.session.selection, selection);
         assert_eq!(
-            app.session.path.as_deref(),
+            app.session.path().map(|value| value.as_path()),
             Some(Path::new("/writing/note.md"))
         );
     }
@@ -2382,7 +2387,7 @@ mod tests {
         assert!(!app.busy);
         assert!(matches!(app.overlay, Some(Overlay::Unsaved)));
         assert_eq!(
-            app.session.path.as_deref(),
+            app.session.path().map(|value| value.as_path()),
             Some(Path::new("/writing/note.md"))
         );
     }
@@ -2406,7 +2411,7 @@ mod tests {
             })),
         }));
         assert_eq!(
-            app.session.path.as_deref(),
+            app.session.path().map(|value| value.as_path()),
             Some(Path::new("/other/replacement.md"))
         );
         assert_eq!(app.session.document.source(), "Replacement");

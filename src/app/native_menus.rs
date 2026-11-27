@@ -391,7 +391,9 @@ fn availability(app: &App, command: Command) -> (bool, bool) {
         Command::Rename | Command::Save | Command::SaveAs | Command::Export | Command::Find => {
             (document_ready, false)
         }
-        Command::Move | Command::Location => (document_ready && app.session.path.is_some(), false),
+        Command::Move | Command::Location => {
+            (document_ready && app.session.path().is_some(), false)
+        }
         Command::UndoMove => (document_ready && app.folder.can_undo(), false),
         Command::BackToReference => (document_ready && app.footnotes.can_return(), false),
         Command::Files => (
@@ -523,11 +525,14 @@ impl App {
                 return window::latest()
                     .map(|id| id.map_or(Message::Dismiss, Message::CloseRequested));
             }
-            Command::Rename if self.session.path.is_none() => {
+            Command::Rename if self.session.hosted().is_some() => {
+                Message::Hosted(super::hosted_workspace::Message::Show)
+            }
+            Command::Rename if self.session.is_unbound() => {
                 Message::Folder(folder::Message::NameDraft)
             }
             Command::Rename | Command::Move | Command::Location => {
-                let Some(path) = self.session.path.clone() else {
+                let Some(path) = self.session.path().cloned() else {
                     return Task::none();
                 };
                 Message::Folder(match command {

@@ -528,7 +528,7 @@ impl App {
         if media.target.resolve(self).is_none() {
             return Task::none();
         }
-        let Some(path) = self.session.path.clone() else {
+        let Some(path) = self.session.path().cloned() else {
             self.writing.pending_media = Some(media);
             self.notification = Some("Save once to keep images beside your Markdown.".into());
             return self.save(false);

@@ -44,6 +44,8 @@ mod folder_search;
 pub(super) mod footnotes;
 #[path = "home.rs"]
 mod home;
+#[path = "hosted_workspace.rs"]
+mod hosted_workspace;
 #[path = "image_preview.rs"]
 pub(super) mod image_preview;
 #[path = "document_links.rs"]
@@ -148,6 +150,7 @@ pub struct App {
     folder_search: folder_search::State,
     workspace: workspace::State,
     projects: projects::State,
+    hosted: hosted_workspace::State,
     quick_open: quick_open::State,
     image_preview: image_preview::State,
     overlay: Option<Overlay>,
@@ -186,6 +189,7 @@ pub enum Message {
     ImagePreview(image_preview::Message),
     Workspace(workspace::Message),
     Project(projects::Message),
+    Hosted(hosted_workspace::Message),
     QuickOpen(quick_open::Message),
     #[cfg(target_os = "macos")]
     Accessibility(accesskit::ActionRequest),
@@ -351,6 +355,7 @@ enum Overlay {
     Folder,
     QuickOpen,
     Project,
+    Hosted,
     FolderSearch,
     Table,
     Settings,
@@ -447,6 +452,7 @@ impl App {
             folder_search: folder_search::State::default(),
             workspace: workspace::State::default(),
             projects: projects::State::default(),
+            hosted: hosted_workspace::State::default(),
             quick_open: quick_open::State::default(),
             image_preview: image_preview::State::default(),
             overlay: None,
@@ -540,7 +546,7 @@ impl App {
                     && !self.loading
                     && self
                         .recovery
-                        .needs_checkpoint(self.session.document.collaboration().generation()))
+                        .needs_checkpoint(self.session.recovery_version()))
             {
                 iced::time::every(std::time::Duration::from_secs(1))
                     .map(|_| Message::Recovery(recovery::Message::Tick))
@@ -588,8 +594,8 @@ impl App {
             .request(
                 &self.projection.rich.images,
                 self.session
-                    .path
-                    .as_deref()
+                    .path()
+                    .map(|value| value.as_path())
                     .and_then(std::path::Path::parent),
             )
             .map(|completion| Message::ImageLoaded {
@@ -854,6 +860,7 @@ impl App {
                         Overlay::Chrome
                             | Overlay::Folder
                             | Overlay::Project
+                            | Overlay::Hosted
                             | Overlay::QuickOpen
                             | Overlay::Statistics
                     )
@@ -890,6 +897,7 @@ impl App {
             Message::ImagePreview(message) => return self.update_image_preview(message),
             Message::Workspace(message) => return self.update_workspace(message),
             Message::Project(message) => return self.update_projects(message),
+            Message::Hosted(message) => return self.update_hosted(message),
             Message::QuickOpen(message) => return self.update_quick_open(message),
             #[cfg(target_os = "macos")]
             Message::Accessibility(request) => return self.accessibility_action(request),
@@ -1287,7 +1295,7 @@ impl App {
                 self.busy = false;
                 self.loading = false;
                 match result {
-                    Ok(path) if self.session.path.as_ref() == Some(&path) => {
+                    Ok(path) if self.session.path() == Some(&path) => {
                         return self.focus_link_target(jump);
                     }
                     Ok(path) => return self.open_file(path, jump, true),
@@ -1305,7 +1313,7 @@ impl App {
                 match result {
                     Ok(path) => {
                         self.chrome.save_error = None;
-                        self.session.path = Some(path.clone());
+                        self.session.set_path(path.clone());
                         self.session.display_name = filename(&path);
                         self.session
                             .mark_saved((*source).clone(), version, generation);
@@ -1347,8 +1355,8 @@ impl App {
                     .into_owned();
                 let base = self
                     .session
-                    .path
-                    .as_deref()
+                    .path()
+                    .map(|value| value.as_path())
                     .and_then(|p| p.parent())
                     .map(|p| p.to_owned());
                 return Task::perform(
@@ -2589,7 +2597,7 @@ impl App {
     fn execute(&mut self, pending: Pending) -> Task<Message> {
         match pending {
             Pending::FolderNew(parent) => return self.folder_new_document(parent),
-            Pending::Recover(snapshot) => self.restore_draft(*snapshot),
+            Pending::Recover(snapshot) => return self.restore_draft(*snapshot),
             Pending::Sample => {
                 self.busy = true;
                 self.loading = true;
@@ -2602,8 +2610,8 @@ impl App {
                     None
                 } else {
                     self.session
-                        .path
-                        .as_deref()
+                        .path()
+                        .map(|value| value.as_path())
                         .and_then(std::path::Path::parent)
                         .map(std::path::Path::to_owned)
                         .or_else(|| self.session.folder.clone())
@@ -2666,14 +2674,18 @@ impl App {
                     return self.save(false);
                 }
                 self.recovery.retire();
-                if self.preferences_writing {
-                    self.preferences_close = Some(id);
-                    return Task::none();
-                }
-                return self.close_after_workspace_save(id);
+                return self.finish_close(id);
             }
         }
         operation::snap_to(SCROLL, scrollable::RelativeOffset::START)
+    }
+
+    fn finish_close(&mut self, id: window::Id) -> Task<Message> {
+        if self.preferences_writing {
+            self.preferences_close = Some(id);
+            return Task::none();
+        }
+        self.close_after_workspace_save(id)
     }
 
     fn open_file(
@@ -2684,7 +2696,7 @@ impl App {
     ) -> Task<Message> {
         // Reading the page's own file would replace its unsaved writing
         // with the saved copy. A clean page is reread as it always was.
-        if self.session.dirty && self.session.path.as_ref() == Some(&path) {
+        if self.session.dirty && self.session.path() == Some(&path) {
             if self.return_to_document() {
                 return Task::none();
             }
@@ -2749,7 +2761,7 @@ impl App {
             Some(parked) => self.install_parked(parked),
             None => {
                 self.install_document(document, Some(file.path.clone()), filename(&file.path));
-                self.session.saved_version = version;
+                self.session.set_saved_version(version);
             }
         }
         let folder_task = self.folder_document_changed();
@@ -2800,8 +2812,8 @@ impl App {
     ///
     /// Returns the name of a document kept with unsaved changes.
     fn leave(&mut self, outgoing: Session) -> Option<String> {
-        let reloaded = outgoing.path.is_some() && outgoing.path == self.session.path;
-        if !outgoing.dirty && (outgoing.path.is_none() || reloaded) {
+        let reloaded = outgoing.path().is_some() && outgoing.path() == self.session.path();
+        if !outgoing.dirty && (outgoing.path().is_none() || reloaded) {
             self.recovery.retire();
             self.images.clear_history();
             self.trail.forget(outgoing.id());
@@ -2822,7 +2834,7 @@ impl App {
     /// Records the page on the trail under its current path, and drops clean
     /// background copies of that file: the page now speaks for it.
     pub(super) fn page_settled(&mut self) {
-        let path = self.session.path.clone();
+        let path = self.session.path().cloned();
         self.trail.visit(self.session.id(), path.as_deref());
         let stale = path.map_or_else(Vec::new, |path| self.background.release_clean_under(&path));
         for parked in stale {
@@ -2875,6 +2887,9 @@ impl App {
     }
 
     fn save(&mut self, save_as: bool) -> Task<Message> {
+        if !save_as && self.session.hosted().is_some() {
+            return self.save_hosted(None);
+        }
         if self.busy {
             return Task::none();
         }
@@ -2883,7 +2898,7 @@ impl App {
         let path = if save_as {
             None
         } else {
-            self.session.path.clone()
+            self.session.path().cloned()
         };
         // A draft that knows its folder is written there without asking.
         let draft_folder = (!save_as && path.is_none())
@@ -2898,10 +2913,10 @@ impl App {
         let expected_version = if save_as {
             None
         } else {
-            self.session.saved_version.clone()
+            self.session.saved_version().cloned()
         };
         let name = self.session.display_name.clone();
-        let old_path = self.session.path.clone();
+        let old_path = self.session.path().cloned();
         let image_history = self.images.history();
         Task::perform(
             async move {
@@ -3028,6 +3043,7 @@ impl App {
                     Overlay::Statistics => self.statistics_popover(size),
                     Overlay::Folder => self.folder_overlay_view((size.height - 48.0).max(80.0)),
                     Overlay::Project => self.project_dialog(),
+                    Overlay::Hosted => self.hosted_view(),
                     Overlay::Settings => self.settings_view((size.height - 48.0).min(600.0)),
                     Overlay::Collaboration => self.collaboration_view(),
                     Overlay::Unsaved => self.unsaved_view(),
@@ -3244,8 +3260,8 @@ impl App {
                         block: index,
                         base: self
                             .session
-                            .path
-                            .as_deref()
+                            .path()
+                            .map(|value| value.as_path())
                             .and_then(std::path::Path::parent)
                             .map(std::path::Path::to_path_buf),
                         line_height: self.resolved_theme.typography.line_height(),
@@ -3290,8 +3306,8 @@ impl App {
         )
         .base(
             self.session
-                .path
-                .as_deref()
+                .path()
+                .map(|value| value.as_path())
                 .and_then(std::path::Path::parent),
         )
         .zoom(self.preferences.writing_zoom)
@@ -3775,12 +3791,25 @@ impl App {
 
     fn unsaved_view(&self) -> Element<'_, Message> {
         let tokens = self.resolved_theme.tokens;
+        let keep = button("Keep recovery copies")
+            .on_press_maybe(
+                self.can_keep_recovery_on_close()
+                    .then_some(Message::Recovery(recovery::Message::KeepAndClose)),
+            )
+            .padding([10, 16])
+            .style(styles::button_style(tokens, Button::Quiet));
+        let error = self
+            .chrome
+            .save_error
+            .as_ref()
+            .map(|message| text(message).size(14).color(tokens.danger));
         container(
             column![
                 text("Keep this thought?").font(styles::BODY_FONT).size(28),
                 text(unsaved_summary(&self.unsaved().collect::<Vec<_>>()))
                     .size(14)
                     .color(tokens.muted),
+                error,
                 space().height(12),
                 row![
                     button("Discard")
@@ -3789,6 +3818,7 @@ impl App {
                         .style(styles::button_style(tokens, Button::Danger)),
                     space::horizontal(),
                     self.small_button("Cancel", Message::CloseOverlay, false),
+                    keep,
                     button(if self.busy {
                         "Saving…"
                     } else {
@@ -3804,7 +3834,7 @@ impl App {
             .spacing(16),
         )
         .padding(30)
-        .width(500)
+        .width(560)
         .style(styles::card(tokens))
         .into()
     }
@@ -4100,6 +4130,9 @@ fn shortcut(key: &Key, modifiers: keyboard::Modifiers) -> Option<Message> {
                 "o" => Some(Message::Open),
                 "[" => Some(Message::Step(Direction::Back)),
                 "]" => Some(Message::Step(Direction::Forward)),
+                "p" if modifiers.shift() && !modifiers.alt() => {
+                    Some(Message::Hosted(hosted_workspace::Message::Show))
+                }
                 "p" if !modifiers.shift() && !modifiers.alt() => {
                     Some(Message::QuickOpen(quick_open::Message::Open))
                 }

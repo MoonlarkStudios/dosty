@@ -389,7 +389,7 @@ async fn opening_keeps_unsaved_writing_open_and_back_returns_to_it() {
     settle(&mut app, task).await;
     assert!(app.overlay.is_none());
     assert!(app.pending.is_none());
-    assert_eq!(app.session.path.as_ref(), Some(&target));
+    assert_eq!(app.session.path(), Some(&target));
     assert_eq!(app.session.document.source(), "# Target");
     assert!(app.quick_open.candidates.is_empty());
     assert!(app.notification.as_deref().unwrap().contains("Draft.md"));

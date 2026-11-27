@@ -27,6 +27,15 @@ the size, width, and spacing of the writing column, or choose a color theme.
 Configurable word count and reading time sit below the writing area. Unsaved
 documents stay open in the background when you switch.
 
+For a connected blog, open **Hosted workspace** from Welcome or the Projects
+menu, or press Cmd/Ctrl+Shift+P. Enter the workspace URL and access key. Choose
+**New post** or open an existing post. Save with Cmd/Ctrl+S to pick up the draft
+on another device. Open **Hosted workspace** again for post details, a cover
+photo, Preview, and Publish. If another device saves first, Dosty keeps your
+changes and offers **Save as new draft** when the workspace supports it. You
+can also keep a [local recovery copy](docs/writing-workflows.md#recovery-and-export)
+when you close. Access keys stay in memory for the current session.
+
 See the [writing guide](assets/guide.md) for everyday editing and
 [table editing](docs/table-editing.md) for cell selection, drafts, and spreadsheet transfers.
 
