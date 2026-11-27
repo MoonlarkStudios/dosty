@@ -24,8 +24,21 @@ pub(super) struct State {
     posts: Vec<Post>,
     issue: Option<String>,
     job: Option<Job>,
+    poll: Option<JobPoll>,
     active_post: Option<Post>,
     conflict: Option<HostedAddress>,
+}
+
+struct JobPoll {
+    // A completion can already be queued when the task is aborted.
+    id: uuid::Uuid,
+    task: iced::task::Handle,
+}
+
+impl Drop for JobPoll {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -82,6 +95,7 @@ pub enum Message {
     JobFinished {
         connection: u64,
         id: uuid::Uuid,
+        poll: uuid::Uuid,
         result: Result<Job, String>,
     },
     OpenResult(String),
@@ -107,6 +121,7 @@ impl State {
         self.workspace = None;
         self.posts.clear();
         self.active_post = None;
+        self.poll = None;
         self.job = None;
         self.issue = None;
         self.key.clear();
@@ -343,8 +358,15 @@ impl App {
             Message::JobFinished {
                 connection,
                 id,
+                poll,
                 result,
-            } if self.hosted.connection == connection && self.hosted.client.is_some() => {
+            } if self.hosted.connection == connection
+                && self
+                    .hosted
+                    .poll
+                    .as_ref()
+                    .is_some_and(|current| current.id == poll) =>
+            {
                 self.complete_hosted_job(id, result);
             }
             Message::OpenResult(url) => {
@@ -538,16 +560,19 @@ impl App {
         };
         let connection = self.hosted.connection;
         let id = job.id;
-        if self
-            .hosted
-            .job
-            .as_ref()
-            .is_some_and(|current| current.id == id && current.active())
+        if job.active()
+            && self.hosted.poll.is_some()
+            && self
+                .hosted
+                .job
+                .as_ref()
+                .is_some_and(|current| current.id == id)
         {
             return Task::none();
         }
+        let poll = uuid::Uuid::new_v4();
         self.hosted.job = Some(job.clone());
-        Task::perform(
+        let (task, handle) = Task::perform(
             async move {
                 while job.active() {
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -563,10 +588,17 @@ impl App {
                 AppMessage::Hosted(Message::JobFinished {
                     connection,
                     id,
+                    poll,
                     result,
                 })
             },
         )
+        .abortable();
+        self.hosted.poll = Some(JobPoll {
+            id: poll,
+            task: handle,
+        });
+        task
     }
 
     fn complete_hosted_job(&mut self, id: uuid::Uuid, result: Result<Job, String>) {
@@ -576,6 +608,7 @@ impl App {
         if current.id != id {
             return;
         }
+        self.hosted.poll = None;
         let on_page = self.session.hosted().is_some_and(|draft| {
             draft.address.origin == client.origin() && draft.address.id == current.post_id
         });

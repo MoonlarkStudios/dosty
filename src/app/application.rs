@@ -277,6 +277,7 @@ pub enum Message {
         version: String,
         generation: u64,
     },
+    MarkdownCopySaved(Result<PathBuf, FileError>),
     Export,
     Exported(Result<Option<PathBuf>, FileError>),
     ToggleSource,
@@ -1308,42 +1309,38 @@ impl App {
                 version,
                 generation,
             } => {
-                self.busy = false;
-                self.chrome.saving = false;
-                match result {
-                    Ok(path) => {
-                        self.chrome.save_error = None;
-                        self.session.acknowledge_file_save(
-                            path.clone(),
-                            filename(&path),
-                            Some(version),
-                            (*source).clone(),
-                            generation,
-                        );
-                        self.page_settled();
-                        let folder_task = self.folder_document_changed();
-                        if !self.session.is_dirty() {
-                            self.recovery.retire();
-                        }
-                        if !self.session.is_dirty()
-                            && let Some(pending) = self.pending.take()
-                        {
-                            self.overlay = None;
-                            return Task::batch([self.execute(pending), folder_task]);
-                        }
-                        return Task::batch([
-                            folder_task,
-                            Task::done(Message::Writing(writing::Message::ResumeImage)),
-                        ]);
+                let Some(path) = self.finish_file_write(result) else {
+                    self.writing.pending_media = None;
+                    return Task::none();
+                };
+                let name = filename(&path);
+                if !self.session.acknowledge_file_save(
+                    path,
+                    name,
+                    Some(version),
+                    (*source).clone(),
+                    generation,
+                ) {
+                    return Task::none();
+                }
+                self.page_settled();
+                let folder_task = self.folder_document_changed();
+                if !self.session.is_dirty() {
+                    self.recovery.retire();
+                    if let Some(pending) = self.pending.take() {
+                        self.overlay = None;
+                        return Task::batch([self.execute(pending), folder_task]);
                     }
-                    Err(FileError::Io(error)) if error == "Save cancelled" => {
-                        self.writing.pending_media = None;
-                    }
-                    Err(error) => {
-                        self.writing.pending_media = None;
-                        self.chrome.save_error = Some(error.to_string());
-                        self.notification = Some(error.to_string());
-                    }
+                }
+                return Task::batch([
+                    folder_task,
+                    Task::done(Message::Writing(writing::Message::ResumeImage)),
+                ]);
+            }
+            Message::MarkdownCopySaved(result) => {
+                if let Some(path) = self.finish_file_write(result) {
+                    self.notification =
+                        Some(format!("Saved Markdown copy as {}.", filename(&path)));
                 }
             }
             Message::Export => {
@@ -2901,11 +2898,46 @@ impl App {
         if !save_as && self.session.hosted().is_some() {
             return self.save_hosted(None);
         }
+        let name = self.session.display_name.clone();
+        self.save_file(save_as, async move {
+            rfd::AsyncFileDialog::new()
+                .set_file_name(name)
+                .add_filter("Markdown", &["md"])
+                .save_file()
+                .await
+                .map(|file| file.path().to_path_buf())
+        })
+    }
+
+    fn finish_file_write(&mut self, result: Result<PathBuf, FileError>) -> Option<PathBuf> {
+        self.busy = false;
+        self.chrome.saving = false;
+        match result {
+            Ok(path) => {
+                self.chrome.save_error = None;
+                Some(path)
+            }
+            Err(FileError::Io(error)) if error == "Save cancelled" => None,
+            Err(error) => {
+                let message = error.to_string();
+                self.chrome.save_error = Some(message.clone());
+                self.notification = Some(message);
+                None
+            }
+        }
+    }
+
+    fn save_file(
+        &mut self,
+        save_as: bool,
+        choose_file: impl Future<Output = Option<PathBuf>> + Send + 'static,
+    ) -> Task<Message> {
         if self.busy {
             return Task::none();
         }
         self.busy = true;
         self.chrome.saving = true;
+        let hosted_copy = save_as && self.session.hosted().is_some();
         let path = if save_as {
             None
         } else {
@@ -2944,14 +2976,9 @@ impl App {
                         true,
                     ),
                     (None, None) => (
-                        rfd::AsyncFileDialog::new()
-                            .set_file_name(name)
-                            .add_filter("Markdown", &["md"])
-                            .save_file()
+                        choose_file
                             .await
-                            .ok_or_else(|| FileError::Io("Save cancelled".into()))?
-                            .path()
-                            .to_path_buf(),
+                            .ok_or_else(|| FileError::Io("Save cancelled".into()))?,
                         expected,
                         false,
                     ),
@@ -2984,11 +3011,17 @@ impl App {
                 }
                 saved
             },
-            move |result| Message::Saved {
-                result,
-                source: Arc::clone(&result_source),
-                version: version.clone(),
-                generation,
+            move |result| {
+                if hosted_copy {
+                    Message::MarkdownCopySaved(result)
+                } else {
+                    Message::Saved {
+                        result,
+                        source: Arc::clone(&result_source),
+                        version: version.clone(),
+                        generation,
+                    }
+                }
             },
         )
     }

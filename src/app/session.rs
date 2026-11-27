@@ -326,7 +326,10 @@ impl Session {
         version: Option<String>,
         source: String,
         generation: u64,
-    ) {
+    ) -> bool {
+        if self.hosted().is_some() {
+            return false;
+        }
         self.backing = WorkspaceDocument::File {
             path,
             checkpoint: version,
@@ -335,6 +338,7 @@ impl Session {
         self.folder = None;
         self.named = true;
         self.acknowledge_save(source, generation);
+        true
     }
 
     #[cfg(test)]

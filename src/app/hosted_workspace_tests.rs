@@ -4,8 +4,8 @@ use iced::futures::StreamExt;
 use iced::window;
 
 use super::{
-    AccessKey, App, AppMessage, Client, Details, HostedAddress, Job, JobState, Message, Post,
-    Session, Workspace,
+    AccessKey, App, AppMessage, Client, Cover, Details, HostedAddress, Job, JobState, Message,
+    Post, Session, Workspace,
 };
 use crate::app::application::trail::Direction;
 use crate::app::application::{EditorMode, Overlay, Pending, recovery, table_grid};
@@ -14,7 +14,12 @@ use crate::document::selection::Selection;
 use crate::io::recovery as store;
 
 async fn send(app: &mut App, message: AppMessage) {
-    let mut pending = vec![app.update(message)];
+    let task = app.update(message);
+    settle(app, task).await;
+}
+
+async fn settle(app: &mut App, task: iced::Task<AppMessage>) {
+    let mut pending = vec![task];
     while let Some(task) = pending.pop() {
         if let Some(mut events) = iced_runtime::task::into_stream(task) {
             while let Some(event) = events.next().await {
@@ -374,17 +379,21 @@ fn older_job_completions_cannot_replace_the_tracked_job_or_report_its_error() {
     let publish = job("publish");
     let connection = app.hosted.connection;
     drop(app.watch_hosted_job(preview.clone()));
+    let preview_poll = app.hosted.poll.as_ref().unwrap().id;
     drop(app.watch_hosted_job(publish.clone()));
-    let finish = |connection, id, result| {
+    let publish_poll = app.hosted.poll.as_ref().unwrap().id;
+    let finish = |connection, id, poll, result| {
         AppMessage::Hosted(Message::JobFinished {
             connection,
             id,
+            poll,
             result,
         })
     };
     drop(app.update(finish(
         connection,
         preview.id,
+        preview_poll,
         Err("Old poll failed".into()),
     )));
     let completed_preview = Job {
@@ -394,6 +403,7 @@ fn older_job_completions_cannot_replace_the_tracked_job_or_report_its_error() {
     drop(app.update(finish(
         connection,
         completed_preview.id,
+        preview_poll,
         Ok(completed_preview),
     )));
     assert_eq!(app.hosted.job.as_ref().unwrap().id, publish.id);
@@ -401,12 +411,15 @@ fn older_job_completions_cannot_replace_the_tracked_job_or_report_its_error() {
     assert!(app.hosted.active_post.as_ref().unwrap().preview.is_none());
 
     // Even a response for the same job ID belongs to the connection that sent it.
+    let previous_task = app.hosted.poll.as_ref().unwrap().task.clone();
     drop(app.update(AppMessage::Hosted(Message::Disconnect)));
+    assert!(previous_task.is_aborted());
     app.hosted.client = Some(Client::new(ORIGIN, "test".into()).unwrap());
     drop(app.watch_hosted_job(publish.clone()));
     drop(app.update(finish(
         connection,
         publish.id,
+        publish_poll,
         Err("Old connection failed".into()),
     )));
     assert_eq!(app.hosted.job.as_ref().unwrap().id, publish.id);
@@ -419,7 +432,125 @@ fn older_job_completions_cannot_replace_the_tracked_job_or_report_its_error() {
     drop(app.update(finish(
         app.hosted.connection,
         completed_publish.id,
+        app.hosted.poll.as_ref().unwrap().id,
         Ok(completed_publish),
     )));
     assert_eq!(app.hosted.job.as_ref().unwrap().state, JobState::Succeeded);
+}
+
+#[tokio::test]
+async fn saving_a_markdown_copy_preserves_unsaved_hosted_details_and_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let recovery = directory.path().join("recovery");
+    let copy = directory.path().join("Copy.md");
+    let mut app = connected_app();
+    app.use_recovery_directory(recovery.clone());
+    let id = uuid::Uuid::new_v4();
+    let mut original = post(id, 5, "# Draft\r\n\r\nText café.\r\n");
+    original.details.cover = Some(Cover {
+        src: "/media/cover.webp".into(),
+        alt: "Original cover".into(),
+    });
+    deliver_opened(&mut app, original.clone());
+    send(
+        &mut app,
+        AppMessage::Hosted(Message::Section("notes".into())),
+    )
+    .await;
+    send(
+        &mut app,
+        AppMessage::Hosted(Message::Alt("Edited cover".into())),
+    )
+    .await;
+    let version = app.session.recovery_version();
+    let session = app.session.id();
+    let edited = app.session.hosted().unwrap().details.clone();
+    assert!(app.session.is_dirty());
+
+    // Supply the chosen path in place of the native dialog and run the actual write.
+    let path = copy.clone();
+    let task = app.save_file(true, async move { Some(path) });
+    settle(&mut app, task).await;
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), original.body);
+    assert!(app.session.path().is_none());
+    assert_eq!(app.session.id(), session);
+    assert_eq!(app.session.recovery_version(), version);
+    assert!(app.session.is_dirty());
+    assert!(app.notification.as_deref().unwrap().contains("Copy.md"));
+    let active = app.session.hosted().unwrap();
+    assert_eq!(
+        active.address,
+        HostedAddress {
+            origin: ORIGIN.into(),
+            id
+        }
+    );
+    assert_eq!(active.revision, original.revision);
+    assert_eq!(active.saved_details, original.details);
+    assert_eq!(active.details, edited);
+
+    keep_and_close(&mut app).await;
+    let reopened = recover(&recovery).await;
+    assert_eq!(reopened.session.hosted().unwrap().details, edited);
+    assert!(reopened.session.is_dirty());
+}
+
+#[test]
+fn returning_to_a_running_job_rejects_completions_from_its_superseded_poll() {
+    let mut app = connected_app();
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    let running_job = |post_id, mode: &str| Job {
+        id: uuid::Uuid::new_v4(),
+        post_id,
+        mode: mode.into(),
+        state: JobState::Building,
+        revision: 2,
+        url: None,
+        error: None,
+    };
+    let preview = running_job(first, "preview");
+    let mut first_post = post(first, 2, "First draft");
+    first_post.preview = Some(preview.clone());
+    deliver_opened(&mut app, first_post.clone());
+    let old_poll = app.hosted.poll.as_ref().unwrap();
+    let old_poll_id = old_poll.id;
+    let old_task = old_poll.task.clone();
+
+    let mut second_post = post(second, 2, "Second draft");
+    second_post.publish = Some(running_job(second, "publish"));
+    drop(app.update(AppMessage::Hosted(Message::Open(second))));
+    deliver_opened(&mut app, second_post);
+    assert!(old_task.is_aborted());
+    let second_task = app.hosted.poll.as_ref().unwrap().task.clone();
+
+    drop(app.update(AppMessage::Step(Direction::Back)));
+    deliver_opened(&mut app, first_post);
+    assert!(second_task.is_aborted());
+    let current_poll_id = app.hosted.poll.as_ref().unwrap().id;
+    assert_ne!(current_poll_id, old_poll_id);
+
+    let connection = app.hosted.connection;
+    let finish = |poll, result| {
+        AppMessage::Hosted(Message::JobFinished {
+            connection,
+            id: preview.id,
+            poll,
+            result,
+        })
+    };
+    drop(app.update(finish(old_poll_id, Err("Superseded poll failed".into()))));
+    assert!(app.hosted.issue.is_none());
+    assert_eq!(app.hosted.job.as_ref().unwrap().id, preview.id);
+    let completed = Job {
+        state: JobState::Succeeded,
+        ..preview.clone()
+    };
+    drop(app.update(finish(old_poll_id, Ok(completed.clone()))));
+    assert_eq!(app.hosted.job.as_ref().unwrap().state, JobState::Building);
+    assert_eq!(app.hosted.poll.as_ref().unwrap().id, current_poll_id);
+
+    drop(app.update(finish(current_poll_id, Ok(completed))));
+    assert_eq!(app.hosted.job.as_ref().unwrap().state, JobState::Succeeded);
+    assert!(app.hosted.poll.is_none());
 }

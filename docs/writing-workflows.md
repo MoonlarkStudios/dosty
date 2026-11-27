@@ -416,6 +416,9 @@ them as a new hosted draft, including the post details. **Keep recovery copies**
 in the close dialog checkpoints all unsaved documents before closing the window.
 Corrupt, oversized, or unsupported copies remain on disk with controlled errors.
 
+For a hosted draft, **Save As…** writes a local Markdown copy and keeps the
+hosted draft open with its unsaved text, post details, and recovery copy.
+
 A clean save or explicit discard retires this session's copy after any in-flight
 write finishes. A recovered document gets its own recovery identity. Earlier
 copies remain in the recovery folder until explicitly removed.
