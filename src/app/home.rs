@@ -180,6 +180,7 @@ pub(super) fn event_message(
                 | Message::CloseOverlay
                 | Message::ShowSettings
                 | Message::QuickOpen(quick_open::Message::Open)
+                | Message::Hosted(super::hosted_workspace::Message::Show)
                 | Message::Folder(folder::Message::Pick)
                 | Message::Chrome(chrome::Message::Menu(chrome::Menu::File))
         ))

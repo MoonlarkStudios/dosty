@@ -117,7 +117,7 @@ literal, and duplicate definitions can be resolved directly in Source.
 
 Select a phrase and press Cmd/Ctrl+K to add or edit a link. Normal clicks keep you editing; Cmd/Ctrl-click opens the destination. Pasting a web URL onto selected text creates a link. Choose **Format → Quotation…** to add a quotation with an author and source. Credits remain ordinary Markdown links and text.
 
-Open **Help → The Quiet Hour** to try the whole workflow. Help also contains **Recovery Copies…** and **Markdown Guide**; appearance lives in Settings. Windows/Linux expose these under **File → Help & settings…**. Recovery copies hold idle checkpoints of unsaved writing; opening a copy preserves the saved-file conflict check. Save regularly, and choose **File → Export HTML…** when you want a portable reading copy.
+Open **Help → The Quiet Hour** to try the whole workflow. Help also contains **Recovery Copies…** and **Markdown Guide**. Appearance lives in Settings. Windows/Linux expose these under **File → Help & settings…**. Recovery copies preserve unsaved writing and hosted post details, along with the saved version Dosty checks on the next save. Choose **Keep recovery copies** when closing to keep your latest changes for the next launch. Choose **File → Export HTML…** when you want a portable reading copy.
 
 ## Current limits
 

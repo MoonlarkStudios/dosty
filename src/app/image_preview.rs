@@ -108,8 +108,8 @@ impl App {
         // A draft is read from the folder its first save will write it into.
         let base = self
             .session
-            .path
-            .as_deref()
+            .path()
+            .map(|value| value.as_path())
             .and_then(Path::parent)
             .or(self.session.folder.as_deref());
         let Some(base) = base else {
@@ -253,7 +253,7 @@ mod tests {
         let inserted = "![The old map](<../figures/The [old] map.png>)";
         assert_eq!(app.session.document.source(), format!("Before {inserted}"));
         assert_eq!(app.session.selection.head, "Before ".len() + inserted.len());
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
         drop(app.update(AppMessage::Undo));
         assert_eq!(app.session.document.source(), "Before after");
 

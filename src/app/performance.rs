@@ -1588,7 +1588,7 @@ fn crdt_duplicate_update_keeps_saved_generation_and_projection_oracle() {
     let state = harness.app.session.document.collaboration().state();
     harness.message(Message::ReplicaLoaded(Ok(state.clone())));
     harness.message(Message::ReplicaLoaded(Ok(state)));
-    assert!(!harness.app.session.dirty);
+    assert!(!harness.app.session.is_dirty());
     let fresh = Projection::with_context(
         harness.app.session.document.source(),
         Some(harness.app.session.selection.head),

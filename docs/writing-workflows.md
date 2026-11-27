@@ -55,12 +55,13 @@ visited in the window, up to 64. They are also in File on macOS and in the File
 command menu elsewhere. Opening a document from anywhere other than Back or
 Forward replaces the forward part of that trail.
 
-A document with unsaved changes returns exactly as it was left, without reading
-its file; saving still checks the file against the baseline it was opened from.
-A clean document is read from its file again. If the file is unchanged, its
-background copy returns with its undo history; otherwise the file's current
-contents replace it. Choosing the file of the unsaved page itself is refused
-rather than reading the saved copy over the writing.
+A document with unsaved changes returns as it was left. Saving checks the file
+or hosted revision against the baseline it was opened from. A clean document
+is read from its destination again. If the saved copy is unchanged and its
+background session is still open, the session returns with its undo history.
+If the saved copy changed, Dosty opens the current contents. A hosted draft
+prompts you to reconnect to its workspace when needed. Opening the current
+unsaved document keeps its local edits on the page.
 
 Unsaved documents are kept until saved or discarded. Clean background documents
 are a convenience: at most 8, and 32 MiB of source, are kept, least recently
@@ -399,19 +400,28 @@ checkpoint, external-change, permissions, and symlink guards are described in
 
 Dirty documents checkpoint after two idle seconds or 30 seconds of continuous
 writing, with a one-second scheduler. Background serialization/IO stores full
-compatible CRDT state, saved-file baselines, name/path, and directional selection
-in one checksummed recovery file. Each session gets a fresh random filename and
-writer identity. Recovery files are bounded to 112 MiB and use private temporary
-permissions; the recovery directory is private on Unix.
+compatible CRDT state, the save destination and baseline, the document name,
+and directional selection in one checksummed recovery file. For hosted drafts
+this includes the workspace URL, post ID, saved revision, and both saved and
+edited post details. Title, section, and cover edits trigger checkpoints on
+their own. Recovery files are bounded to 112 MiB and use private temporary
+permissions. The recovery directory is private on Unix.
 
 Startup announces available copies. **Help → Recovery Copies…** lists them by name and
-recency; Open copy keeps the outgoing document open in the background. Restore preserves the original
-saved-file baseline, so Save still detects external changes. Save As keeps both.
+recency. Open copy keeps the outgoing document open in the background. Save
+checks the recovered baseline against the file or hosted workspace. A restored
+hosted draft prompts for the access key when it needs to reconnect. If another
+device saved a newer revision, Dosty keeps the local edits open and can save
+them as a new hosted draft, including the post details. **Keep recovery copies**
+in the close dialog checkpoints all unsaved documents before closing the window.
 Corrupt, oversized, or unsupported copies remain on disk with controlled errors.
 
+For a hosted draft, **Save As…** writes a local Markdown copy and keeps the
+hosted draft open with its unsaved text, post details, and recovery copy.
+
 A clean save or explicit discard retires this session's copy after any in-flight
-write finishes. Earlier/crashed/restored copies remain until explicitly removed
-from the recovery folder. Other windows' copies are not deleted automatically.
+write finishes. A recovered document gets its own recovery identity. Earlier
+copies remain in the recovery folder until explicitly removed.
 Moving a document rotates its recovery identity so late writes at the old path
 cannot mark the new path as checkpointed; the prior copy is retained until its
 replacement is saved or the session is explicitly retired.

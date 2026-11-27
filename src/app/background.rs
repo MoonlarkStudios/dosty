@@ -8,6 +8,7 @@ use uuid::Uuid;
 use super::recovery::Checkpoint;
 use super::session::{Session, SessionId};
 use crate::io::image_store::References;
+use crate::io::workspace_document::{Details, HostedAddress};
 
 /// Clean documents are a convenience and are bounded. Unsaved documents are the
 /// writer's work and are kept until saved or explicitly discarded.
@@ -35,7 +36,11 @@ impl Background {
         self.parked.push(parked);
         let mut released = Vec::new();
         while self.clean_over_bounds() {
-            let Some(oldest) = self.parked.iter().position(|parked| !parked.session.dirty) else {
+            let Some(oldest) = self
+                .parked
+                .iter()
+                .position(|parked| !parked.session.is_dirty())
+            else {
                 break;
             };
             released.push(self.parked.remove(oldest));
@@ -44,7 +49,10 @@ impl Background {
     }
 
     fn clean_over_bounds(&self) -> bool {
-        let clean = self.parked.iter().filter(|parked| !parked.session.dirty);
+        let clean = self
+            .parked
+            .iter()
+            .filter(|parked| !parked.session.is_dirty());
         let (count, bytes) = clean.fold((0, 0), |(count, bytes), parked| {
             (count + 1, bytes + parked.session.document.source().len())
         });
@@ -52,9 +60,30 @@ impl Background {
     }
 
     /// Takes the session `id` if it has unsaved changes. A clean session is
-    /// reached through its file instead, which confirms the file is unchanged.
+    /// reached through its destination so its saved version can be checked.
     pub(super) fn take_unsaved(&mut self, id: SessionId) -> Option<Parked> {
-        self.take_last(|session| session.dirty && session.id() == id)
+        self.take_last(|session| session.is_dirty() && session.id() == id)
+    }
+
+    pub(super) fn take_hosted(&mut self, address: &HostedAddress) -> Option<Parked> {
+        self.take_last(|session| {
+            session.is_dirty()
+                && session
+                    .hosted()
+                    .is_some_and(|active| active.address == *address)
+        })
+    }
+
+    pub(super) fn take_unchanged_hosted(
+        &mut self,
+        address: &HostedAddress,
+        revision: u64,
+        source: &str,
+        details: &Details,
+    ) -> Option<Parked> {
+        self.take_last(|session| {
+            session.matches_hosted_snapshot(address, revision, source, details)
+        })
     }
 
     fn take_last(&mut self, matches: impl Fn(&Session) -> bool) -> Option<Parked> {
@@ -68,7 +97,8 @@ impl Background {
     /// Takes the most recent unsaved document, optionally only one saved at `path`.
     pub(super) fn take_dirty(&mut self, path: Option<&Path>) -> Option<Parked> {
         self.take_last(|session| {
-            session.dirty && path.is_none_or(|path| session.path.as_deref() == Some(path))
+            session.is_dirty()
+                && path.is_none_or(|path| session.path().map(|value| value.as_path()) == Some(path))
         })
     }
 
@@ -81,19 +111,30 @@ impl Background {
         version: Option<&str>,
     ) -> Option<Parked> {
         self.take_last(|session| {
-            !session.dirty
-                && session.path.as_deref() == Some(path)
-                && session.saved_source == source
-                && session.saved_version.as_deref() == version
+            !session.is_dirty()
+                && session.path().map(|value| value.as_path()) == Some(path)
+                && session.saved_source() == source
+                && session.saved_version().map(|value| value.as_str()) == version
         })
     }
 
     /// Removes clean documents saved at or below `root`. Their files moved or
     /// were replaced, so they would only describe a path that no longer holds them.
     pub(super) fn release_clean_under(&mut self, root: &Path) -> Vec<Parked> {
+        self.release_clean(|session| is_under(session, root))
+    }
+
+    pub(super) fn release_replaced(&mut self, active: &Session) -> Vec<Parked> {
+        if active.is_unbound() {
+            return Vec::new();
+        }
+        self.release_clean(|session| session.same_destination(active))
+    }
+
+    fn release_clean(&mut self, matches: impl Fn(&Session) -> bool) -> Vec<Parked> {
         let (released, kept) = std::mem::take(&mut self.parked)
             .into_iter()
-            .partition(|parked| !parked.session.dirty && is_under(&parked.session, root));
+            .partition(|parked| !parked.session.is_dirty() && matches(&parked.session));
         self.parked = kept;
         released
     }
@@ -109,14 +150,14 @@ impl Background {
             .iter()
             .rev()
             .map(|parked| &parked.session)
-            .filter(|session| session.dirty)
+            .filter(|session| session.is_dirty())
     }
 
     /// Removes every unsaved document. Only an explicit discard may call this.
     pub(super) fn discard_dirty(&mut self) -> Vec<Parked> {
         let (discarded, kept) = std::mem::take(&mut self.parked)
             .into_iter()
-            .partition(|parked| parked.session.dirty);
+            .partition(|parked| parked.session.is_dirty());
         self.parked = kept;
         discarded
     }
@@ -124,11 +165,17 @@ impl Background {
     /// An unsaved document whose recovery copy does not yet hold its latest writing.
     pub(super) fn needing_checkpoint(&self) -> Option<&Parked> {
         self.parked.iter().find(|parked| {
-            parked.session.dirty
+            parked.session.is_dirty()
                 && parked
                     .checkpoint
-                    .needs_write(parked.session.document.collaboration().generation())
+                    .needs_write(parked.session.recovery_version())
         })
+    }
+
+    pub(super) fn dirty_checkpoints(&self) -> impl Iterator<Item = &Parked> {
+        self.parked
+            .iter()
+            .filter(|parked| parked.session.is_dirty())
     }
 
     pub(super) fn checkpoint_mut(&mut self, id: Uuid) -> Option<&mut Checkpoint> {
@@ -141,8 +188,8 @@ impl Background {
 
 fn is_under(session: &Session, root: &Path) -> bool {
     session
-        .path
-        .as_deref()
+        .path()
+        .map(|value| value.as_path())
         .is_some_and(|path| path.starts_with(root))
 }
 

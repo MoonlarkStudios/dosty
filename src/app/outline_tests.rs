@@ -82,7 +82,7 @@ fn outline_moves_are_atomic_in_live_source_and_read_and_keep_fold_identity() {
         assert_eq!(app.outline.visible(), vec![0, 1]);
         command(&mut app, Message::Toggle(1));
         assert_eq!(app.outline.visible(), vec![0, 1, 2]);
-        assert!(app.session.dirty);
+        assert!(app.session.is_dirty());
     }
 }
 
@@ -143,7 +143,7 @@ fn outline_search_includes_folded_duplicate_headings_and_parent_context() {
     assert!(app.overlay.is_none());
     assert_ne!(app.session.selection, original_selection);
     assert_eq!(app.session.document.source(), source);
-    assert!(!app.session.dirty);
+    assert!(!app.session.is_dirty());
     assert!(!app.session.document.can_undo());
 }
 
@@ -182,7 +182,7 @@ fn inline_filter_preserves_reverse_selection_folds_and_history() {
         assert_eq!(app.outline.visible(), vec![0, 2]);
         assert_eq!(app.session.selection, selection);
         assert_eq!(app.session.document.source(), source);
-        assert!(!app.session.dirty && !app.session.document.can_undo());
+        assert!(!app.session.is_dirty() && !app.session.document.can_undo());
     }
 }
 

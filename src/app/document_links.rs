@@ -124,8 +124,8 @@ struct Suggestion {
 impl App {
     pub(super) fn link_base(&self) -> Option<&Path> {
         self.session
-            .path
-            .as_deref()
+            .path()
+            .map(|value| value.as_path())
             .and_then(Path::parent)
             .or(self.session.folder.as_deref())
     }
@@ -138,7 +138,7 @@ impl App {
 
     fn backlink_scope(&self) -> Option<(&Path, &Path)> {
         let root = self.folder.root()?;
-        let origin = self.session.path.as_deref()?;
+        let origin = self.session.path().map(|value| value.as_path())?;
         (origin.starts_with(root) && origin != root).then_some((root, origin))
     }
 
@@ -322,12 +322,12 @@ impl App {
                 }
                 let request = Arc::new(());
                 let root = picker.root.clone();
-                let open = if self.session.path.as_ref() == Some(&file) {
+                let open = if self.session.path() == Some(&file) {
                     Some(&self.session)
                 } else {
                     self.background
                         .dirty()
-                        .find(|session| session.path.as_ref() == Some(&file))
+                        .find(|session| session.path() == Some(&file))
                 };
                 let headings = open.map(|session| {
                     let mut ids = HeadingIds::default();
@@ -385,7 +385,7 @@ impl App {
                     else {
                         return Task::none();
                     };
-                    let path = if self.session.path.as_ref() == Some(&target.file) {
+                    let path = if self.session.path() == Some(&target.file) {
                         String::new()
                     } else {
                         relative
@@ -627,7 +627,7 @@ impl App {
         self.overlay = None;
         self.writing.close_details();
         self.links.close();
-        if self.session.path.as_ref() == Some(&path) {
+        if self.session.path() == Some(&path) {
             return self.focus_link_target(jump);
         }
         if let Some(parked) = self.background.take_dirty(Some(&path)) {
@@ -781,7 +781,7 @@ mod tests {
         let open = app.open_destination(link.into());
         settle(&mut app, open).await;
         assert!(app.overlay.is_none());
-        assert_eq!(app.session.path.as_ref(), Some(&methods));
+        assert_eq!(app.session.path(), Some(&methods));
         assert_eq!(app.session.document.source(), target);
         assert_eq!(app.mode, EditorMode::Read);
         assert_eq!(
@@ -789,10 +789,9 @@ mod tests {
             Selection::caret(target.rfind("## Methods").unwrap())
         );
         assert!(
-            app.background
-                .dirty()
-                .any(|session| session.path.as_ref() == Some(&entry)
-                    && session.document.source() == edited)
+            app.background.dirty().any(
+                |session| session.path() == Some(&entry) && session.document.source() == edited
+            )
         );
 
         let added = "An unsaved introduction.\n\n";
@@ -805,9 +804,9 @@ mod tests {
         assert!(app.session.document.can_undo());
         let open = app.open_destination(link.into());
         settle(&mut app, open).await;
-        assert_eq!(app.session.path.as_ref(), Some(&methods));
+        assert_eq!(app.session.path(), Some(&methods));
         assert_eq!(app.session.document.source(), format!("{added}{target}"));
-        assert!(app.session.dirty && app.session.document.can_undo());
+        assert!(app.session.is_dirty() && app.session.document.can_undo());
         assert_eq!(
             app.session.selection,
             Selection::caret(added.len() + target.rfind("## Methods").unwrap())
@@ -830,7 +829,7 @@ mod tests {
         assert_eq!(app.overlay, Some(Overlay::Backlinks));
         let open = app.update_document_links(Message::OpenBacklink(None));
         settle(&mut app, open).await;
-        assert_eq!(app.session.path.as_ref(), Some(&notes));
+        assert_eq!(app.session.path(), Some(&notes));
         // Live projection canonicalizes the caret out of hidden Markdown.
         assert_eq!(
             app.session.selection,
@@ -845,7 +844,7 @@ mod tests {
         std::fs::write(&notes, "Another writer replaced this file.").unwrap();
         let open = app.update_document_links(Message::OpenBacklink(None));
         settle(&mut app, open).await;
-        assert_eq!(app.session.path.as_ref(), Some(&notes));
+        assert_eq!(app.session.path(), Some(&notes));
         assert_eq!(
             app.session.document.source(),
             "Another writer replaced this file."
@@ -880,10 +879,10 @@ mod tests {
         settle(&mut app, scan).await;
         let follow = app.update_document_links(Message::OpenBacklink(None));
         settle(&mut app, follow).await;
-        assert_eq!(app.session.path.as_ref(), Some(&notes));
+        assert_eq!(app.session.path(), Some(&notes));
         assert_eq!(app.session.document.source(), source);
         assert_eq!(app.session.selection, selection);
-        assert!(app.session.dirty && app.session.document.can_undo());
+        assert!(app.session.is_dirty() && app.session.document.can_undo());
     }
 
     #[tokio::test]
@@ -900,7 +899,7 @@ mod tests {
         let new = app.request(Pending::New);
         settle(&mut app, new).await;
         assert_eq!(app.session.folder.as_ref(), Some(&drafts));
-        assert!(app.session.path.is_none() && app.link_picker_available());
+        assert!(app.session.path().is_none() && app.link_picker_available());
         assert!(!app.backlinks_available());
 
         drop(app.update_writing(writing::Message::Details(writing::Kind::Link)));
@@ -913,8 +912,12 @@ mod tests {
         assert_eq!(app.session.document.source(), "[Notes](<../Notes.md>)");
         let open = app.open_destination("../Notes.md".into());
         settle(&mut app, open).await;
-        assert_eq!(app.session.path.as_ref(), Some(&notes));
-        assert!(app.background.dirty().any(|session| session.path.is_none()
-            && session.document.source() == "[Notes](<../Notes.md>)"));
+        assert_eq!(app.session.path(), Some(&notes));
+        assert!(
+            app.background
+                .dirty()
+                .any(|session| session.path().is_none()
+                    && session.document.source() == "[Notes](<../Notes.md>)")
+        );
     }
 }
